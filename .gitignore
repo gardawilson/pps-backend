@@ -1,0 +1,22 @@
+# Node.js related
+node_modules/
+npm-debug.log
+yarn-error.log
+
+# .env files for sensitive environment variables
+.env
+
+# IDE related files
+.vscode/
+.idea/
+
+# Operating System related files
+.DS_Store
+Thumbs.db
+
+# Logs
+*.log
+
+# Build output directories
+/dist/
+build/

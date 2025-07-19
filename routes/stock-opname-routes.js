@@ -8,69 +8,69 @@ const formatDate = (date) => {
     return moment(date).format('DD MMM YYYY');
 };
 
-const WebSocket = require('ws');
-const wss = new WebSocket.Server({ port: 5001 }); // Pastikan port sesuai dan tidak bentrok dengan aplikasi lain
-
-// Listener untuk koneksi WebSocket
-wss.on('connection', (ws) => {
-    console.log('WPS Tablet Connected');
-    ws.on('message', (message) => {
-        console.log(`Received message: ${message}`);
-    });
-});
-
 // Route untuk mendapatkan Nomor Stock Opname
 router.get('/no-stock-opname', verifyToken, async (req, res) => {
-    console.log(`[${new Date().toISOString()}] 🔵 GET /no-stock-opname endpoint hit by user: ${req.user?.username || 'unknown'}`);
+  console.log(`[${new Date().toISOString()}] 🔵 GET /no-stock-opname endpoint hit by user: ${req.user?.username || 'unknown'}`);
 
-    try {
-      await connectDb();
-  
-      const result = await sql.query(`
-        SELECT TOP 50
-          NoSO,
-          Tanggal,
-          IdWarehouse,
-          IsBahanBaku,
-          IsWashing,
-          IsBonggolan,
-          IsCrusher,
-          IsBroker,
-          IsGilingan,
-          IsMixer
-        FROM StockOpname_h
-        WHERE Tanggal > (
-          SELECT ISNULL(MAX(PeriodHarian), '2000-01-01') 
-          FROM MstTutupTransaksiHarian
-        )
-        ORDER BY NoSO DESC
-      `);      
-      
-  
-      if (!result.recordset || result.recordset.length === 0) {
-        return res.status(404).json({ message: 'Tidak ada data Stock Opname ditemukan.' });
-      }
-  
-      // Optional: format Tanggal jika perlu
-      const formattedData = result.recordset.map(item => ({
-        NoSO: item.NoSO,
-        Tanggal: formatDate(item.Tanggal),
-        IdWarehouse: item.IdWarehouse,
-        IsBahanBaku: item.IsBahanBaku,
-        IsWashing: item.IsWashing,
-        IsBonggolan: item.IsBonggolan,
-        IsCrusher: item.IsCrusher,
-        IsBroker: item.IsBroker,
-        IsGilingan: item.IsGilingan,
-        IsMixer: item.IsMixer,
-      }));
-  
-      res.json(formattedData);
-    } catch (error) {
-      console.error('Error:', error.message);
-      res.status(500).json({ message: 'Internal Server Error' });
+  try {
+    await connectDb();
+
+    const result = await sql.query(`
+      SELECT
+        soh.NoSO,
+        soh.Tanggal,
+        STRING_AGG(wh.NamaWarehouse, ', ') AS NamaWarehouse,
+        soh.IsBahanBaku,
+        soh.IsWashing,
+        soh.IsBonggolan,
+        soh.IsCrusher,
+        soh.IsBroker,
+        soh.IsGilingan,
+        soh.IsMixer
+      FROM StockOpname_h soh
+      LEFT JOIN StockOpname_h_WarehouseID sohw ON soh.NoSO = sohw.NoSO
+      LEFT JOIN MstWarehouse wh ON sohw.IdWarehouse = wh.IdWarehouse
+      WHERE soh.Tanggal > (
+        SELECT ISNULL(MAX(PeriodHarian), '2000-01-01') 
+        FROM MstTutupTransaksiHarian
+      )
+      GROUP BY
+        soh.NoSO,
+        soh.Tanggal,
+        soh.IsBahanBaku,
+        soh.IsWashing,
+        soh.IsBonggolan,
+        soh.IsCrusher,
+        soh.IsBroker,
+        soh.IsGilingan,
+        soh.IsMixer
+      ORDER BY soh.NoSO DESC
+    `);
+
+    if (!result.recordset || result.recordset.length === 0) {
+      return res.status(404).json({ message: 'Tidak ada data Stock Opname ditemukan.' });
     }
-  });
+
+    const formattedData = result.recordset.map(item => ({
+      NoSO: item.NoSO,
+      Tanggal: formatDate(item.Tanggal),
+      NamaWarehouse: item.NamaWarehouse || '-',
+      IsBahanBaku: item.IsBahanBaku,
+      IsWashing: item.IsWashing,
+      IsBonggolan: item.IsBonggolan,
+      IsCrusher: item.IsCrusher,
+      IsBroker: item.IsBroker,
+      IsGilingan: item.IsGilingan,
+      IsMixer: item.IsMixer,
+    }));
+
+    res.json(formattedData);
+  } catch (error) {
+    console.error('Error:', error.message);
+    res.status(500).json({ message: 'Internal Server Error' });
+  }
+});
+
   
 
 
@@ -216,6 +216,7 @@ router.get('/no-stock-opname/:noso/hasil', verifyToken, async (req, res) => {
     if (pool) await pool.close();
   }
 });
+
 
 
 //PRECONDITION CHECK LABEL 

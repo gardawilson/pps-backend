@@ -8,7 +8,6 @@ const WebSocket = require('ws');  // Menggunakan WebSocket
 const authRoutes = require('./routes/auth-routes');  // Rute untuk autentikasi
 const stockOpnameRoutes = require('./routes/stock-opname-routes');  // Rute untuk Stock Opname
 const profileRoutes = require('./routes/profile-routes');  // Rute untuk Akun
-const mappingRoutes = require('./routes/mapping-routes');  // Rute untuk Data Label
 const mstLokasiRoutes = require('./routes/master-lokasi-routes');
 
 
@@ -17,7 +16,7 @@ const app = express();
 const server = http.createServer(app);  // Membuat server HTTP menggunakan express
 const wss = new WebSocket.Server({ server });  // Membuat WebSocket server
 
-const port = process.env.PORT || 7000;  // Menggunakan port dari .env atau default 5000
+const port = process.env.PORT || 8000;  // Menggunakan port dari .env atau default 5000
 
 // Middleware untuk parsing JSON dari body request
 app.use(express.json());
@@ -32,7 +31,6 @@ app.use(bodyParser.json());
 app.use('/api', authRoutes);  // Rute autentikasi
 app.use('/api', stockOpnameRoutes);  // Rute stock opname
 app.use('/api', profileRoutes);  // Rute stock opname
-app.use('/api', mappingRoutes);  // Rute stock opname
 app.use('/api', mstLokasiRoutes);
 
 // WebSocket connection handling

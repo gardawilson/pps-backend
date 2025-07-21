@@ -98,31 +98,33 @@ router.get('/no-stock-opname/:noso/acuan', verifyToken, async (req, res) => {
       request.input('search', sql.VarChar, `%${search}%`);
     }
 
-    const makeQuery = (table, labelExpr, labelType, hasilTable, hasilWhereClause) => `
-      SELECT ${labelExpr} AS NomorLabel, '${labelType}' AS LabelType, 
-             JmlhSak, ROUND(Berat, 2) AS Berat, IdLokasi
+    const makeQuery = (table, labelExpr, labelType, hasilTable, hasilWhereClause, fields = {}) => `
+      SELECT 
+        ${labelExpr} AS NomorLabel, 
+        '${labelType}' AS LabelType,
+        ${fields.jmlhSak || 'NULL'} AS JmlhSak,
+        ${fields.berat || 'NULL'} AS Berat,
+        IdLokasi
       FROM ${table} AS src
       WHERE NoSO = @noso
-      ${idLokasi && idLokasi !== 'all' ? 'AND IdLokasi = @idLokasi' : ''}
-      ${search ? `AND ${labelExpr} LIKE @search` : ''}
-      AND NOT EXISTS (
-        SELECT 1 FROM ${hasilTable} AS hasil
-        WHERE hasil.NoSO = src.NoSO
-          AND ${hasilWhereClause}
-      )
+        ${idLokasi && idLokasi !== 'all' ? 'AND IdLokasi = @idLokasi' : ''}
+        ${search ? `AND ${labelExpr} LIKE @search` : ''}
+        AND NOT EXISTS (
+          SELECT 1 FROM ${hasilTable} AS hasil
+          WHERE hasil.NoSO = src.NoSO AND ${hasilWhereClause}
+        )
     `;
 
     const makeCount = (table, labelExpr, hasilTable, hasilWhereClause) => `
       SELECT COUNT(*) AS total
       FROM ${table} AS src
       WHERE NoSO = @noso
-      ${idLokasi && idLokasi !== 'all' ? 'AND IdLokasi = @idLokasi' : ''}
-      ${search ? `AND ${labelExpr} LIKE @search` : ''}
-      AND NOT EXISTS (
-        SELECT 1 FROM ${hasilTable} AS hasil
-        WHERE hasil.NoSO = src.NoSO
-          AND ${hasilWhereClause}
-      )
+        ${idLokasi && idLokasi !== 'all' ? 'AND IdLokasi = @idLokasi' : ''}
+        ${search ? `AND ${labelExpr} LIKE @search` : ''}
+        AND NOT EXISTS (
+          SELECT 1 FROM ${hasilTable} AS hasil
+          WHERE hasil.NoSO = src.NoSO AND ${hasilWhereClause}
+        )
     `;
 
     let query = '', totalQuery = '';
@@ -133,21 +135,66 @@ router.get('/no-stock-opname/:noso/acuan', verifyToken, async (req, res) => {
         labelExpr: "CONCAT(NoBahanBaku, '-', NoPallet)",
         label: 'Bahan Baku',
         hasilTable: 'StockOpnameHasilBahanBaku',
-        hasilWhereClause: "CONCAT(hasil.NoBahanBaku, '-', hasil.NoPallet) = CONCAT(src.NoBahanBaku, '-', src.NoPallet)"
+        hasilWhereClause: "CONCAT(hasil.NoBahanBaku, '-', hasil.NoPallet) = CONCAT(src.NoBahanBaku, '-', src.NoPallet)",
+        fields: {
+          jmlhSak: 'JmlhSak',
+          berat: 'ROUND(Berat, 2)'
+        }
       },
       'washing': {
         table: 'StockOpnameWashing',
         labelExpr: 'NoWashing',
         label: 'Washing',
         hasilTable: 'StockOpnameHasilWashing',
-        hasilWhereClause: 'hasil.NoWashing = src.NoWashing'
+        hasilWhereClause: 'hasil.NoWashing = src.NoWashing',
+        fields: {
+          jmlhSak: 'NULL',
+          berat: 'ROUND(Berat, 2)'
+        }
       },
       'broker': {
         table: 'StockOpnameBroker',
         labelExpr: 'NoBroker',
         label: 'Broker',
         hasilTable: 'StockOpnameHasilBroker',
-        hasilWhereClause: 'hasil.NoBroker = src.NoBroker'
+        hasilWhereClause: 'hasil.NoBroker = src.NoBroker',
+        fields: {
+          jmlhSak: 'NULL',
+          berat: 'ROUND(Berat, 2)'
+        }
+      },
+      'crusher': {
+        table: 'StockOpnameCrusher',
+        labelExpr: 'NoCrusher',
+        label: 'Crusher',
+        hasilTable: 'StockOpnameHasilCrusher',
+        hasilWhereClause: 'hasil.NoCrusher = src.NoCrusher',
+        fields: {
+          jmlhSak: 'NULL',
+          berat: 'ROUND(Berat, 2)'
+        }
+      },
+      'bonggolan': {
+        table: 'StockOpnameBonggolan',
+        labelExpr: 'NoBonggolan',
+        label: 'Bonggolan',
+        hasilTable: 'StockOpnameHasilBonggolan',
+        hasilWhereClause: 'hasil.NoBonggolan = src.NoBonggolan',
+        fields: {
+          jmlhSak: 'NULL',
+          berat: 'ROUND(Berat, 2)'
+        }
+      },
+      'gilingan': {
+        table: 'StockOpnameGilingan',
+        labelExpr: 'NoGilingan',
+        label: 'Gilingan',
+        hasilTable: 'StockOpnameHasilGilingan',
+        hasilWhereClause: 'hasil.NoGilingan = src.NoGilingan',
+        fields: {
+          jmlhSak: 'NULL',
+          berat: 'ROUND(Berat, 2)'
+        }
       }
     };
 
@@ -156,19 +203,19 @@ router.get('/no-stock-opname/:noso/acuan', verifyToken, async (req, res) => {
       if (!filter) return res.status(400).json({ message: 'Invalid filterBy' });
 
       query = `
-        ${makeQuery(filter.table, filter.labelExpr, filter.label, filter.hasilTable, filter.hasilWhereClause)}
+        ${makeQuery(filter.table, filter.labelExpr, filter.label, filter.hasilTable, filter.hasilWhereClause, filter.fields)}
         ORDER BY NomorLabel
         OFFSET ${offset} ROWS FETCH NEXT ${pageSize} ROWS ONLY;
       `;
       totalQuery = makeCount(filter.table, filter.labelExpr, filter.hasilTable, filter.hasilWhereClause);
+
     } else {
+      const allQueries = Object.values(filterMap).map(f => makeQuery(f.table, f.labelExpr, f.label, f.hasilTable, f.hasilWhereClause, f.fields));
+      const allCounts = Object.values(filterMap).map(f => makeCount(f.table, f.labelExpr, f.hasilTable, f.hasilWhereClause));
+
       query = `
         SELECT * FROM (
-          ${makeQuery('StockOpnameBahanBaku', "CONCAT(NoBahanBaku, '-', NoPallet)", 'Bahan Baku', 'StockOpnameHasilBahanBaku', "CONCAT(hasil.NoBahanBaku, '-', hasil.NoPallet) = CONCAT(src.NoBahanBaku, '-', src.NoPallet)")}
-          UNION ALL
-          ${makeQuery('StockOpnameWashing', 'NoWashing', 'Washing', 'StockOpnameHasilWashing', 'hasil.NoWashing = src.NoWashing')}
-          UNION ALL
-          ${makeQuery('StockOpnameBroker', 'NoBroker', 'Broker', 'StockOpnameHasilBroker', 'hasil.NoBroker = src.NoBroker')}
+          ${allQueries.join(' UNION ALL ')}
         ) AS acuan
         ORDER BY NomorLabel
         OFFSET ${offset} ROWS FETCH NEXT ${pageSize} ROWS ONLY;
@@ -176,11 +223,7 @@ router.get('/no-stock-opname/:noso/acuan', verifyToken, async (req, res) => {
 
       totalQuery = `
         SELECT SUM(total) AS total FROM (
-          ${makeCount('StockOpnameBahanBaku', "CONCAT(NoBahanBaku, '-', NoPallet)", 'StockOpnameHasilBahanBaku', "CONCAT(hasil.NoBahanBaku, '-', hasil.NoPallet) = CONCAT(src.NoBahanBaku, '-', src.NoPallet)")}
-          UNION ALL
-          ${makeCount('StockOpnameWashing', 'NoWashing', 'StockOpnameHasilWashing', 'hasil.NoWashing = src.NoWashing')}
-          UNION ALL
-          ${makeCount('StockOpnameBroker', 'NoBroker', 'StockOpnameHasilBroker', 'hasil.NoBroker = src.NoBroker')}
+          ${allCounts.join(' UNION ALL ')}
         ) AS totalData;
       `;
     }
@@ -192,7 +235,7 @@ router.get('/no-stock-opname/:noso/acuan', verifyToken, async (req, res) => {
 
     const formattedData = result.recordset.map(item => ({
       ...item,
-      Berat: parseFloat(item.Berat.toFixed(2))
+      Berat: item.Berat !== null ? parseFloat(item.Berat.toFixed(2)) : null
     }));
 
     res.json({
@@ -242,12 +285,12 @@ router.get('/no-stock-opname/:noso/hasil', verifyToken, async (req, res) => {
     if (idLokasi && idLokasi !== 'all') request.input('idLokasi', sql.VarChar, idLokasi);
     if (search) request.input('search', sql.VarChar, `%${search}%`);
 
-    const makeQuery = (table, labelExpr, labelType, joinClause) => `
+    const makeQuery = (table, labelExpr, labelType, joinClause, fields = {}) => `
       SELECT 
         ${labelExpr} AS NomorLabel, 
         '${labelType}' AS LabelType, 
-        so.JmlhSak, 
-        so.Berat, 
+        ${fields.jmlhSak || 'NULL'} AS JmlhSak, 
+        ${fields.berat || 'NULL'} AS Berat,
         ISNULL(so.DateTimeScan, '1900-01-01') AS DateTimeScan,
         detail.IdLokasi,
         so.Username
@@ -279,7 +322,11 @@ router.get('/no-stock-opname/:noso/hasil', verifyToken, async (req, res) => {
                  ROW_NUMBER() OVER (PARTITION BY NoBahanBaku, NoPallet ORDER BY TimeCreate DESC) as rn
           FROM BahanBaku_d 
           WHERE IdLokasi IS NOT NULL
-        ) detail ON so.NoBahanBaku = detail.NoBahanBaku AND so.NoPallet = detail.NoPallet AND detail.rn = 1`
+        ) detail ON so.NoBahanBaku = detail.NoBahanBaku AND so.NoPallet = detail.NoPallet AND detail.rn = 1`,
+        fields: {
+          jmlhSak: 'so.JmlhSak',
+          berat: 'so.Berat'
+        }
       },
       'washing': {
         table: 'StockOpnameHasilWashing',
@@ -290,7 +337,11 @@ router.get('/no-stock-opname/:noso/hasil', verifyToken, async (req, res) => {
                  ROW_NUMBER() OVER (PARTITION BY NoWashing ORDER BY DateUsage DESC) as rn
           FROM Washing_d 
           WHERE IdLokasi IS NOT NULL
-        ) detail ON so.NoWashing = detail.NoWashing AND detail.rn = 1`
+        ) detail ON so.NoWashing = detail.NoWashing AND detail.rn = 1`,
+        fields: {
+          jmlhSak: 'so.JmlhSak',
+          berat: 'so.Berat'
+        }
       },
       'broker': {
         table: 'StockOpnameHasilBroker',
@@ -301,7 +352,56 @@ router.get('/no-stock-opname/:noso/hasil', verifyToken, async (req, res) => {
                  ROW_NUMBER() OVER (PARTITION BY NoBroker ORDER BY DateUsage DESC) as rn
           FROM Broker_d 
           WHERE IdLokasi IS NOT NULL
-        ) detail ON so.NoBroker = detail.NoBroker AND detail.rn = 1`
+        ) detail ON so.NoBroker = detail.NoBroker AND detail.rn = 1`,
+        fields: {
+          jmlhSak: 'so.JmlhSak',
+          berat: 'so.Berat'
+        }
+      },
+      'crusher': {
+        table: 'StockOpnameHasilCrusher',
+        labelExpr: 'so.NoCrusher',
+        label: 'Crusher',
+        joinClause: `LEFT JOIN (
+          SELECT NoCrusher, IdLokasi,
+                 ROW_NUMBER() OVER (PARTITION BY NoCrusher ORDER BY DateUsage DESC) as rn
+          FROM Crusher
+          WHERE IdLokasi IS NOT NULL
+        ) detail ON so.NoCrusher = detail.NoCrusher AND detail.rn = 1`,
+        fields: {
+          jmlhSak: 'NULL',         
+          berat: 'so.Berat'
+        }
+      },
+      'bonggolan': {
+        table: 'StockOpnameHasilBonggolan',
+        labelExpr: 'so.NoBonggolan',
+        label: 'Bonggolan',
+        joinClause: `LEFT JOIN (
+          SELECT NoBonggolan, IdLokasi,
+                 ROW_NUMBER() OVER (PARTITION BY NoBonggolan ORDER BY DateUsage DESC) as rn
+          FROM Bonggolan
+          WHERE IdLokasi IS NOT NULL
+        ) detail ON so.NoBonggolan = detail.NoBonggolan AND detail.rn = 1`,
+        fields: {
+          jmlhSak: 'NULL',         
+          berat: 'so.Berat'
+        }
+      },
+      'gilingan': {
+        table: 'StockOpnameHasilGilingan',
+        labelExpr: 'so.NoGilingan',
+        label: 'Gilingan',
+        joinClause: `LEFT JOIN (
+          SELECT NoGilingan, IdLokasi,
+                 ROW_NUMBER() OVER (PARTITION BY NoGilingan ORDER BY DateUsage DESC) as rn
+          FROM Gilingan
+          WHERE IdLokasi IS NOT NULL
+        ) detail ON so.NoGilingan = detail.NoGilingan AND detail.rn = 1`,
+        fields: {
+          jmlhSak: 'NULL',         
+          berat: 'so.Berat'
+        }
       }
     };
 
@@ -312,7 +412,7 @@ router.get('/no-stock-opname/:noso/hasil', verifyToken, async (req, res) => {
       if (!filter) return res.status(400).json({ message: 'Invalid filterBy' });
 
       query = `
-        ${makeQuery(filter.table, filter.labelExpr, filter.label, filter.joinClause)}
+        ${makeQuery(filter.table, filter.labelExpr, filter.label, filter.joinClause, filter.fields)}
         ORDER BY so.DateTimeScan DESC
         OFFSET ${offset} ROWS FETCH NEXT ${pageSize} ROWS ONLY;
       `;
@@ -320,11 +420,17 @@ router.get('/no-stock-opname/:noso/hasil', verifyToken, async (req, res) => {
     } else {
       query = `
         SELECT * FROM (
-          ${makeQuery(filterMap.bahanbaku.table, filterMap.bahanbaku.labelExpr, filterMap.bahanbaku.label, filterMap.bahanbaku.joinClause)}
+          ${makeQuery(filterMap.bahanbaku.table, filterMap.bahanbaku.labelExpr, filterMap.bahanbaku.label, filterMap.bahanbaku.joinClause, filterMap.bahanbaku.fields)}
           UNION ALL
-          ${makeQuery(filterMap.washing.table, filterMap.washing.labelExpr, filterMap.washing.label, filterMap.washing.joinClause)}
+          ${makeQuery(filterMap.washing.table, filterMap.washing.labelExpr, filterMap.washing.label, filterMap.washing.joinClause, filterMap.washing.fields)}
           UNION ALL
-          ${makeQuery(filterMap.broker.table, filterMap.broker.labelExpr, filterMap.broker.label, filterMap.broker.joinClause)}
+          ${makeQuery(filterMap.broker.table, filterMap.broker.labelExpr, filterMap.broker.label, filterMap.broker.joinClause, filterMap.broker.fields)}
+          UNION ALL
+          ${makeQuery(filterMap.crusher.table, filterMap.crusher.labelExpr, filterMap.crusher.label, filterMap.crusher.joinClause, filterMap.crusher.fields)}
+          UNION ALL
+          ${makeQuery(filterMap.bonggolan.table, filterMap.bonggolan.labelExpr, filterMap.bonggolan.label, filterMap.bonggolan.joinClause, filterMap.bonggolan.fields)}
+          UNION ALL
+          ${makeQuery(filterMap.gilingan.table, filterMap.gilingan.labelExpr, filterMap.gilingan.label, filterMap.gilingan.joinClause, filterMap.gilingan.fields)}
         ) AS hasil
         ORDER BY DateTimeScan DESC
         OFFSET ${offset} ROWS FETCH NEXT ${pageSize} ROWS ONLY;
@@ -337,6 +443,12 @@ router.get('/no-stock-opname/:noso/hasil', verifyToken, async (req, res) => {
           ${makeCount(filterMap.washing.table, filterMap.washing.labelExpr, filterMap.washing.joinClause)}
           UNION ALL
           ${makeCount(filterMap.broker.table, filterMap.broker.labelExpr, filterMap.broker.joinClause)}
+          UNION ALL
+          ${makeCount(filterMap.crusher.table, filterMap.crusher.labelExpr, filterMap.crusher.joinClause)}
+          UNION ALL
+          ${makeCount(filterMap.bonggolan.table, filterMap.bonggolan.labelExpr, filterMap.bonggolan.joinClause)}
+          UNION ALL
+          ${makeCount(filterMap.gilingan.table, filterMap.gilingan.labelExpr, filterMap.gilingan.joinClause)}
         ) AS totalData;
       `;
     }
@@ -503,11 +615,17 @@ router.post('/no-stock-opname/:noso/validate-label', verifyToken, async (req, re
     const isBahanBaku = label.startsWith('A.') && label.includes('-');
     const isWashing = label.startsWith('B.') && !label.includes('-');
     const isBroker = label.startsWith('D.') && !label.includes('-');
+    const isCrusher = label.startsWith('F.') && !label.includes('-');
+    const isBonggolan = label.startsWith('M.') && !label.includes('-');
+    const isGilingan = label.startsWith('V.') && !label.includes('-');
 
-    if (!isBahanBaku && !isWashing && !isBroker) {
+
+
+
+    if (!isBahanBaku && !isWashing && !isBroker && !isCrusher && !isBonggolan && !isGilingan) {
         return createResponse(false, {
             isValidFormat: false
-        }, 'Kode label tidak dikenali. Hanya A., B., atau D. yang valid.', 400);
+        }, 'Kode label tidak dikenali. Hanya A., B., F., M., V., atau D. yang valid.', 400);
     }
 
     let pool;
@@ -590,7 +708,64 @@ router.post('/no-stock-opname/:noso/validate-label', verifyToken, async (req, re
                 FROM Broker_d
                 WHERE NoBroker = @NoBroker AND DateUsage IS NULL
             `;
-        }
+        } else if (isCrusher) {
+          labelType = 'Crusher';
+          parsed = { NoCrusher: label };
+          request.input('NoCrusher', sql.VarChar, label);
+
+          checkQuery = `
+              SELECT COUNT(*) AS count FROM StockOpnameHasilCrusher
+              WHERE NoSO = @noso AND NoCrusher = @NoCrusher AND Username = @username
+          `;
+          detailQuery = `
+              SELECT Berat, IdLokasi
+              FROM StockOpnameCrusher
+              WHERE NoSO = @noso AND NoCrusher = @NoCrusher
+          `;
+          fallbackQuery = `
+              SELECT SUM(Berat) AS Berat, MAX(IdLokasi) AS IdLokasi
+              FROM Crusher
+              WHERE NoCrusher = @NoCrusher AND DateUsage IS NULL
+          `;
+      } else if (isBonggolan) {
+        labelType = 'Bonggolan';
+        parsed = { NoBonggolan: label };
+        request.input('NoBonggolan', sql.VarChar, label);
+
+        checkQuery = `
+            SELECT COUNT(*) AS count FROM StockOpnameHasilBonggolan
+            WHERE NoSO = @noso AND NoBonggolan = @NoBonggolan AND Username = @username
+        `;
+        detailQuery = `
+            SELECT Berat, IdLokasi
+            FROM StockOpnameBonggolan
+            WHERE NoSO = @noso AND NoBonggolan = @NoBonggolan
+        `;
+        fallbackQuery = `
+            SELECT SUM(Berat) AS Berat, MAX(IdLokasi) AS IdLokasi
+            FROM Bonggolan
+            WHERE NoBonggolan = @NoBonggolan AND DateUsage IS NULL
+        `;
+    } else if (isGilingan) {
+      labelType = 'Gilingan';
+      parsed = { NoGilingan: label };
+      request.input('NoGilingan', sql.VarChar, label);
+
+      checkQuery = `
+          SELECT COUNT(*) AS count FROM StockOpnameHasilGilingan
+          WHERE NoSO = @noso AND NoGilingan = @NoGilingan AND Username = @username
+      `;
+      detailQuery = `
+          SELECT Berat, IdLokasi
+          FROM StockOpnameGilingan
+          WHERE NoSO = @noso AND NoGilingan = @NoGilingan
+      `;
+      fallbackQuery = `
+          SELECT SUM(Berat) AS Berat, MAX(IdLokasi) AS IdLokasi
+          FROM Gilingan
+          WHERE NoGilingan = @NoGilingan AND DateUsage IS NULL
+      `;
+  }
 
         // 3. CEK DUPLIKASI PERTAMA KALI (EARLY DUPLICATE CHECK)
         const checkResult = await request.query(checkQuery);
@@ -640,7 +815,16 @@ router.post('/no-stock-opname/:noso/validate-label', verifyToken, async (req, re
         } else if (isBroker && !qualifications.IsBroker) {
             isValidCategory = false;
             categoryMessage = 'Kategori Broker tidak sesuai dengan NoSO ini.';
-        }
+        } else if (isCrusher && !qualifications.IsCrusher) {
+          isValidCategory = false;
+          categoryMessage = 'Kategori Crusher tidak sesuai dengan NoSO ini.';
+      } else if (isBonggolan && !qualifications.IsBonggolan) {
+        isValidCategory = false;
+        categoryMessage = 'Kategori Bonggolan tidak sesuai dengan NoSO ini.';
+    } else if (isGilingan && !qualifications.IsGilingan) {
+      isValidCategory = false;
+      categoryMessage = 'Kategori Gilingan tidak sesuai dengan NoSO ini.';
+  }
 
         // 5. AMBIL ID WAREHOUSE
         if (isBahanBaku) {
@@ -661,7 +845,25 @@ router.post('/no-stock-opname/:noso/validate-label', verifyToken, async (req, re
                 WHERE NoBroker = @NoBroker
             `);
             idWarehouse = whResult.recordset[0]?.IdWarehouse ?? null;
-        }
+        } else if (isCrusher) {
+          const whResult = await request.query(`
+              SELECT IdWarehouse FROM Crusher
+              WHERE NoCrusher = @NoCrusher
+          `);
+          idWarehouse = whResult.recordset[0]?.IdWarehouse ?? null;
+      } else if (isBonggolan) {
+        const whResult = await request.query(`
+            SELECT IdWarehouse FROM Bonggolan
+            WHERE NoBonggolan = @NoBonggolan
+        `);
+        idWarehouse = whResult.recordset[0]?.IdWarehouse ?? null;
+    } else if (isGilingan) {
+      const whResult = await request.query(`
+          SELECT IdWarehouse FROM Gilingan
+          WHERE NoGilingan = @NoGilingan
+      `);
+      idWarehouse = whResult.recordset[0]?.IdWarehouse ?? null;
+  }
 
         // Jika kategori tidak valid, return dengan format standard
         if (!isValidCategory) {
@@ -806,6 +1008,12 @@ router.post('/no-stock-opname/:noso/validate-label', verifyToken, async (req, re
       const isBahanBaku = label.startsWith('A.') && label.includes('-');
       const isWashing = label.startsWith('B.') && !label.includes('-');
       const isBroker = label.startsWith('D.') && !label.includes('-');
+      const isCrusher = label.startsWith('F.') && !label.includes('-');
+      const isBonggolan = label.startsWith('M.') && !label.includes('-');
+      const isGilingan = label.startsWith('V.') && !label.includes('-');
+
+
+
   
       if (isBahanBaku) {
         const [noBahanBaku, noPallet] = label.split('-');
@@ -864,9 +1072,60 @@ router.post('/no-stock-opname/:noso/validate-label', verifyToken, async (req, re
           WHERE NoBroker = @NoBroker
         `);
   
+      } else if (isCrusher) {
+        request.input('NoCrusher', sql.VarChar, label);
+  
+        // INSERT ke hasil opname
+        await request.query(`
+          INSERT INTO StockOpnameHasilCrusher
+          (NoSO, NoCrusher, Berat, Username, DateTimeScan)
+          VALUES (@noso, @NoCrusher, @berat, @username, @DateTimeScan)
+        `);
+  
+        // UPDATE lokasi di tabel utama
+        await request.query(`
+          UPDATE Crusher
+          SET IdLokasi = @idlokasi
+          WHERE NoCrusher = @NoCrusher
+        `);
+  
+      } else if (isBonggolan) {
+        request.input('NoBonggolan', sql.VarChar, label);
+  
+        // INSERT ke hasil opname
+        await request.query(`
+          INSERT INTO StockOpnameHasilBonggolan
+          (NoSO, NoBonggolan, Berat, Username, DateTimeScan)
+          VALUES (@noso, @NoBonggolan, @berat, @username, @DateTimeScan)
+        `);
+  
+        // UPDATE lokasi di tabel utama
+        await request.query(`
+          UPDATE Bonggolan
+          SET IdLokasi = @idlokasi
+          WHERE NoBonggolan = @NoBonggolan
+        `);
+  
+      } else if (isGilingan) {
+        request.input('NoGilingan', sql.VarChar, label);
+  
+        // INSERT ke hasil opname
+        await request.query(`
+          INSERT INTO StockOpnameHasilGilingan
+          (NoSO, NoGilingan, Berat, Username, DateTimeScan)
+          VALUES (@noso, @NoGilingan, @berat, @username, @DateTimeScan)
+        `);
+  
+        // UPDATE lokasi di tabel utama
+        await request.query(`
+          UPDATE Gilingan
+          SET IdLokasi = @idlokasi
+          WHERE NoGilingan = @NoGilingan
+        `);
+  
       } else {
         return res.status(400).json({
-          message: 'Kode label tidak dikenali dalam sistem. Hanya label dengan awalan A., B., atau D. yang valid.'
+          message: 'Kode label tidak dikenali dalam sistem. Hanya label dengan awalan A., B., F., M., V., atau D. yang valid.'
         });
       }
 
@@ -877,10 +1136,16 @@ router.post('/no-stock-opname/:noso/validate-label', verifyToken, async (req, re
         labelType: label.startsWith('A.') ? 'Bahan Baku'
                   : label.startsWith('B.') ? 'Washing'
                   : label.startsWith('D.') ? 'Broker'
+                  : label.startsWith('F.') ? 'Crusher'
+                  : label.startsWith('M.') ? 'Bonggolan'
+                  : label.startsWith('V.') ? 'Gilingan'
                   : 'Unknown',
         labelTypeCode: label.startsWith('A.') ? 'bahanbaku'
                   : label.startsWith('B.') ? 'washing'
                   : label.startsWith('D.') ? 'broker'
+                  : label.startsWith('F.') ? 'crusher'
+                  : label.startsWith('M.') ? 'bonggolan'
+                  : label.startsWith('V.') ? 'gilingan'
                   : 'Unknown',
         jmlhSak: jmlhSak,             // ✅ camelCase
         berat: berat,                 // ✅ camelCase

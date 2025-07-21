@@ -48,7 +48,7 @@ router.get('/no-stock-opname', verifyToken, async (req, res) => {
     `);
 
     if (!result.recordset || result.recordset.length === 0) {
-      return res.status(404).json({ message: 'Tidak ada data Stock Opname ditemukan.' });
+      return res.status(404).json({ message: 'Saat ini sedang tidak ada Jadwal Stock Opname' });
     }
 
     const formattedData = result.recordset.map(item => ({
@@ -71,6 +71,149 @@ router.get('/no-stock-opname', verifyToken, async (req, res) => {
   }
 });
 
+
+
+// Route untuk mendapatkan data Stock Opname Data Acuan berdasarkan No Stock Opname
+router.get('/no-stock-opname/:noso/acuan', verifyToken, async (req, res) => {
+  const { noso } = req.params;
+  const page = parseInt(req.query.page) || 1;
+  const pageSize = parseInt(req.query.pageSize) || 20;
+  const filterBy = req.query.filterBy || 'all';
+  const idLokasi = req.query.idlokasi;
+  const search = req.query.search || '';
+  const offset = (page - 1) * pageSize;
+  const { username } = req;
+
+  console.log(`[${new Date().toISOString()}] StockOpnameAcuan - ${username} mengakses kategori: ${filterBy} search: ${search}`);
+
+  let pool;
+  try {
+    pool = await connectDb();
+    const request = new sql.Request(pool);
+    request.input('noso', sql.VarChar, noso);
+    if (idLokasi && idLokasi !== 'all') {
+      request.input('idLokasi', sql.VarChar, idLokasi);
+    }
+    if (search) {
+      request.input('search', sql.VarChar, `%${search}%`);
+    }
+
+    const makeQuery = (table, labelExpr, labelType, hasilTable, hasilWhereClause) => `
+      SELECT ${labelExpr} AS NomorLabel, '${labelType}' AS LabelType, 
+             JmlhSak, ROUND(Berat, 2) AS Berat, IdLokasi
+      FROM ${table} AS src
+      WHERE NoSO = @noso
+      ${idLokasi && idLokasi !== 'all' ? 'AND IdLokasi = @idLokasi' : ''}
+      ${search ? `AND ${labelExpr} LIKE @search` : ''}
+      AND NOT EXISTS (
+        SELECT 1 FROM ${hasilTable} AS hasil
+        WHERE hasil.NoSO = src.NoSO
+          AND ${hasilWhereClause}
+      )
+    `;
+
+    const makeCount = (table, labelExpr, hasilTable, hasilWhereClause) => `
+      SELECT COUNT(*) AS total
+      FROM ${table} AS src
+      WHERE NoSO = @noso
+      ${idLokasi && idLokasi !== 'all' ? 'AND IdLokasi = @idLokasi' : ''}
+      ${search ? `AND ${labelExpr} LIKE @search` : ''}
+      AND NOT EXISTS (
+        SELECT 1 FROM ${hasilTable} AS hasil
+        WHERE hasil.NoSO = src.NoSO
+          AND ${hasilWhereClause}
+      )
+    `;
+
+    let query = '', totalQuery = '';
+
+    const filterMap = {
+      'bahanbaku': {
+        table: 'StockOpnameBahanBaku',
+        labelExpr: "CONCAT(NoBahanBaku, '-', NoPallet)",
+        label: 'Bahan Baku',
+        hasilTable: 'StockOpnameHasilBahanBaku',
+        hasilWhereClause: "CONCAT(hasil.NoBahanBaku, '-', hasil.NoPallet) = CONCAT(src.NoBahanBaku, '-', src.NoPallet)"
+      },
+      'washing': {
+        table: 'StockOpnameWashing',
+        labelExpr: 'NoWashing',
+        label: 'Washing',
+        hasilTable: 'StockOpnameHasilWashing',
+        hasilWhereClause: 'hasil.NoWashing = src.NoWashing'
+      },
+      'broker': {
+        table: 'StockOpnameBroker',
+        labelExpr: 'NoBroker',
+        label: 'Broker',
+        hasilTable: 'StockOpnameHasilBroker',
+        hasilWhereClause: 'hasil.NoBroker = src.NoBroker'
+      }
+    };
+
+    if (filterBy !== 'all') {
+      const filter = filterMap[filterBy.toLowerCase()];
+      if (!filter) return res.status(400).json({ message: 'Invalid filterBy' });
+
+      query = `
+        ${makeQuery(filter.table, filter.labelExpr, filter.label, filter.hasilTable, filter.hasilWhereClause)}
+        ORDER BY NomorLabel
+        OFFSET ${offset} ROWS FETCH NEXT ${pageSize} ROWS ONLY;
+      `;
+      totalQuery = makeCount(filter.table, filter.labelExpr, filter.hasilTable, filter.hasilWhereClause);
+    } else {
+      query = `
+        SELECT * FROM (
+          ${makeQuery('StockOpnameBahanBaku', "CONCAT(NoBahanBaku, '-', NoPallet)", 'Bahan Baku', 'StockOpnameHasilBahanBaku', "CONCAT(hasil.NoBahanBaku, '-', hasil.NoPallet) = CONCAT(src.NoBahanBaku, '-', src.NoPallet)")}
+          UNION ALL
+          ${makeQuery('StockOpnameWashing', 'NoWashing', 'Washing', 'StockOpnameHasilWashing', 'hasil.NoWashing = src.NoWashing')}
+          UNION ALL
+          ${makeQuery('StockOpnameBroker', 'NoBroker', 'Broker', 'StockOpnameHasilBroker', 'hasil.NoBroker = src.NoBroker')}
+        ) AS acuan
+        ORDER BY NomorLabel
+        OFFSET ${offset} ROWS FETCH NEXT ${pageSize} ROWS ONLY;
+      `;
+
+      totalQuery = `
+        SELECT SUM(total) AS total FROM (
+          ${makeCount('StockOpnameBahanBaku', "CONCAT(NoBahanBaku, '-', NoPallet)", 'StockOpnameHasilBahanBaku', "CONCAT(hasil.NoBahanBaku, '-', hasil.NoPallet) = CONCAT(src.NoBahanBaku, '-', src.NoPallet)")}
+          UNION ALL
+          ${makeCount('StockOpnameWashing', 'NoWashing', 'StockOpnameHasilWashing', 'hasil.NoWashing = src.NoWashing')}
+          UNION ALL
+          ${makeCount('StockOpnameBroker', 'NoBroker', 'StockOpnameHasilBroker', 'hasil.NoBroker = src.NoBroker')}
+        ) AS totalData;
+      `;
+    }
+
+    const [result, total] = await Promise.all([
+      request.query(query),
+      request.query(totalQuery)
+    ]);
+
+    const formattedData = result.recordset.map(item => ({
+      ...item,
+      Berat: parseFloat(item.Berat.toFixed(2))
+    }));
+
+    res.json({
+      data: formattedData,
+      hasData: formattedData.length > 0,
+      currentPage: page,
+      pageSize,
+      totalData: total.recordset[0].total,
+      totalPages: Math.ceil(total.recordset[0].total / pageSize)
+    });
+
+  } catch (err) {
+    console.error('❌ Error:', err.message);
+    res.status(500).json({ message: 'Internal Server Error', error: err.message });
+  } finally {
+    if (pool) await pool.close();
+  }
+});
+
+
+
   
 
 
@@ -81,41 +224,50 @@ router.get('/no-stock-opname/:noso/hasil', verifyToken, async (req, res) => {
   const page = parseInt(req.query.page) || 1;
   const pageSize = parseInt(req.query.pageSize) || 20;
   const filterBy = req.query.filterBy || 'all';
-  const idLokasi = req.query.idlokasi; // Tambahkan filter idLokasi (huruf kecil)
+  const idLokasi = req.query.idlokasi;
+  const search = req.query.search || '';
   const offset = (page - 1) * pageSize;
+  const filterByUser = req.query.filterbyuser === 'true';
   const { username } = req;
 
-  console.log(`[${new Date().toISOString()}] StockOpnameHasil - ${username} mengakses kategori: ${filterBy}`);
+  console.log(`[${new Date().toISOString()}] StockOpnameHasil - ${username} mengakses kategori: ${filterBy} | filterByUser=${filterByUser} | search="${search}"`);
 
   let pool;
+
   try {
     pool = await connectDb();
     const request = new sql.Request(pool);
     request.input('noso', sql.VarChar, noso);
-    request.input('username', sql.VarChar, username);
-    if (idLokasi && idLokasi !== 'all') {
-      request.input('idLokasi', sql.VarChar, idLokasi);
-    }
+    if (filterByUser) request.input('username', sql.VarChar, username);
+    if (idLokasi && idLokasi !== 'all') request.input('idLokasi', sql.VarChar, idLokasi);
+    if (search) request.input('search', sql.VarChar, `%${search}%`);
 
     const makeQuery = (table, labelExpr, labelType, joinClause) => `
-      SELECT ${labelExpr} AS NomorLabel, '${labelType}' AS LabelType, so.JmlhSak, so.Berat, 
-             ISNULL(so.DateTimeScan, '1900-01-01') AS DateTimeScan,
-             detail.IdLokasi
+      SELECT 
+        ${labelExpr} AS NomorLabel, 
+        '${labelType}' AS LabelType, 
+        so.JmlhSak, 
+        so.Berat, 
+        ISNULL(so.DateTimeScan, '1900-01-01') AS DateTimeScan,
+        detail.IdLokasi,
+        so.Username
       FROM ${table} so
       ${joinClause}
-      WHERE so.NoSO = @noso AND so.Username = @username
+      WHERE so.NoSO = @noso
+      ${filterByUser ? 'AND so.Username = @username' : ''}
       ${idLokasi && idLokasi !== 'all' ? 'AND detail.IdLokasi = @idLokasi' : ''}
+      ${search ? `AND ${labelExpr} LIKE @search` : ''}
     `;
 
-    const makeCount = (table, joinClause) => `
+    const makeCount = (table, labelExpr, joinClause) => `
       SELECT COUNT(*) AS total
       FROM ${table} so
       ${joinClause}
-      WHERE so.NoSO = @noso AND so.Username = @username
+      WHERE so.NoSO = @noso
+      ${filterByUser ? 'AND so.Username = @username' : ''}
       ${idLokasi && idLokasi !== 'all' ? 'AND detail.IdLokasi = @idLokasi' : ''}
+      ${search ? `AND ${labelExpr} LIKE @search` : ''}
     `;
-
-    let query = '', totalQuery = '';
 
     const filterMap = {
       'bahanbaku': {
@@ -153,6 +305,8 @@ router.get('/no-stock-opname/:noso/hasil', verifyToken, async (req, res) => {
       }
     };
 
+    let query = '', totalQuery = '';
+
     if (filterBy !== 'all') {
       const filter = filterMap[filterBy.toLowerCase()];
       if (!filter) return res.status(400).json({ message: 'Invalid filterBy' });
@@ -162,15 +316,15 @@ router.get('/no-stock-opname/:noso/hasil', verifyToken, async (req, res) => {
         ORDER BY so.DateTimeScan DESC
         OFFSET ${offset} ROWS FETCH NEXT ${pageSize} ROWS ONLY;
       `;
-      totalQuery = makeCount(filter.table, filter.joinClause);
+      totalQuery = makeCount(filter.table, filter.labelExpr, filter.joinClause);
     } else {
       query = `
         SELECT * FROM (
-          ${makeQuery('StockOpnameHasilBahanBaku', "CONCAT(so.NoBahanBaku, '-', so.NoPallet)", 'Bahan Baku', filterMap.bahanbaku.joinClause)}
+          ${makeQuery(filterMap.bahanbaku.table, filterMap.bahanbaku.labelExpr, filterMap.bahanbaku.label, filterMap.bahanbaku.joinClause)}
           UNION ALL
-          ${makeQuery('StockOpnameHasilWashing', 'so.NoWashing', 'Washing', filterMap.washing.joinClause)}
+          ${makeQuery(filterMap.washing.table, filterMap.washing.labelExpr, filterMap.washing.label, filterMap.washing.joinClause)}
           UNION ALL
-          ${makeQuery('StockOpnameHasilBroker', 'so.NoBroker', 'Broker', filterMap.broker.joinClause)}
+          ${makeQuery(filterMap.broker.table, filterMap.broker.labelExpr, filterMap.broker.label, filterMap.broker.joinClause)}
         ) AS hasil
         ORDER BY DateTimeScan DESC
         OFFSET ${offset} ROWS FETCH NEXT ${pageSize} ROWS ONLY;
@@ -178,11 +332,11 @@ router.get('/no-stock-opname/:noso/hasil', verifyToken, async (req, res) => {
 
       totalQuery = `
         SELECT SUM(total) AS total FROM (
-          ${makeCount('StockOpnameHasilBahanBaku', filterMap.bahanbaku.joinClause)}
+          ${makeCount(filterMap.bahanbaku.table, filterMap.bahanbaku.labelExpr, filterMap.bahanbaku.joinClause)}
           UNION ALL
-          ${makeCount('StockOpnameHasilWashing', filterMap.washing.joinClause)}
+          ${makeCount(filterMap.washing.table, filterMap.washing.labelExpr, filterMap.washing.joinClause)}
           UNION ALL
-          ${makeCount('StockOpnameHasilBroker', filterMap.broker.joinClause)}
+          ${makeCount(filterMap.broker.table, filterMap.broker.labelExpr, filterMap.broker.joinClause)}
         ) AS totalData;
       `;
     }
@@ -197,7 +351,8 @@ router.get('/no-stock-opname/:noso/hasil', verifyToken, async (req, res) => {
       DateTimeScan:
         item.DateTimeScan && item.DateTimeScan !== '1900-01-01'
           ? moment(item.DateTimeScan).format('DD MMM YYYY')
-          : '-'
+          : '-',
+      Username: item.Username || '-'
     }));
 
     res.json({
@@ -216,6 +371,96 @@ router.get('/no-stock-opname/:noso/hasil', verifyToken, async (req, res) => {
     if (pool) await pool.close();
   }
 });
+
+
+
+//DELETE PADA TABEL HASIL
+router.delete('/no-stock-opname/:noso/hasil', verifyToken, async (req, res) => {
+  const { noso } = req.params;
+  const { nomorLabel } = req.body;
+
+  if (!nomorLabel) {
+    return res.status(400).json({ message: 'NomorLabel wajib diisi' });
+  }
+
+  let pool;
+
+  try {
+    pool = await connectDb();
+    const request = new sql.Request(pool);
+    request.input('noso', sql.VarChar, noso);
+
+    let deleteQuery = '';
+    let labelTypeDetected = '';
+
+    // Coba bahan baku (pakai split '-')
+    const [noBahanBaku, noPallet] = nomorLabel.split('-');
+    if (noBahanBaku && noPallet) {
+      request.input('noBahanBaku', sql.VarChar, noBahanBaku);
+      request.input('noPallet', sql.VarChar, noPallet);
+
+      const checkBBK = await request.query(`
+        SELECT 1 FROM StockOpnameHasilBahanBaku 
+        WHERE NoSO = @noso AND NoBahanBaku = @noBahanBaku AND NoPallet = @noPallet
+      `);
+
+      if (checkBBK.recordset.length > 0) {
+        deleteQuery = `
+          DELETE FROM StockOpnameHasilBahanBaku 
+          WHERE NoSO = @noso AND NoBahanBaku = @noBahanBaku AND NoPallet = @noPallet
+        `;
+        labelTypeDetected = 'bahan baku';
+      }
+    }
+
+    // Coba washing
+    if (!deleteQuery) {
+      request.input('noWashing', sql.VarChar, nomorLabel);
+      const checkWSH = await request.query(`
+        SELECT 1 FROM StockOpnameHasilWashing 
+        WHERE NoSO = @noso AND NoWashing = @noWashing
+      `);
+      if (checkWSH.recordset.length > 0) {
+        deleteQuery = `
+          DELETE FROM StockOpnameHasilWashing 
+          WHERE NoSO = @noso AND NoWashing = @noWashing
+        `;
+        labelTypeDetected = 'washing';
+      }
+    }
+
+    // Coba broker
+    if (!deleteQuery) {
+      request.input('noBroker', sql.VarChar, nomorLabel);
+      const checkBRK = await request.query(`
+        SELECT 1 FROM StockOpnameHasilBroker 
+        WHERE NoSO = @noso AND NoBroker = @noBroker
+      `);
+      if (checkBRK.recordset.length > 0) {
+        deleteQuery = `
+          DELETE FROM StockOpnameHasilBroker 
+          WHERE NoSO = @noso AND NoBroker = @noBroker
+        `;
+        labelTypeDetected = 'broker';
+      }
+    }
+
+    if (!deleteQuery) {
+      return res.status(404).json({ message: 'NomorLabel tidak ditemukan dalam data stock opname' });
+    }
+
+    // Eksekusi delete
+    const result = await request.query(deleteQuery);
+    res.json({ message: `Label ${nomorLabel} berhasil dihapus dari tipe '${labelTypeDetected}'` });
+
+  } catch (err) {
+    console.error('❌ Error:', err.message);
+    res.status(500).json({ message: 'Gagal menghapus data', error: err.message });
+  } finally {
+    if (pool) await pool.close();
+  }
+});
+
 
 
 
@@ -471,8 +716,8 @@ router.post('/no-stock-opname/:noso/validate-label', verifyToken, async (req, re
                     detail: {
                       ...detailData,
                       Berat: detailData?.Berat != null ? Number(detailData.Berat.toFixed(2)) : null
-                  }
-                                }, `Label ini tidak tersedia pada warehouse NoSO ini (IdWarehouse: ${idWarehouse}).`, 400);
+                  }                
+                }, `Label ini tidak tersedia pada warehouse NoSO ini (IdWarehouse: ${idWarehouse}).`, 400);
             }
 
             return createResponse(true, {
@@ -535,8 +780,6 @@ router.post('/no-stock-opname/:noso/validate-label', verifyToken, async (req, re
         if (pool) await pool.close();
     }
 });
-  
-  
   
   
   router.post('/no-stock-opname/:noso/insert-label', verifyToken, async (req, res) => {
@@ -626,7 +869,30 @@ router.post('/no-stock-opname/:noso/validate-label', verifyToken, async (req, re
           message: 'Kode label tidak dikenali dalam sistem. Hanya label dengan awalan A., B., atau D. yang valid.'
         });
       }
-  
+
+      // Setelah semua if/else label type
+      const insertedData = {
+        noso: noso,                    // ✅ Tambahkan noso
+        nomorLabel: label,             // ✅ camelCase
+        labelType: label.startsWith('A.') ? 'Bahan Baku'
+                  : label.startsWith('B.') ? 'Washing'
+                  : label.startsWith('D.') ? 'Broker'
+                  : 'Unknown',
+        labelTypeCode: label.startsWith('A.') ? 'bahanbaku'
+                  : label.startsWith('B.') ? 'washing'
+                  : label.startsWith('D.') ? 'broker'
+                  : 'Unknown',
+        jmlhSak: jmlhSak,             // ✅ camelCase
+        berat: berat,                 // ✅ camelCase
+        idlokasi: idlokasi,           // ✅ lowercase untuk konsistensi
+        username: username,           // ✅ camelCase
+        timestamp: new Date()         // ✅ camelCase
+      };
+
+      console.log('🚀 Emitting socket data:', insertedData); // Debug log
+
+      global.io.emit('label_inserted', insertedData);
+
       res.json({ success: true, message: 'Label berhasil disimpan dan lokasi diperbarui' });
   
     } catch (err) {

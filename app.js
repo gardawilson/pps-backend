@@ -1,54 +1,43 @@
-require('dotenv').config();  // Memuat file .env
+require('dotenv').config(); // Memuat file .env
 const express = require('express');
-const cors = require('cors');  // Menggunakan CORS untuk menangani permintaan lintas asal
+const cors = require('cors');
 const bodyParser = require('body-parser');
-const { connectDb } = require('./db');  // Menghubungkan ke database
-const http = require('http');  // Untuk membuat server HTTP
-const WebSocket = require('ws');  // Menggunakan WebSocket
-const authRoutes = require('./routes/auth-routes');  // Rute untuk autentikasi
-const stockOpnameRoutes = require('./routes/stock-opname-routes');  // Rute untuk Stock Opname
-const profileRoutes = require('./routes/profile-routes');  // Rute untuk Akun
+const http = require('http');
+const socketIO = require('socket.io'); // Ganti dari 'ws' ke 'socket.io'
+
+const { connectDb } = require('./db');
+const authRoutes = require('./routes/auth-routes');
+const stockOpnameRoutes = require('./routes/stock-opname-routes');
+const profileRoutes = require('./routes/profile-routes');
 const mstLokasiRoutes = require('./routes/master-lokasi-routes');
-
-
+const initSocket = require('./socket'); // Gunakan file socket.js
 
 const app = express();
-const server = http.createServer(app);  // Membuat server HTTP menggunakan express
-const wss = new WebSocket.Server({ server });  // Membuat WebSocket server
-
-const port = process.env.PORT || 8000;  // Menggunakan port dari .env atau default 5000
-
-// Middleware untuk parsing JSON dari body request
-app.use(express.json());
-
-// Middleware untuk menangani CORS
-app.use(cors());
-
-// Middleware untuk parsing JSON
-app.use(bodyParser.json());
-
-// Menggunakan rute autentikasi dan stock opname
-app.use('/api', authRoutes);  // Rute autentikasi
-app.use('/api', stockOpnameRoutes);  // Rute stock opname
-app.use('/api', profileRoutes);  // Rute stock opname
-app.use('/api', mstLokasiRoutes);
-
-// WebSocket connection handling
-wss.on('connection', (ws) => {
-  console.log('Client connected via WebSocket');
-
-  // Mengirim pesan ke klien setelah koneksi
-  ws.send('Welcome to WebSocket server!');
-
-
-  // Menangani koneksi yang terputus
-  ws.on('close', () => {
-    console.log('Client disconnected');
-  });
+const server = http.createServer(app); // Gunakan http server untuk socket.io
+const io = socketIO(server, {
+  cors: {
+    origin: '*', // Ganti sesuai kebutuhan
+    methods: ['GET', 'POST'],
+  }
 });
 
-// Menjalankan server pada port yang sudah ditentukan
+// Inisialisasi Socket.IO handler
+initSocket(io);
+
+// Middleware
+app.use(cors());
+app.use(bodyParser.json());
+app.use(express.json());
+
+// Routes
+app.use('/api', authRoutes);
+app.use('/api', stockOpnameRoutes);
+app.use('/api', profileRoutes);
+app.use('/api', mstLokasiRoutes);
+
+// Start server
+const port = process.env.PORT || 7500;
 server.listen(port, () => {
-  console.log(`Server berjalan di http://localhost:${port}`);
-  connectDb(); // Pastikan koneksi ke database berhasil
+  console.log(`🚀 Server berjalan di http://localhost:${port}`);
+  connectDb(); // Pastikan koneksi ke DB
 });

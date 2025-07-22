@@ -505,7 +505,7 @@ router.delete('/no-stock-opname/:noso/hasil', verifyToken, async (req, res) => {
     let deleteQuery = '';
     let labelTypeDetected = '';
 
-    // Coba bahan baku (pakai split '-')
+    // === BAHAN BAKU ===
     const [noBahanBaku, noPallet] = nomorLabel.split('-');
     if (noBahanBaku && noPallet) {
       request.input('noBahanBaku', sql.VarChar, noBahanBaku);
@@ -521,48 +521,42 @@ router.delete('/no-stock-opname/:noso/hasil', verifyToken, async (req, res) => {
           DELETE FROM StockOpnameHasilBahanBaku 
           WHERE NoSO = @noso AND NoBahanBaku = @noBahanBaku AND NoPallet = @noPallet
         `;
-        labelTypeDetected = 'bahan baku';
+        labelTypeDetected = 'bahanbaku';
       }
     }
 
-    // Coba washing
-    if (!deleteQuery) {
-      request.input('noWashing', sql.VarChar, nomorLabel);
-      const checkWSH = await request.query(`
-        SELECT 1 FROM StockOpnameHasilWashing 
-        WHERE NoSO = @noso AND NoWashing = @noWashing
-      `);
-      if (checkWSH.recordset.length > 0) {
-        deleteQuery = `
-          DELETE FROM StockOpnameHasilWashing 
-          WHERE NoSO = @noso AND NoWashing = @noWashing
-        `;
-        labelTypeDetected = 'washing';
-      }
-    }
+    // === LABEL BIASA (tanpa dash) ===
+    const tryDeleteLabel = async (table, column, typeName, inputName) => {
+      if (deleteQuery) return; // skip jika sudah ketemu
 
-    // Coba broker
-    if (!deleteQuery) {
-      request.input('noBroker', sql.VarChar, nomorLabel);
-      const checkBRK = await request.query(`
-        SELECT 1 FROM StockOpnameHasilBroker 
-        WHERE NoSO = @noso AND NoBroker = @noBroker
+      request.input(inputName, sql.VarChar, nomorLabel);
+      const check = await request.query(`
+        SELECT 1 FROM ${table} 
+        WHERE NoSO = @noso AND ${column} = @${inputName}
       `);
-      if (checkBRK.recordset.length > 0) {
+
+      if (check.recordset.length > 0) {
         deleteQuery = `
-          DELETE FROM StockOpnameHasilBroker 
-          WHERE NoSO = @noso AND NoBroker = @noBroker
+          DELETE FROM ${table}
+          WHERE NoSO = @noso AND ${column} = @${inputName}
         `;
-        labelTypeDetected = 'broker';
+        labelTypeDetected = typeName;
       }
-    }
+    };
+
+    await tryDeleteLabel('StockOpnameHasilWashing', 'NoWashing', 'washing', 'noWashing');
+    await tryDeleteLabel('StockOpnameHasilBroker', 'NoBroker', 'broker', 'noBroker');
+    await tryDeleteLabel('StockOpnameHasilCrusher', 'NoCrusher', 'crusher', 'noCrusher');
+    await tryDeleteLabel('StockOpnameHasilBonggolan', 'NoBonggolan', 'bonggolan', 'noBonggolan');
+    await tryDeleteLabel('StockOpnameHasilGilingan', 'NoGilingan', 'gilingan', 'noGilingan');
 
     if (!deleteQuery) {
       return res.status(404).json({ message: 'NomorLabel tidak ditemukan dalam data stock opname' });
     }
 
-    // Eksekusi delete
-    const result = await request.query(deleteQuery);
+    // Eksekusi query DELETE
+    await request.query(deleteQuery);
+
     res.json({ message: `Label ${nomorLabel} berhasil dihapus dari tipe '${labelTypeDetected}'` });
 
   } catch (err) {
@@ -572,6 +566,7 @@ router.delete('/no-stock-opname/:noso/hasil', verifyToken, async (req, res) => {
     if (pool) await pool.close();
   }
 });
+
 
 
 
@@ -1011,8 +1006,6 @@ router.post('/no-stock-opname/:noso/validate-label', verifyToken, async (req, re
       const isCrusher = label.startsWith('F.') && !label.includes('-');
       const isBonggolan = label.startsWith('M.') && !label.includes('-');
       const isGilingan = label.startsWith('V.') && !label.includes('-');
-
-
 
   
       if (isBahanBaku) {

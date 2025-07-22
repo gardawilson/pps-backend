@@ -1,5 +1,5 @@
 const express = require('express');
-const verifyToken = require('../middleware/verifyToken');  // Mengimpor middleware
+const verifyToken = require('../middleware/verify-token');  // Mengimpor middleware
 const moment = require('moment');
 const { sql, connectDb } = require('../db');
 const router = express.Router();

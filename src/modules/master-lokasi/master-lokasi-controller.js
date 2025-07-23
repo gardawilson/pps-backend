@@ -1,4 +1,4 @@
-const masterLokasiService = require('../services/master-lokasi-service');
+const masterLokasiService = require('./master-lokasi-service');
 
 async function getLokasi(req, res) {
   const { username } = req;

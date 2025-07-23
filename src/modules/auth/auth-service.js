@@ -1,5 +1,5 @@
-const { sql, connectDb } = require('../db');
-const { hashPassword } = require('../utils/crypto-helper');
+const { sql, connectDb } = require('../../core/config/db');
+const { hashPassword } = require('../../core/utils/crypto-helper');
 
 async function verifyUser(username, password) {
   await connectDb();

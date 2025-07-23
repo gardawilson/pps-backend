@@ -1,5 +1,5 @@
 const jwt = require('jsonwebtoken');
-const authService = require('../services/auth-service');
+const authService = require('./auth-service');
 
 async function login(req, res) {
   const { username, password } = req.body;

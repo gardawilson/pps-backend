@@ -1,6 +1,6 @@
 const express = require('express');
-const { getProfile, changePassword } = require('../controllers/profile-controller');
-const verifyToken = require('../middleware/verify-token');
+const { getProfile, changePassword } = require('./profile-controller');
+const verifyToken = require('../../core/middleware/verify-token');
 
 const router = express.Router();
 

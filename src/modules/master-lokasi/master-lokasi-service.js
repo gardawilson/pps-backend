@@ -1,4 +1,4 @@
-const { sql, connectDb } = require('../db');
+const { sql, connectDb } = require('../../core/config/db');
 
 async function getAllLokasiAktif() {
   let pool;

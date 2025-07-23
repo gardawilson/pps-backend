@@ -1,6 +1,6 @@
 const express = require('express');
 const router = express.Router();
-const authController = require('../controllers/auth-controller');
+const authController = require('./auth-controller');
 
 router.use(express.json()); // Middleware parsing JSON
 

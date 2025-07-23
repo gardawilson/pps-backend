@@ -1,4 +1,4 @@
-const { getProfileService, changePasswordService } = require('../services/profile-service');
+const { getProfileService, changePasswordService } = require('./profile-service');
 
 const getProfile = async (req, res) => {
   const username = req.username; // ✅ FIXED

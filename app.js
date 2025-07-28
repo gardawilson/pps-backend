@@ -13,6 +13,8 @@ const authRoutes = require('./src/modules/auth/auth-routes');
 const stockOpnameRoutes = require('./src/modules/stock-opname/stock-opname-routes');
 const profileRoutes = require('./src/modules/profile/profile-routes');
 const mstLokasiRoutes = require('./src/modules/master-lokasi/master-lokasi-routes');
+const detailLabelRoutes = require('./src/modules/label/label-detail-routes');
+
 
 // Import socket handler
 const initSocket = require('./src/core/socket/index'); // Sesuai struktur folder
@@ -24,7 +26,7 @@ const app = express();
 const server = http.createServer(app);
 const io = socketIO(server, {
   cors: {
-    origin: process.env.FRONTEND_URL || '*', // Gunakan env variable
+    origin: process.env.FRONTEND_URL || '*', 
     methods: ['GET', 'POST'],
     credentials: true
   }
@@ -56,6 +58,8 @@ app.use('/api', authRoutes);
 app.use('/api', stockOpnameRoutes);
 app.use('/api', profileRoutes);
 app.use('/api', mstLokasiRoutes);
+app.use('/api', detailLabelRoutes);
+
 
 // Protected routes (contoh jika ada route yang perlu authentication)
 // app.use('/api/protected', verifyToken, protectedRoutes);
@@ -91,7 +95,6 @@ const port = process.env.PORT || 7500;
 server.listen(port, () => {
   console.log(`🚀 Server berjalan di http://localhost:${port}`);
   console.log(`📝 Health check: http://localhost:${port}/health`);
-  console.log(`🌍 Environment: ${process.env.NODE_ENV || 'development'}`);
   
   // Connect to database
   connectDb();

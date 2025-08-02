@@ -18,7 +18,8 @@ async function getNoStockOpname() {
         soh.IsGilingan,
         soh.IsMixer,
         soh.IsFurnitureWIP,
-        soh.IsBarangJadi
+        soh.IsBarangJadi,
+        soh.IsReject
       FROM StockOpname_h soh
       LEFT JOIN StockOpname_h_WarehouseID sohw ON soh.NoSO = sohw.NoSO
       LEFT JOIN MstWarehouse wh ON sohw.IdWarehouse = wh.IdWarehouse
@@ -37,7 +38,8 @@ async function getNoStockOpname() {
         soh.IsGilingan,
         soh.IsMixer,
         soh.IsFurnitureWIP,
-        soh.IsBarangJadi
+        soh.IsBarangJadi,
+        soh.IsReject
       ORDER BY soh.NoSO DESC
     `);
 
@@ -57,7 +59,8 @@ async function getNoStockOpname() {
       IsGilingan,
       IsMixer,
       IsFurnitureWIP,
-      IsBarangJadi
+      IsBarangJadi,
+      IsReject
     }) => ({
       NoSO,
       Tanggal: formatDate(Tanggal),
@@ -70,7 +73,8 @@ async function getNoStockOpname() {
       IsGilingan,
       IsMixer,
       IsFurnitureWIP,
-      IsBarangJadi
+      IsBarangJadi,
+      IsReject
     }));
   } catch (err) {
     throw new Error(`Stock Opname Service Error: ${err.message}`);
@@ -181,6 +185,17 @@ async function getStockOpnameAcuan({ noso, page = 1, pageSize = 20, filterBy = '
       hasilWhereClause: 'hasil.NoBJ = src.NoBJ',
       fields: {
         jmlhSak: 'Pcs',
+        berat: 'Berat'
+      }
+    },
+    'reject': {
+      table: 'StockOpnameReject',
+      labelExpr: 'NoReject',
+      label: 'Reject',
+      hasilTable: 'StockOpnameHasilReject',
+      hasilWhereClause: 'hasil.NoReject = src.NoReject',
+      fields: {
+        jmlhSak: 'NULL',
         berat: 'Berat'
       }
     },
@@ -508,6 +523,21 @@ async function getStockOpnameHasil({
         jmlhSak: 'so.Pcs',
         berat: 'so.Berat'
       }
+    },
+    'reject': {
+      table: 'StockOpnameHasilReject',
+      labelExpr: 'so.NoReject',
+      label: 'Reject',
+      joinClause: `LEFT JOIN (
+          SELECT NoReject, IdLokasi,
+                 ROW_NUMBER() OVER (PARTITION BY NoReject ORDER BY DateUsage DESC) as rn
+          FROM RejectV2 
+          WHERE IdLokasi IS NOT NULL
+        ) detail ON so.NoReject = detail.NoReject AND detail.rn = 1`,
+      fields: {
+        jmlhSak: 'NULL',
+        berat: 'so.Berat'
+      }
     }
   };
 
@@ -703,6 +733,8 @@ async function deleteStockOpnameHasil({ noso, nomorLabel }) {
     await tryDeleteLabel('StockOpnameHasilCrusher', 'NoCrusher', 'crusher', 'noCrusher');
     await tryDeleteLabel('StockOpnameHasilBonggolan', 'NoBonggolan', 'bonggolan', 'noBonggolan');
     await tryDeleteLabel('StockOpnameHasilGilingan', 'NoGilingan', 'gilingan', 'noGilingan');
+    await tryDeleteLabel('StockOpnameHasilReject', 'NoReject', 'reject', 'noReject');
+
 
     if (!deleteQuery) {
       return { success: false, message: 'NomorLabel tidak ditemukan dalam data stock opname' };
@@ -758,11 +790,13 @@ async function validateStockOpnameLabel({ noso, label, username }) {
   const isMixer = label.startsWith('H.') && !label.includes('-');
   const isFurnitureWIP = label.startsWith('BB.') && !label.includes('-');
   const isBarangJadi = label.startsWith('BA.') && !label.includes('-');
+  const isReject = label.startsWith('BF.') && !label.includes('-');
 
-  if (!isBahanBaku && !isWashing && !isBroker && !isCrusher && !isBonggolan && !isGilingan && !isMixer && !isFurnitureWIP && !isBarangJadi) {
+
+  if (!isBahanBaku && !isWashing && !isBroker && !isCrusher && !isBonggolan && !isGilingan && !isMixer && !isFurnitureWIP && !isBarangJadi && !isReject) {
     return createResponse(false, {
       isValidFormat: false
-    }, 'Kode label tidak dikenali. Hanya A., B., F., M., V., H., BB., BA., atau D. yang valid.');
+    }, 'Kode label tidak dikenali. Hanya A., B., F., M., V., H., BB., BA., BF., atau D. yang valid.');
   }
 
   let pool;
@@ -1065,6 +1099,35 @@ async function validateStockOpnameLabel({ noso, label, username }) {
           FROM BarangJadi
           WHERE NoBJ = @NoBJ
         `;
+    } else if (isReject) {
+      labelType = 'Reject';
+      parsed = { NoReject: label };
+      request.input('NoReject', sql.VarChar, label);
+
+      checkQuery = `
+          SELECT COUNT(*) AS count FROM StockOpnameHasilReject
+          WHERE NoSO = @noso AND NoReject = @NoReject AND Username = @username
+        `;
+      detailQuery = `
+          SELECT Berat, IdLokasi
+          FROM StockOpnameReject
+          WHERE NoSO = @noso AND NoReject = @NoReject
+        `;
+      warehouseQuery = `
+          SELECT IdWarehouse FROM RejectV2
+          WHERE NoReject = @NoReject
+        `;
+      fallbackQuery = `
+          SELECT SUM(Berat) AS Berat, MAX(IdLokasi) AS IdLokasi, MAX(IdWarehouse) AS IdWarehouse
+          FROM RejectV2
+          WHERE NoReject = @NoReject 
+          AND (DateUsage IS NULL OR IdWarehouse NOT IN (SELECT IdWarehouse FROM StockOpname_h_WarehouseID WHERE NoSO = @noso))
+        `;
+      originalDataQuery = `
+          SELECT SUM(Berat) AS Berat, MAX(IdLokasi) AS IdLokasi, MAX(IdWarehouse) AS IdWarehouse
+          FROM BarangJadi
+          WHERE NoReject = @NoReject
+        `;
     }
 
     // 3. CEK DUPLIKASI PERTAMA KALI (EARLY DUPLICATE CHECK)
@@ -1088,7 +1151,7 @@ async function validateStockOpnameLabel({ noso, label, username }) {
 
     // 4. VALIDASI KUALIFIKASI NOSO
     const nosoQualificationCheck = await request.query(`
-        SELECT IsBahanBaku, IsWashing, IsBroker, IsBonggolan, IsCrusher, IsGilingan, IsMixer, IsFurnitureWIP, IsBarangJadi
+        SELECT IsBahanBaku, IsWashing, IsBroker, IsBonggolan, IsCrusher, IsGilingan, IsMixer, IsFurnitureWIP, IsBarangJadi, IsReject
         FROM StockOpname_h
         WHERE NoSO = @noso
       `);
@@ -1135,6 +1198,9 @@ async function validateStockOpnameLabel({ noso, label, username }) {
     } else if (isBarangJadi && !qualifications.IsBarangJadi) {
       isValidCategory = false;
       categoryMessage = 'Kategori Barang Jadi tidak sesuai dengan NoSO ini.';
+    } else if (isReject && !qualifications.IsReject) {
+      isValidCategory = false;
+      categoryMessage = 'Kategori Reject tidak sesuai dengan NoSO ini.';
     }
 
     // 5. AMBIL ID WAREHOUSE
@@ -1326,7 +1392,7 @@ async function insertStockOpnameLabel({ noso, label, jmlhSak = 0, berat = 0, idl
     const isMixer = label.startsWith('H.') && !label.includes('-');
     const isFurnitureWIP = label.startsWith('BB.') && !label.includes('-');
     const isBarangJadi = label.startsWith('BA.') && !label.includes('-');
-
+    const isReject = label.startsWith('BF.') && !label.includes('-');
 
 
     let insertedData = null;
@@ -1516,11 +1582,29 @@ async function insertStockOpnameLabel({ noso, label, jmlhSak = 0, berat = 0, idl
         noso, nomorLabel: label, labelType: 'Barang Jadi', labelTypeCode: 'barangjadi',
         jmlhSak, berat, idlokasi, username, timestamp: new Date()
       };
+    } else if (isReject) {
+      request.input('NoReject', sql.VarChar, label);
 
+      await request.query(`
+          INSERT INTO StockOpnameHasilReject
+          (NoSO, NoReject, Berat, Username, DateTimeScan)
+          VALUES (@noso, @NoReject, @berat, @username, @DateTimeScan)
+        `);
+
+      await request.query(`
+          UPDATE RejectV2
+          SET IdLokasi = @idlokasi
+          WHERE NoReject = @NoReject
+        `);
+
+      insertedData = {
+        noso, nomorLabel: label, labelType: 'Reject', labelTypeCode: 'reject',
+        jmlhSak, berat, idlokasi, username, timestamp: new Date()
+      };
     }
 
     else {
-      throw new Error('Kode label tidak dikenali dalam sistem. Hanya label dengan awalan A., B., F., M., V., H., BB., BA., atau D. yang valid.');
+      throw new Error('Kode label tidak dikenali dalam sistem. Hanya label dengan awalan A., B., F., M., V., H., BB., BA., BF., atau D. yang valid.');
     }
 
     // Emit ke socket jika global.io tersedia

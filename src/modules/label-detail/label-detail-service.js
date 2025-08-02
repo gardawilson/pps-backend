@@ -386,6 +386,35 @@ async function getDetailByNomorLabel(nomorLabel) {
       }
     }
 
+        // === Label Reject ===
+        if (nomorLabel.startsWith('BF.')) {
+          request.input('noReject', sql.VarChar, nomorLabel);
+    
+          const result = await request.query(`
+                    SELECT
+                      'reject' AS LabelType,
+                      g.NoReject AS NomorLabel,
+                      g.DateCreate,
+                      g.Berat,
+                      mw.NamaWarehouse,
+                      mg.NamaReject,
+                      g.IdLokasi
+                    FROM RejectV2 g
+                    LEFT JOIN MstWarehouse mw ON mw.IdWarehouse = g.IdWarehouse
+                    LEFT JOIN MstReject mg ON mg.IdReject = g.IdReject
+                    WHERE g.NoReject = @noReject
+                  `);
+    
+          if (result.recordset.length > 0) {
+            const data = result.recordset[0];
+            return {
+              ...data,
+              Berat: formatBerat(data.Berat),
+              ...(data.DateCreate && { DateCreate: formatDate(data.DateCreate) }),
+            };
+          }
+        }
+
     return null;
   } finally {
     if (pool) await pool.close();

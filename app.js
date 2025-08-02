@@ -13,7 +13,8 @@ const authRoutes = require('./src/modules/auth/auth-routes');
 const stockOpnameRoutes = require('./src/modules/stock-opname/stock-opname-routes');
 const profileRoutes = require('./src/modules/profile/profile-routes');
 const mstLokasiRoutes = require('./src/modules/master-lokasi/master-lokasi-routes');
-const detailLabelRoutes = require('./src/modules/label/label-detail-routes');
+const detailLabelRoutes = require('./src/modules/label-detail/label-detail-routes');
+const labelRoutes = require('./src/modules/label/label-washing-routes');
 
 
 // Import socket handler
@@ -59,6 +60,7 @@ app.use('/api', stockOpnameRoutes);
 app.use('/api', profileRoutes);
 app.use('/api', mstLokasiRoutes);
 app.use('/api', detailLabelRoutes);
+app.use('/api', labelRoutes);
 
 
 // Protected routes (contoh jika ada route yang perlu authentication)

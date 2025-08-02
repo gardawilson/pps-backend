@@ -733,6 +733,9 @@ async function deleteStockOpnameHasil({ noso, nomorLabel }) {
     await tryDeleteLabel('StockOpnameHasilCrusher', 'NoCrusher', 'crusher', 'noCrusher');
     await tryDeleteLabel('StockOpnameHasilBonggolan', 'NoBonggolan', 'bonggolan', 'noBonggolan');
     await tryDeleteLabel('StockOpnameHasilGilingan', 'NoGilingan', 'gilingan', 'noGilingan');
+    await tryDeleteLabel('StockOpnameHasilMixer', 'NoMixer', 'mixer', 'noMixer');
+    await tryDeleteLabel('StockOpnameHasilFurnitureWIP', 'NoFurnitureWIP', 'furniturewip', 'noFurnitureWIP');
+    await tryDeleteLabel('StockOpnameHasilBarangJadi', 'NoBJ', 'barangjadi', 'noBJ');
     await tryDeleteLabel('StockOpnameHasilReject', 'NoReject', 'reject', 'noReject');
 
 

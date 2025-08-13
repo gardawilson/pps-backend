@@ -18,19 +18,18 @@ async function getDetailByNomorLabel(nomorLabel) {
     // === Label Bahan Baku: format A.XXXX-YY ===
     if (nomorLabel.startsWith('A.') && nomorLabel.includes('-')) {
       const parts = nomorLabel.split('-');
-
+    
       if (parts.length === 2 && parts[0] && parts[1]) {
         const noBahanBaku = parts[0]; // sudah termasuk 'A.'
         const noPallet = parts[1];
-
-        // Validasi noPallet (angka atau alfanumerik)
+    
         if (!/^[\w\d]+$/.test(noPallet)) {
           return null;
         }
-
+    
         request.input('noBahanBaku', sql.VarChar, noBahanBaku);
-        request.input('noPallet', sql.Int, parseInt(noPallet)); // karena di DB bertipe INT
-
+        request.input('noPallet', sql.Int, parseInt(noPallet));
+    
         // Ambil data utama dari header
         const headerResult = await request.query(`
           SELECT
@@ -48,47 +47,61 @@ async function getDetailByNomorLabel(nomorLabel) {
           LEFT JOIN MstWarehouse mw ON mw.IdWarehouse = h.IdWarehouse
           WHERE h.NoBahanBaku = @noBahanBaku AND h.NoPallet = @noPallet
         `);
-
-        // Ambil total berat dan jumlah sak
+    
+        // Hitung jumlah sak & total berat langsung di query dengan pengurangan partial
         const detailResult = await request.query(`
-          SELECT COUNT(*) AS JumlahSak, SUM(Berat) AS TotalBerat
-          FROM BahanBaku_d
-          WHERE NoBahanBaku = @noBahanBaku AND NoPallet = @noPallet
+          SELECT
+            SUM(CASE WHEN (bd.Berat - ISNULL(bp.TotalBeratPartial, 0)) > 0 THEN 1 ELSE 0 END) AS JumlahSak,
+            SUM(CASE WHEN (bd.Berat - ISNULL(bp.TotalBeratPartial, 0)) > 0 THEN (bd.Berat - ISNULL(bp.TotalBeratPartial, 0)) ELSE 0 END) AS TotalBerat
+          FROM BahanBaku_d bd
+          LEFT JOIN (
+            SELECT NoBahanBaku, NoPallet, NoSak, SUM(Berat) AS TotalBeratPartial
+            FROM BahanBakuPartial
+            WHERE NoBahanBaku = @noBahanBaku AND NoPallet = @noPallet
+            GROUP BY NoBahanBaku, NoPallet, NoSak
+          ) bp
+            ON bp.NoBahanBaku = bd.NoBahanBaku
+            AND bp.NoPallet = bd.NoPallet
+            AND bp.NoSak = bd.NoSak
+          WHERE bd.NoBahanBaku = @noBahanBaku
+            AND bd.NoPallet = @noPallet
+            AND bd.DateUsage IS NULL
         `);
-
+    
         // Ambil DateCreate dari header BahanBaku_h
         const dateResult = await request.query(`
           SELECT TOP 1 DateCreate
           FROM BahanBaku_h
           WHERE NoBahanBaku = @noBahanBaku
         `);
-
-        // Ambil IdLokasi dari detail BahanBaku_d (ambil salah satu/top 1)
+    
+        // Ambil IdLokasi dari detail
         const lokasiResult = await request.query(`
           SELECT TOP 1 IdLokasi
           FROM BahanBaku_d
           WHERE NoBahanBaku = @noBahanBaku AND NoPallet = @noPallet
         `);
-
-        // Gabungkan hasil
+    
         if (headerResult.recordset.length > 0) {
           const header = headerResult.recordset[0];
           const detail = detailResult.recordset[0] || {};
           const date = dateResult.recordset[0]?.DateCreate;
           const lokasi = lokasiResult.recordset[0]?.IdLokasi;
-
+    
           return {
             ...header,
-            ...detail,
-            TotalBerat: formatBerat(detail.TotalBerat),
+            JumlahSak: detail.JumlahSak || 0,
+            TotalBerat: formatBerat(detail.TotalBerat || 0),
             ...(date && { DateCreate: formatDate(date) }),
             ...(lokasi && { IdLokasi: lokasi }),
           };
         }
       }
-
+    
       return null;
     }
+    
+    
 
 
     // === Label Washing ===
@@ -142,7 +155,7 @@ async function getDetailByNomorLabel(nomorLabel) {
     // === Label Broker ===
     if (nomorLabel.startsWith('D.')) {
       request.input('noBroker', sql.VarChar, nomorLabel);
-
+    
       // Ambil data dari header
       const headerResult = await request.query(`
         SELECT
@@ -156,35 +169,47 @@ async function getDetailByNomorLabel(nomorLabel) {
         LEFT JOIN MstWarehouse mw ON mw.IdWarehouse = h.IdWarehouse
         WHERE h.NoBroker = @noBroker
       `);
-
-      // Ambil total berat dan jumlah sak
+    
+      // Ambil total berat & jumlah sak setelah dikurangi partial (per NoSak)
       const detailResult = await request.query(`
-        SELECT COUNT(*) AS JumlahSak, SUM(Berat) AS TotalBerat
-        FROM Broker_d
-        WHERE NoBroker = @noBroker
+        SELECT
+          SUM(CASE WHEN (bd.Berat - ISNULL(bp.TotalBeratPartial, 0)) > 0 THEN 1 ELSE 0 END) AS JumlahSak,
+          SUM(CASE WHEN (bd.Berat - ISNULL(bp.TotalBeratPartial, 0)) > 0 THEN (bd.Berat - ISNULL(bp.TotalBeratPartial, 0)) ELSE 0 END) AS TotalBerat
+        FROM Broker_d bd
+        LEFT JOIN (
+          SELECT NoBroker, NoSak, SUM(Berat) AS TotalBeratPartial
+          FROM BrokerPartial
+          WHERE NoBroker = @noBroker
+          GROUP BY NoBroker, NoSak
+        ) bp
+          ON bp.NoBroker = bd.NoBroker
+          AND bp.NoSak = bd.NoSak
+        WHERE bd.NoBroker = @noBroker
+          AND bd.DateUsage IS NULL
       `);
-
+    
       // Ambil IdLokasi dari salah satu detail
       const lokasiResult = await request.query(`
         SELECT TOP 1 IdLokasi
         FROM Broker_d
         WHERE NoBroker = @noBroker
       `);
-
+    
       if (headerResult.recordset.length > 0) {
         const header = headerResult.recordset[0];
         const detail = detailResult.recordset[0] || {};
         const lokasi = lokasiResult.recordset[0]?.IdLokasi;
-
+    
         return {
           ...header,
-          ...detail,
-          TotalBerat: formatBerat(detail.TotalBerat),
+          JumlahSak: detail.JumlahSak || 0,
+          TotalBerat: formatBerat(detail.TotalBerat || 0),
           ...(header.DateCreate && { DateCreate: formatDate(header.DateCreate) }),
           ...(lokasi && { IdLokasi: lokasi }),
         };
       }
     }
+    
 
 
     // === Label Crusher ===
@@ -250,23 +275,32 @@ async function getDetailByNomorLabel(nomorLabel) {
     // === Label Gilingan ===
     if (nomorLabel.startsWith('V.')) {
       request.input('noGilingan', sql.VarChar, nomorLabel);
-
+    
       const result = await request.query(`
-      SELECT
-        'gilingan' AS LabelType,
-        g.NoGilingan AS NomorLabel,
-        g.DateCreate,
-        g.Berat,
-        g.IsPartial,
-        mw.NamaWarehouse,
-        mg.NamaGilingan,
-        g.IdLokasi
-      FROM Gilingan g
-      LEFT JOIN MstWarehouse mw ON mw.IdWarehouse = g.IdWarehouse
-      LEFT JOIN MstGilingan mg ON mg.IdGilingan = g.IdGilingan
-      WHERE g.NoGilingan = @noGilingan
-    `);
-
+        SELECT
+          'gilingan' AS LabelType,
+          g.NoGilingan AS NomorLabel,
+          g.DateCreate,
+          g.Berat - ISNULL(SUM(gp.Berat), 0) AS Berat, -- dikurangi berat partial
+          g.IsPartial,
+          mw.NamaWarehouse,
+          mg.NamaGilingan,
+          g.IdLokasi
+        FROM Gilingan g
+        LEFT JOIN MstWarehouse mw ON mw.IdWarehouse = g.IdWarehouse
+        LEFT JOIN MstGilingan mg ON mg.IdGilingan = g.IdGilingan
+        LEFT JOIN GilinganPartial gp ON gp.NoGilingan = g.NoGilingan
+        WHERE g.NoGilingan = @noGilingan
+        GROUP BY
+          g.NoGilingan,
+          g.DateCreate,
+          g.Berat,
+          g.IsPartial,
+          mw.NamaWarehouse,
+          mg.NamaGilingan,
+          g.IdLokasi
+      `);
+    
       if (result.recordset.length > 0) {
         const data = result.recordset[0];
         return {
@@ -276,44 +310,57 @@ async function getDetailByNomorLabel(nomorLabel) {
         };
       }
     }
+    
+
 
     // === Label Mixer ===
     if (nomorLabel.startsWith('H.')) {
       request.input('noMixer', sql.VarChar, nomorLabel);
-
+    
       // Ambil data dari header
       const headerResult = await request.query(`
-          SELECT
-            'mixer' AS LabelType,
-            h.NoMixer AS NomorLabel,
-            jp.Jenis AS NamaMixer,
-            mw.NamaWarehouse,
-            h.DateCreate
-          FROM Mixer_h h
-          LEFT JOIN MstMixer jp ON jp.IdMixer = h.IdMixer
-          LEFT JOIN MstWarehouse mw ON mw.IdWarehouse = h.IdWarehouse
-          WHERE h.NoMixer = @noMixer
-        `);
-
-      // Ambil total berat dan jumlah sak
+        SELECT
+          'mixer' AS LabelType,
+          h.NoMixer AS NomorLabel,
+          jp.Jenis AS NamaMixer,
+          mw.NamaWarehouse,
+          h.DateCreate
+        FROM Mixer_h h
+        LEFT JOIN MstMixer jp ON jp.IdMixer = h.IdMixer
+        LEFT JOIN MstWarehouse mw ON mw.IdWarehouse = h.IdWarehouse
+        WHERE h.NoMixer = @noMixer
+      `);
+    
+      // Ambil total berat dan jumlah sak (dikurangi MixerPartial)
       const detailResult = await request.query(`
-          SELECT COUNT(*) AS JumlahSak, SUM(Berat) AS TotalBerat
-          FROM Mixer_d
-          WHERE NoMixer = @noMixer
-        `);
-
+        SELECT 
+          COUNT(d.NoSak) AS JumlahSak,
+          SUM(
+            ISNULL(d.Berat, 0) - ISNULL(mp.TotalPartial, 0)
+          ) AS TotalBerat
+        FROM Mixer_d d
+        OUTER APPLY (
+          SELECT SUM(Berat) AS TotalPartial
+          FROM MixerPartial mp
+          WHERE mp.NoMixer = d.NoMixer
+            AND mp.NoSak = d.NoSak
+        ) mp
+        WHERE d.NoMixer = @noMixer
+          AND d.DateUsage IS NULL
+      `);
+    
       // Ambil IdLokasi dari salah satu detail
       const lokasiResult = await request.query(`
-          SELECT TOP 1 IdLokasi
-          FROM Mixer_d
-          WHERE NoMixer = @noMixer
-        `);
-
+        SELECT TOP 1 IdLokasi
+        FROM Mixer_d
+        WHERE NoMixer = @noMixer
+      `);
+    
       if (headerResult.recordset.length > 0) {
         const header = headerResult.recordset[0];
         const detail = detailResult.recordset[0] || {};
         const lokasi = lokasiResult.recordset[0]?.IdLokasi;
-
+    
         return {
           ...header,
           ...detail,
@@ -323,6 +370,7 @@ async function getDetailByNomorLabel(nomorLabel) {
         };
       }
     }
+    
 
 
     // === Label Furniture WIP ===

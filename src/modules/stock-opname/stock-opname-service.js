@@ -795,7 +795,6 @@ async function validateStockOpnameLabel({ noso, label, username }) {
   const isBarangJadi = label.startsWith('BA.') && !label.includes('-');
   const isReject = label.startsWith('BF.') && !label.includes('-');
 
-
   if (!isBahanBaku && !isWashing && !isBroker && !isCrusher && !isBonggolan && !isGilingan && !isMixer && !isFurnitureWIP && !isBarangJadi && !isReject) {
     return createResponse(false, {
       isValidFormat: false

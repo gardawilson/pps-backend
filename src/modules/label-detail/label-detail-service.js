@@ -100,8 +100,6 @@ async function getDetailByNomorLabel(nomorLabel) {
     
       return null;
     }
-    
-    
 
 
     // === Label Washing ===

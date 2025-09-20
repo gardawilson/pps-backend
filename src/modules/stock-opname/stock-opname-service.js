@@ -19,7 +19,8 @@ async function getNoStockOpname() {
         soh.IsMixer,
         soh.IsFurnitureWIP,
         soh.IsBarangJadi,
-        soh.IsReject
+        soh.IsReject,
+        soh.IsAscend
       FROM StockOpname_h soh
       LEFT JOIN StockOpname_h_WarehouseID sohw ON soh.NoSO = sohw.NoSO
       LEFT JOIN MstWarehouse wh ON sohw.IdWarehouse = wh.IdWarehouse
@@ -39,7 +40,8 @@ async function getNoStockOpname() {
         soh.IsMixer,
         soh.IsFurnitureWIP,
         soh.IsBarangJadi,
-        soh.IsReject
+        soh.IsReject,
+        soh.IsAscend
       ORDER BY soh.NoSO DESC
     `);
 
@@ -60,7 +62,8 @@ async function getNoStockOpname() {
       IsMixer,
       IsFurnitureWIP,
       IsBarangJadi,
-      IsReject
+      IsReject,
+      IsAscend
     }) => ({
       NoSO,
       Tanggal: formatDate(Tanggal),
@@ -74,7 +77,8 @@ async function getNoStockOpname() {
       IsMixer,
       IsFurnitureWIP,
       IsBarangJadi,
-      IsReject
+      IsReject,
+      IsAscend
     }));
   } catch (err) {
     throw new Error(`Stock Opname Service Error: ${err.message}`);
@@ -82,6 +86,7 @@ async function getNoStockOpname() {
     if (pool) await pool.close();
   }
 }
+
 
 
 async function getStockOpnameAcuan({ noso, page = 1, pageSize = 20, filterBy = 'all', idLokasi, search = '' }) {
@@ -774,7 +779,9 @@ async function validateStockOpnameLabel({ noso, label, username }) {
       // Detail fields - flatten seperti di route
       jmlhSak: data.detail?.JmlhSak || null,
       berat: data.detail?.Berat || null,
-      idLokasi: data.detail?.IdLokasi || null
+      idLokasi: data.detail?.IdLokasi || null,
+      mesinInfo: data.mesinInfo || [] // tambahkan ini untuk info mesin bonggolan
+
     };
   };
 
@@ -980,6 +987,61 @@ async function validateStockOpnameLabel({ noso, label, username }) {
           WHERE NoBonggolan = @NoBonggolan
         `;
 
+             // --- Query info mesin untuk bonggolan (UNION ALL multi sumber) ---
+      const mesinInfoQuery = `
+SELECT 
+    iob.NoProduksi AS Nomor,
+    iph.IdMesin,
+    mm.NamaMesin,
+    iph.IdOperator,
+    mop.NamaOperator
+FROM InjectProduksiOutputBonggolan iob
+LEFT JOIN InjectProduksi_h iph ON iob.NoProduksi = iph.NoProduksi
+LEFT JOIN MstMesin mm ON iph.IdMesin = mm.IdMesin
+LEFT JOIN MstOperator mop ON iph.IdOperator = mop.IdOperator
+WHERE iob.NoBonggolan = @NoBonggolan
+
+UNION ALL
+
+SELECT 
+    bpob.NoProduksi AS Nomor,
+    bph.IdMesin,
+    mm.NamaMesin,
+    bph.IdOperator,
+    mop.NamaOperator
+FROM BrokerProduksiOutputBonggolan bpob
+LEFT JOIN BrokerProduksi_h bph ON bpob.NoProduksi = bph.NoProduksi
+LEFT JOIN MstMesin mm ON bph.IdMesin = mm.IdMesin
+LEFT JOIN MstOperator mop ON bph.IdOperator = mop.IdOperator
+WHERE bpob.NoBonggolan = @NoBonggolan
+
+UNION ALL
+
+SELECT 
+    bsob.NoBongkarSusun AS Nomor,
+    NULL AS IdMesin,
+    'Bongkar Susun' AS NamaMesin,
+    NULL AS IdOperator,
+    NULL AS NamaOperator
+FROM BongkarSusunOutputBonggolan bsob
+WHERE bsob.NoBonggolan = @NoBonggolan
+
+UNION ALL
+
+SELECT 
+    aob.NoAdjustment AS Nomor,
+    NULL AS IdMesin,
+    'Adjustment' AS NamaMesin,
+    NULL AS IdOperator,
+    NULL AS NamaOperator
+FROM AdjustmentOutputBonggolan aob
+WHERE aob.NoBonggolan = @NoBonggolan
+    `;      
+    
+    // Jalankan query di awal, simpan hasilnya
+    const mesinInfoResult = await request.query(mesinInfoQuery);
+    var mesinInfo = mesinInfoResult.recordset || [];
+
     } else if (isGilingan) {
       labelType = 'Gilingan';
       parsed = { NoGilingan: label };
@@ -1147,7 +1209,9 @@ async function validateStockOpnameLabel({ noso, label, username }) {
         canInsert: false,
         labelType,
         parsed,
-        idWarehouse: null // Akan diisi nanti jika diperlukan
+        idWarehouse: null,
+        mesinInfo: isBonggolan ? mesinInfo : []
+        
       }, 'Label sudah pernah discan sebelumnya.');
     }
 
@@ -1228,7 +1292,8 @@ async function validateStockOpnameLabel({ noso, label, username }) {
           JmlhSak: originalData.JumlahSak || null,
           Berat: originalData?.Berat != null ? Number(originalData.Berat.toFixed(2)) : null,
           IdLokasi: originalData.IdLokasi
-        } : null
+        } : null,
+        mesinInfo: isBonggolan ? mesinInfo : []
       }, categoryMessage);
     }
 
@@ -1251,7 +1316,9 @@ async function validateStockOpnameLabel({ noso, label, username }) {
           JmlhSak: originalData.JumlahSak || null,
           Berat: originalData?.Berat != null ? Number(originalData.Berat.toFixed(2)) : null,
           IdLokasi: originalData.IdLokasi
-        } : null
+        } : null,
+        mesinInfo: isBonggolan ? mesinInfo : []
+
       }, 'Label tidak valid atau warehouse tidak ditemukan di sumber.');
     }
 
@@ -1283,7 +1350,8 @@ async function validateStockOpnameLabel({ noso, label, username }) {
           detail: {
             ...detailData,
             Berat: detailData?.Berat != null ? Number(detailData.Berat.toFixed(2)) : null
-          }
+          },
+          mesinInfo: isBonggolan ? mesinInfo : []
         }, `Label ini tidak tersedia pada warehouse NoSO ini (IdWarehouse: ${idWarehouse}).`);
       }
 
@@ -1300,7 +1368,9 @@ async function validateStockOpnameLabel({ noso, label, username }) {
         detail: {
           ...detailData,
           Berat: detailData?.Berat != null ? Number(detailData.Berat.toFixed(2)) : null
-        }
+        },
+        mesinInfo: isBonggolan ? mesinInfo : []
+
       }, 'Label valid dan siap disimpan.');
     }
 
@@ -1323,7 +1393,9 @@ async function validateStockOpnameLabel({ noso, label, username }) {
           JmlhSak: fallbackData.JumlahSak || null,
           Berat: fallbackData?.Berat != null ? Number(fallbackData.Berat.toFixed(2)) : null,
           IdLokasi: fallbackData.IdLokasi
-        }
+        },
+        mesinInfo: isBonggolan ? mesinInfo : []
+
       }, 'Item tidak masuk dalam daftar Stock Opname atau belum diproses.');
     }
 
@@ -1346,7 +1418,8 @@ async function validateStockOpnameLabel({ noso, label, username }) {
           JmlhSak: originalData.JumlahSak || null,
           Berat: originalData?.Berat != null ? Number(originalData.Berat.toFixed(2)) : null,
           IdLokasi: originalData.IdLokasi
-        }
+        },
+        mesinInfo: isBonggolan ? mesinInfo : []
       }, 'Item telah diproses sebelumnya.');
     }
 
@@ -1621,11 +1694,256 @@ async function insertStockOpnameLabel({ noso, label, jmlhSak = 0, berat = 0, idl
   }
 }
 
+
+async function getStockOpnameFamilies(noSO) {
+  let pool;
+  try {
+    pool = await connectDb();
+    const result = await pool.request()
+      .input('noSO', sql.VarChar, noSO)
+      .query(`
+        SELECT 
+          f.NoSO,
+          f.CategoryID,
+          f.FamilyID,
+          ISNULL(sf.FamilyName, '') AS FamilyName,
+          COUNT(s.ItemID) AS TotalItem,
+          COUNT(DISTINCT sh.ItemID) AS CompleteItem
+        FROM [dbo].[StockOpnameAscend_dFamily] f
+        LEFT JOIN [AS_GSU_2022].[dbo].[IC_StockFamily] sf 
+               ON f.FamilyID = sf.FamilyID
+        LEFT JOIN [dbo].[StockOpnameAscend] s 
+               ON f.NoSO = s.NoSO 
+              AND f.CategoryID = s.CategoryID 
+              AND f.FamilyID = s.FamilyID
+        LEFT JOIN [dbo].[StockOpnameAscendHasil] sh 
+               ON s.NoSO = sh.NoSO 
+              AND s.ItemID = sh.ItemID
+        WHERE f.NoSO = @noSO
+        GROUP BY f.NoSO, f.CategoryID, f.FamilyID, sf.FamilyName
+        ORDER BY f.FamilyID ASC
+      `);
+
+    if (!result.recordset || result.recordset.length === 0) {
+      return null;
+    }
+
+    return result.recordset.map(({ 
+      NoSO, 
+      CategoryID, 
+      FamilyID, 
+      FamilyName, 
+      TotalItem, 
+      CompleteItem 
+    }) => ({
+      NoSO,
+      CategoryID,
+      FamilyID,
+      FamilyName,
+      TotalItem,
+      CompleteItem
+    }));
+  } catch (err) {
+    throw new Error(`Stock Opname Family Service Error: ${err.message}`);
+  } finally {
+    if (pool) await pool.close();
+  }
+}
+
+
+async function getStockOpnameAscendData({ noSO, familyID, keyword }) {
+  let pool;
+  try {
+    pool = await connectDb();
+    const result = await pool.request()
+      .input('noSO', sql.VarChar, noSO)
+      .input('familyID', sql.VarChar, familyID)
+      .input('keyword', sql.VarChar, `%${keyword || ''}%`)
+      .query(`
+        SELECT 
+          so.NoSO,
+          so.ItemID,
+          it.ItemCode,
+          it.ItemName,
+          so.Pcs,
+          sh.QtyFisik,
+          sh.QtyUsage,
+          sh.UsageRemark,
+          sh.IsUpdateUsage
+        FROM [dbo].[StockOpnameAscend] so
+        LEFT JOIN [AS_GSU_2022].[dbo].[IC_Items] it 
+               ON so.ItemID = it.ItemID
+        LEFT JOIN [dbo].[StockOpnameAscendHasil] sh 
+               ON so.NoSO = sh.NoSO 
+              AND so.ItemID = sh.ItemID
+        WHERE so.NoSO = @noSO 
+          AND so.FamilyID = @familyID
+          AND (so.ItemID LIKE @keyword OR it.ItemName LIKE @keyword)
+        ORDER BY it.ItemName ASC
+      `);
+
+    if (!result.recordset || result.recordset.length === 0) {
+      return [];
+    }
+
+    return result.recordset.map(row => ({
+      NoSO: row.NoSO,
+      ItemID: row.ItemID,
+      ItemCode: row.ItemCode,
+      ItemName: row.ItemName,
+      Pcs: row.Pcs,
+      QtyFisik: row.QtyFisik !== null ? row.QtyFisik : null,
+      QtyUsage: row.QtyUsage !== null ? row.QtyUsage : -1.0,
+      UsageRemark: row.UsageRemark || '',
+      IsUpdateUsage: row.IsUpdateUsage === true
+    }));
+  } catch (err) {
+    throw new Error(`Stock Opname Ascend Service Error: ${err.message}`);
+  } finally {
+    if (pool) await pool.close();
+  }
+}
+
+async function saveStockOpnameAscendHasil(noSO, dataList) {
+  let pool;
+  let transaction;
+  try {
+    console.log('🟢 Start saveStockOpnameAscendHasil');
+    console.log('➡️ noSO:', noSO);
+    console.log('➡️ dataList length:', dataList?.length);
+
+    pool = await connectDb();
+    transaction = new sql.Transaction(pool);
+    await transaction.begin();
+    console.log('✅ Transaction started');
+
+    for (const [index, data] of dataList.entries()) {
+      console.log(`\n🔹 Processing item ${index + 1}:`, data);
+
+      // Skip kalau qtyFound kosong
+      if (data.qtyFound === null || data.qtyFound === undefined) {
+        console.log('⏭️ Skipped karena qtyFound null/undefined');
+        continue;
+      }
+
+      const request = new sql.Request(transaction);
+      const result = await request
+        .input('NoSO', sql.VarChar, noSO)
+        .input('ItemID', sql.Int, data.itemId)
+        .input('QtyFisik', sql.Decimal(18, 6), data.qtyFound)      // camelCase
+        .input('QtyUsage', sql.Decimal(18, 6), data.qtyUsage)      // camelCase
+        .input('UsageRemark', sql.VarChar, data.usageRemark || '') // camelCase
+        .input('IsUpdateUsage', sql.Bit, 1) // camelCase
+        .query(`
+          MERGE [dbo].[StockOpnameAscendHasil] AS target
+          USING (SELECT 
+                    @NoSO AS NoSO, 
+                    @ItemID AS ItemID, 
+                    @QtyFisik AS QtyFisik, 
+                    @QtyUsage AS QtyUsage, 
+                    @UsageRemark AS UsageRemark, 
+                    @IsUpdateUsage AS IsUpdateUsage) AS source
+          ON (target.NoSO = source.NoSO AND target.ItemID = source.ItemID)
+          WHEN MATCHED THEN
+            UPDATE SET QtyFisik = source.QtyFisik,
+                       QtyUsage = source.QtyUsage,
+                       UsageRemark = source.UsageRemark,
+                       IsUpdateUsage = source.IsUpdateUsage
+          WHEN NOT MATCHED THEN
+            INSERT (NoSO, ItemID, QtyFisik, QtyUsage, UsageRemark, IsUpdateUsage)
+            VALUES (source.NoSO, source.ItemID, source.QtyFisik, source.QtyUsage, source.UsageRemark, source.IsUpdateUsage);
+        `);
+
+      console.log(`✅ Query executed for itemId=${data.itemId}, rowsAffected:`, result.rowsAffected);
+    }
+
+    await transaction.commit();
+    console.log('💾 Transaction committed');
+    return { success: true, message: 'Data StockOpnameAscendHasil berhasil disimpan/diupdate' };
+  } catch (err) {
+    if (transaction) {
+      try {
+        await transaction.rollback();
+        console.error('↩️ Transaction rolled back');
+      } catch (rollbackErr) {
+        console.error('❌ Rollback gagal:', rollbackErr.message);
+      }
+    }
+    console.error('❌ Error saat saveStockOpnameAscendHasil:', err.message);
+    throw new Error(`Stock Opname Ascend Save Service Error: ${err.message}`);
+  } finally {
+    if (pool) {
+      await pool.close();
+      console.log('🔒 Connection closed');
+    }
+  }
+}
+
+
+async function fetchQtyUsage(itemId, tglSO) {
+  let pool;
+  try {
+    pool = await connectDb();
+    const request = pool.request();
+
+    const result = await request
+      .input('ItemID', sql.Int, itemId)         // karena ItemID tipe INT
+      .input('Tanggal', sql.Date, tglSO)       // pakai sql.Date biar rapi
+      .query(`
+        SELECT ISNULL(SUM(d.Quantity), 0) AS TotalUsage
+        FROM [AS_GSU_2022].[dbo].[IC_UsageDetails] d
+        INNER JOIN [AS_GSU_2022].[dbo].[IC_Usages] u
+            ON d.UsageID = u.UsageID
+        WHERE u.UsageDate >= @Tanggal
+          AND u.Approved = 1
+          AND d.ItemID = @ItemID
+      `);
+
+    const qtyUsage = result.recordset[0]?.TotalUsage || 0.0;
+    return qtyUsage;
+  } catch (err) {
+    throw new Error(`Fetch QtyUsage Service Error: ${err.message}`);
+  } finally {
+    if (pool) await pool.close();
+  }
+}
+
+
+async function deleteStockOpnameHasilAscend(noso, itemId) {
+  let pool;
+  try {
+    pool = await connectDb();
+    const request = pool.request();
+    request.input('NoSO', sql.VarChar(50), noso);
+    request.input('ItemID', sql.Int, itemId);
+
+    const result = await request.query(`
+      DELETE FROM [PPS_TEST2].[dbo].[StockOpnameAscendHasil]
+      WHERE NoSO = @NoSO AND ItemID = @ItemID
+    `);
+
+    return { deletedCount: result.rowsAffected?.[0] ?? 0 };
+  } catch (err) {
+    throw new Error(`deleteStockOpnameHasilAscend Service Error: ${err.message}`);
+  } finally {
+    if (pool) await pool.close();
+  }
+}
+
+
+
+
+
 module.exports = {
   getNoStockOpname,
   getStockOpnameAcuan,
   getStockOpnameHasil,
   deleteStockOpnameHasil,
   validateStockOpnameLabel,
-  insertStockOpnameLabel
+  insertStockOpnameLabel,
+  getStockOpnameFamilies,
+  getStockOpnameAscendData,
+  saveStockOpnameAscendHasil,
+  fetchQtyUsage,
+  deleteStockOpnameHasilAscend   
 };

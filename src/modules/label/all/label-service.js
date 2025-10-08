@@ -18,9 +18,9 @@ A AS ( -- Bahan Baku (partial-aware)
     IdLokasi   = p.IdLokasi,
     Qty        = ISNULL(bbAgg.TotalPcs, 0),
     Berat      = ISNULL(bbAgg.TotalBerat, 0)
-  FROM PPS_TEST2.dbo.BahanBakuPallet_h p
-  JOIN PPS_TEST2.dbo.BahanBaku_h h ON h.NoBahanBaku = p.NoBahanBaku
-  LEFT JOIN PPS_TEST2.dbo.MstJenisPlastik jp ON jp.IdJenisPlastik = p.IdJenisPlastik
+  FROM dbo.BahanBakuPallet_h p
+  JOIN dbo.BahanBaku_h h ON h.NoBahanBaku = p.NoBahanBaku
+  LEFT JOIN dbo.MstJenisPlastik jp ON jp.IdJenisPlastik = p.IdJenisPlastik
   LEFT JOIN (
       SELECT 
           d.NoBahanBaku,
@@ -33,17 +33,17 @@ A AS ( -- Bahan Baku (partial-aware)
                   ELSE ISNULL(d.Berat,0)
               END
           ) AS TotalBerat
-      FROM PPS_TEST2.dbo.BahanBaku_d d
+      FROM dbo.BahanBaku_d d
       LEFT JOIN (
           SELECT NoBahanBaku, NoPallet, NoSak, SUM(ISNULL(Berat,0)) AS TotalPartial
-          FROM PPS_TEST2.dbo.BahanBakuPartial
+          FROM dbo.BahanBakuPartial
           GROUP BY NoBahanBaku, NoPallet, NoSak
       ) p ON d.NoBahanBaku = p.NoBahanBaku AND d.NoPallet = p.NoPallet AND d.NoSak = p.NoSak
       WHERE d.DateUsage IS NULL
       GROUP BY d.NoBahanBaku, d.NoPallet
   ) bbAgg ON bbAgg.NoBahanBaku = p.NoBahanBaku AND bbAgg.NoPallet = p.NoPallet
   WHERE EXISTS (
-    SELECT 1 FROM PPS_TEST2.dbo.BahanBaku_d d
+    SELECT 1 FROM dbo.BahanBaku_d d
     WHERE d.NoBahanBaku = p.NoBahanBaku AND d.NoPallet = p.NoPallet AND d.DateUsage IS NULL
   )
 ),
@@ -57,16 +57,16 @@ B AS ( -- Washing (no partial)
     IdLokasi   = wh.IdLokasi,
     Qty        = ISNULL(wAgg.TotalPcs,0),
     Berat      = ISNULL(wAgg.TotalBerat,0)
-  FROM PPS_TEST2.dbo.Washing_h wh
-  LEFT JOIN PPS_TEST2.dbo.MstJenisPlastik jp ON jp.IdJenisPlastik = wh.IdJenisPlastik
+  FROM dbo.Washing_h wh
+  LEFT JOIN dbo.MstJenisPlastik jp ON jp.IdJenisPlastik = wh.IdJenisPlastik
   LEFT JOIN (
       SELECT wd.NoWashing, COUNT(*) AS TotalPcs, SUM(ISNULL(wd.Berat,0)) AS TotalBerat
-      FROM PPS_TEST2.dbo.Washing_d wd
+      FROM dbo.Washing_d wd
       WHERE wd.DateUsage IS NULL
       GROUP BY wd.NoWashing
   ) wAgg ON wAgg.NoWashing = wh.NoWashing
   WHERE EXISTS (
-    SELECT 1 FROM PPS_TEST2.dbo.Washing_d wd
+    SELECT 1 FROM dbo.Washing_d wd
     WHERE wd.NoWashing = wh.NoWashing AND wd.DateUsage IS NULL
   )
 ),
@@ -80,8 +80,8 @@ D AS ( -- Broker (partial-aware)
     IdLokasi   = bh.IdLokasi,
     Qty        = ISNULL(bAgg.TotalPcs,0),
     Berat      = ISNULL(bAgg.TotalBerat,0)
-  FROM PPS_TEST2.dbo.Broker_h bh
-  LEFT JOIN PPS_TEST2.dbo.MstJenisPlastik jp ON jp.IdJenisPlastik = bh.IdJenisPlastik
+  FROM dbo.Broker_h bh
+  LEFT JOIN dbo.MstJenisPlastik jp ON jp.IdJenisPlastik = bh.IdJenisPlastik
   LEFT JOIN (
       SELECT 
           d.NoBroker,
@@ -93,17 +93,17 @@ D AS ( -- Broker (partial-aware)
                   ELSE ISNULL(d.Berat,0)
               END
           ) AS TotalBerat
-      FROM PPS_TEST2.dbo.Broker_d d
+      FROM dbo.Broker_d d
       LEFT JOIN (
           SELECT NoBroker, NoSak, SUM(Berat) AS TotalPartial
-          FROM PPS_TEST2.dbo.BrokerPartial
+          FROM dbo.BrokerPartial
           GROUP BY NoBroker, NoSak
       ) p ON d.NoBroker = p.NoBroker AND d.NoSak = p.NoSak
       WHERE d.DateUsage IS NULL
       GROUP BY d.NoBroker
   ) bAgg ON bAgg.NoBroker = bh.NoBroker
   WHERE EXISTS (
-    SELECT 1 FROM PPS_TEST2.dbo.Broker_d bd
+    SELECT 1 FROM dbo.Broker_d bd
     WHERE bd.NoBroker = bh.NoBroker AND bd.DateUsage IS NULL
   )
 ),
@@ -117,8 +117,8 @@ F AS ( -- Crusher (header only)
     IdLokasi   = c.IdLokasi,
     Qty        = NULL,
     Berat      = ISNULL(c.Berat,0)
-  FROM PPS_TEST2.dbo.Crusher c
-  LEFT JOIN PPS_TEST2.dbo.MstCrusher mc ON mc.IdCrusher = c.IdCrusher
+  FROM dbo.Crusher c
+  LEFT JOIN dbo.MstCrusher mc ON mc.IdCrusher = c.IdCrusher
   WHERE c.DateUsage IS NULL
 ),
 M AS ( -- Bonggolan (header only)
@@ -131,8 +131,8 @@ M AS ( -- Bonggolan (header only)
     IdLokasi   = b.IdLokasi,
     Qty        = NULL,
     Berat      = ISNULL(b.Berat,0)
-  FROM PPS_TEST2.dbo.Bonggolan b
-  LEFT JOIN PPS_TEST2.dbo.MstBonggolan mb ON mb.IdBonggolan = b.IdBonggolan
+  FROM dbo.Bonggolan b
+  LEFT JOIN dbo.MstBonggolan mb ON mb.IdBonggolan = b.IdBonggolan
   WHERE b.DateUsage IS NULL
 ),
 V AS ( -- Gilingan (partial-aware, agregat dari tabel Gilingan + GilinganPartial)
@@ -145,8 +145,8 @@ V AS ( -- Gilingan (partial-aware, agregat dari tabel Gilingan + GilinganPartial
     IdLokasi   = g.IdLokasi,
     Qty        = ISNULL(vAgg.TotalPcs,0),
     Berat      = ISNULL(vAgg.TotalBerat,0)
-  FROM PPS_TEST2.dbo.Gilingan g
-  LEFT JOIN PPS_TEST2.dbo.MstGilingan mg ON mg.IdGilingan = g.IdGilingan
+  FROM dbo.Gilingan g
+  LEFT JOIN dbo.MstGilingan mg ON mg.IdGilingan = g.IdGilingan
   LEFT JOIN (
       SELECT 
           d.NoGilingan,
@@ -158,10 +158,10 @@ V AS ( -- Gilingan (partial-aware, agregat dari tabel Gilingan + GilinganPartial
                   ELSE ISNULL(d.Berat,0)
               END
           ) AS TotalBerat
-      FROM PPS_TEST2.dbo.Gilingan d
+      FROM dbo.Gilingan d
       LEFT JOIN (
           SELECT NoGilingan, SUM(Berat) AS TotalPartial
-          FROM PPS_TEST2.dbo.GilinganPartial
+          FROM dbo.GilinganPartial
           GROUP BY NoGilingan
       ) p ON d.NoGilingan = p.NoGilingan
       WHERE d.DateUsage IS NULL
@@ -179,8 +179,8 @@ H AS ( -- Mixer (partial-aware)
     IdLokasi   = mh.IdLokasi, 
     Qty        = ISNULL(hAgg.TotalPcs,0),
     Berat      = ISNULL(hAgg.TotalBerat,0)
-  FROM PPS_TEST2.dbo.Mixer_h mh
-  LEFT JOIN PPS_TEST2.dbo.MstMixer mm ON mm.IdMixer = mh.IdMixer
+  FROM dbo.Mixer_h mh
+  LEFT JOIN dbo.MstMixer mm ON mm.IdMixer = mh.IdMixer
   LEFT JOIN (
       SELECT 
           d.NoMixer,
@@ -192,17 +192,17 @@ H AS ( -- Mixer (partial-aware)
                   ELSE ISNULL(d.Berat,0)
               END
           ) AS TotalBerat
-      FROM PPS_TEST2.dbo.Mixer_d d
+      FROM dbo.Mixer_d d
       LEFT JOIN (
           SELECT NoMixer, NoSak, SUM(Berat) AS TotalPartial
-          FROM PPS_TEST2.dbo.MixerPartial
+          FROM dbo.MixerPartial
           GROUP BY NoMixer, NoSak
       ) p ON d.NoMixer = p.NoMixer AND d.NoSak = p.NoSak
       WHERE d.DateUsage IS NULL
       GROUP BY d.NoMixer
   ) hAgg ON hAgg.NoMixer = mh.NoMixer
   WHERE EXISTS (
-    SELECT 1 FROM PPS_TEST2.dbo.Mixer_d md
+    SELECT 1 FROM dbo.Mixer_d md
     WHERE md.NoMixer = mh.NoMixer AND md.DateUsage IS NULL
   )
 ),
@@ -216,8 +216,8 @@ BB AS ( -- FurnitureWIP (partial-aware Pcs)
     IdLokasi   = fw.IdLokasi,
     Qty        = ISNULL(bbAgg.TotalPcs,0),
     Berat      = ISNULL(bbAgg.TotalBerat,0)
-  FROM PPS_TEST2.dbo.FurnitureWIP fw
-  LEFT JOIN PPS_TEST2.dbo.MstCabinetWIP mcw ON mcw.IdCabinetWIP = fw.IdFurnitureWIP
+  FROM dbo.FurnitureWIP fw
+  LEFT JOIN dbo.MstCabinetWIP mcw ON mcw.IdCabinetWIP = fw.IdFurnitureWIP
   LEFT JOIN (
       SELECT 
           d.NoFurnitureWIP,
@@ -229,10 +229,10 @@ BB AS ( -- FurnitureWIP (partial-aware Pcs)
               END
           ) AS TotalPcs,
           SUM(ISNULL(d.Berat,0)) AS TotalBerat
-      FROM PPS_TEST2.dbo.FurnitureWIP d
+      FROM dbo.FurnitureWIP d
       LEFT JOIN (
           SELECT NoFurnitureWIP, SUM(Pcs) AS TotalPartialPcs
-          FROM PPS_TEST2.dbo.FurnitureWIPPartial
+          FROM dbo.FurnitureWIPPartial
           GROUP BY NoFurnitureWIP
       ) p ON d.NoFurnitureWIP = p.NoFurnitureWIP
       WHERE d.DateUsage IS NULL
@@ -250,8 +250,8 @@ BA AS ( -- BarangJadi (partial-aware Pcs)
     IdLokasi   = bj.IdLokasi,
     Qty        = ISNULL(baAgg.TotalPcs,0),
     Berat      = ISNULL(baAgg.TotalBerat,0)
-  FROM PPS_TEST2.dbo.BarangJadi bj
-  LEFT JOIN PPS_TEST2.dbo.MstBarangJadi mbj ON mbj.IdBJ = bj.IdBJ
+  FROM dbo.BarangJadi bj
+  LEFT JOIN dbo.MstBarangJadi mbj ON mbj.IdBJ = bj.IdBJ
   LEFT JOIN (
       SELECT 
           d.NoBJ,
@@ -263,10 +263,10 @@ BA AS ( -- BarangJadi (partial-aware Pcs)
               END
           ) AS TotalPcs,
           SUM(ISNULL(d.Berat,0)) AS TotalBerat
-      FROM PPS_TEST2.dbo.BarangJadi d
+      FROM dbo.BarangJadi d
       LEFT JOIN (
           SELECT NoBJ, SUM(Pcs) AS TotalPartialPcs
-          FROM PPS_TEST2.dbo.BarangJadiPartial
+          FROM dbo.BarangJadiPartial
           GROUP BY NoBJ
       ) p ON d.NoBJ = p.NoBJ
       WHERE d.DateUsage IS NULL
@@ -284,8 +284,8 @@ BF AS ( -- Reject (header only)
     IdLokasi   = r.IdLokasi,
     Qty        = NULL,
     Berat      = ISNULL(r.Berat,0)
-  FROM PPS_TEST2.dbo.RejectV2 r
-  LEFT JOIN PPS_TEST2.dbo.MstReject mr ON mr.IdReject = r.IdReject
+  FROM dbo.RejectV2 r
+  LEFT JOIN dbo.MstReject mr ON mr.IdReject = r.IdReject
   WHERE r.DateUsage IS NULL
 )
 `;
@@ -428,16 +428,16 @@ async function updateLabelLocation(labelCode, idLokasi, blok) {
 
   // mapping prefix ke tabel
   switch (prefix) {
-    case 'A': tableName = 'PPS_TEST2.dbo.BahanBakuPallet_h'; break;
-    case 'B': tableName = 'PPS_TEST2.dbo.Washing_h'; break;
-    case 'D': tableName = 'PPS_TEST2.dbo.Broker_h'; break;
-    case 'F': tableName = 'PPS_TEST2.dbo.Crusher'; break;
-    case 'M': tableName = 'PPS_TEST2.dbo.Bonggolan'; break;
-    case 'V': tableName = 'PPS_TEST2.dbo.Gilingan'; break;
-    case 'H': tableName = 'PPS_TEST2.dbo.Mixer_h'; break;
-    case 'BB': tableName = 'PPS_TEST2.dbo.FurnitureWIP'; break;
-    case 'BA': tableName = 'PPS_TEST2.dbo.BarangJadi'; break;
-    case 'BF': tableName = 'PPS_TEST2.dbo.RejectV2'; break;
+    case 'A': tableName = 'dbo.BahanBakuPallet_h'; break;
+    case 'B': tableName = 'dbo.Washing_h'; break;
+    case 'D': tableName = 'dbo.Broker_h'; break;
+    case 'F': tableName = 'dbo.Crusher'; break;
+    case 'M': tableName = 'dbo.Bonggolan'; break;
+    case 'V': tableName = 'dbo.Gilingan'; break;
+    case 'H': tableName = 'dbo.Mixer_h'; break;
+    case 'BB': tableName = 'dbo.FurnitureWIP'; break;
+    case 'BA': tableName = 'dbo.BarangJadi'; break;
+    case 'BF': tableName = 'dbo.RejectV2'; break;
     default:
       return { success: false, message: `Prefix ${prefix} tidak dikenali untuk nomor label ${labelCode}` };
   }

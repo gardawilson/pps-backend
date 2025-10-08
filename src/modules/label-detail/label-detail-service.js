@@ -1,7 +1,6 @@
 // services/label-detail-service.js
-const { sql, connectDb } = require('../../core/config/db');
+const { sql, poolPromise } = require('../../core/config/db');
 const { formatDate } = require('../../core/utils/date-helper');
-
 
 function formatBerat(value) {
   if (value == null) return null;
@@ -10,10 +9,8 @@ function formatBerat(value) {
 
 
 async function getDetailByNomorLabel(nomorLabel) {
-  let pool;
-  try {
-    pool = await connectDb();
-    const request = new sql.Request(pool);
+    const pool = await poolPromise;   // ✅ gunakan pool global
+    const request = pool.request();
 
     // === Label Bahan Baku: format A.XXXX-YY ===
     if (nomorLabel.startsWith('A.') && nomorLabel.includes('-')) {
@@ -462,9 +459,7 @@ async function getDetailByNomorLabel(nomorLabel) {
         }
 
     return null;
-  } finally {
-    if (pool) await pool.close();
-  }
+
 }
 
 module.exports = { getDetailByNomorLabel };

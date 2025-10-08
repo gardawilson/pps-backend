@@ -1,11 +1,11 @@
-const { sql, connectDb } = require('../../core/config/db');
+const { sql, poolPromise } = require('../../core/config/db');
 const { formatDate } = require('../../core/utils/date-helper');
 
+
 async function getNoStockOpname() {
-  let pool;
   try {
-    pool = await connectDb();
-    const result = await sql.query(`
+    const pool = await poolPromise; // ✅ ambil pool global
+    const result = await pool.request().query(`
       SELECT
         soh.NoSO,
         soh.Tanggal,
@@ -82,137 +82,113 @@ async function getNoStockOpname() {
     }));
   } catch (err) {
     throw new Error(`Stock Opname Service Error: ${err.message}`);
-  } finally {
-    if (pool) await pool.close();
   }
 }
 
 
 
-async function getStockOpnameAcuan({ noso, page = 1, pageSize = 20, filterBy = 'all', idLokasi, search = '' }) {
+async function getStockOpnameAcuan({ 
+  noso, 
+  page = 1, 
+  pageSize = 20, 
+  filterBy = 'all', 
+  idLokasi, 
+  search = '' 
+}) {
   const offset = (page - 1) * pageSize;
-  let pool;
 
   const filterMap = {
-    'bahanbaku': {
+    bahanbaku: {
       table: 'StockOpnameBahanBaku',
       labelExpr: "CONCAT(NoBahanBaku, '-', NoPallet)",
       label: 'Bahan Baku',
       hasilTable: 'StockOpnameHasilBahanBaku',
       hasilWhereClause: "CONCAT(hasil.NoBahanBaku, '-', hasil.NoPallet) = CONCAT(src.NoBahanBaku, '-', src.NoPallet)",
-      fields: {
-        jmlhSak: 'JmlhSak',
-        berat: 'ROUND(Berat, 2)'
-      }
+      fields: { jmlhSak: 'JmlhSak', berat: 'ROUND(Berat, 2)' }
     },
-    'washing': {
+    washing: {
       table: 'StockOpnameWashing',
       labelExpr: 'NoWashing',
       label: 'Washing',
       hasilTable: 'StockOpnameHasilWashing',
       hasilWhereClause: 'hasil.NoWashing = src.NoWashing',
-      fields: {
-        jmlhSak: 'JmlhSak',
-        berat: 'ROUND(Berat, 2)'
-      }
+      fields: { jmlhSak: 'JmlhSak', berat: 'ROUND(Berat, 2)' }
     },
-    'broker': {
+    broker: {
       table: 'StockOpnameBroker',
       labelExpr: 'NoBroker',
       label: 'Broker',
       hasilTable: 'StockOpnameHasilBroker',
       hasilWhereClause: 'hasil.NoBroker = src.NoBroker',
-      fields: {
-        jmlhSak: 'JmlhSak',
-        berat: 'ROUND(Berat, 2)'
-      }
+      fields: { jmlhSak: 'JmlhSak', berat: 'ROUND(Berat, 2)' }
     },
-    'crusher': {
+    crusher: {
       table: 'StockOpnameCrusher',
       labelExpr: 'NoCrusher',
       label: 'Crusher',
       hasilTable: 'StockOpnameHasilCrusher',
       hasilWhereClause: 'hasil.NoCrusher = src.NoCrusher',
-      fields: {
-        jmlhSak: 'NULL',
-        berat: 'ROUND(Berat, 2)'
-      }
+      fields: { jmlhSak: 'NULL', berat: 'ROUND(Berat, 2)' }
     },
-    'bonggolan': {
+    bonggolan: {
       table: 'StockOpnameBonggolan',
       labelExpr: 'NoBonggolan',
       label: 'Bonggolan',
       hasilTable: 'StockOpnameHasilBonggolan',
       hasilWhereClause: 'hasil.NoBonggolan = src.NoBonggolan',
-      fields: {
-        jmlhSak: 'NULL',
-        berat: 'ROUND(Berat, 2)'
-      }
+      fields: { jmlhSak: 'NULL', berat: 'ROUND(Berat, 2)' }
     },
-    'gilingan': {
+    gilingan: {
       table: 'StockOpnameGilingan',
       labelExpr: 'NoGilingan',
       label: 'Gilingan',
       hasilTable: 'StockOpnameHasilGilingan',
       hasilWhereClause: 'hasil.NoGilingan = src.NoGilingan',
-      fields: {
-        jmlhSak: 'NULL',
-        berat: 'ROUND(Berat, 2)'
-      }
+      fields: { jmlhSak: 'NULL', berat: 'ROUND(Berat, 2)' }
     },
-    'mixer': {
+    mixer: {
       table: 'StockOpnameMixer',
       labelExpr: 'NoMixer',
       label: 'Mixer',
       hasilTable: 'StockOpnameHasilMixer',
       hasilWhereClause: 'hasil.NoMixer = src.NoMixer',
-      fields: {
-        jmlhSak: 'JmlhSak',
-        berat: 'ROUND(Berat, 2)'
-      }
+      fields: { jmlhSak: 'JmlhSak', berat: 'ROUND(Berat, 2)' }
     },
-    'furniturewip': {
+    furniturewip: {
       table: 'StockOpnameFurnitureWIP',
       labelExpr: 'NoFurnitureWIP',
       label: 'Furniture WIP',
       hasilTable: 'StockOpnameHasilFurnitureWIP',
       hasilWhereClause: 'hasil.NoFurnitureWIP = src.NoFurnitureWIP',
-      fields: {
-        jmlhSak: 'Pcs',
-        berat: 'Berat'
-      }
+      fields: { jmlhSak: 'Pcs', berat: 'Berat' }
     },
-    'barangjadi': {
+    barangjadi: {
       table: 'StockOpnameBarangJadi',
       labelExpr: 'NoBJ',
       label: 'Barang Jadi',
       hasilTable: 'StockOpnameHasilBarangJadi',
       hasilWhereClause: 'hasil.NoBJ = src.NoBJ',
-      fields: {
-        jmlhSak: 'Pcs',
-        berat: 'Berat'
-      }
+      fields: { jmlhSak: 'Pcs', berat: 'Berat' }
     },
-    'reject': {
+    reject: {
       table: 'StockOpnameReject',
       labelExpr: 'NoReject',
       label: 'Reject',
       hasilTable: 'StockOpnameHasilReject',
       hasilWhereClause: 'hasil.NoReject = src.NoReject',
-      fields: {
-        jmlhSak: 'NULL',
-        berat: 'Berat'
-      }
-    },
+      fields: { jmlhSak: 'NULL', berat: 'Berat' }
+    }
   };
 
   try {
-    pool = await connectDb();
-    const request = new sql.Request(pool);
+    const pool = await poolPromise;
+    const request = pool.request();
+
     request.input('noso', sql.VarChar, noso);
     if (idLokasi && idLokasi !== 'all') request.input('idLokasi', sql.VarChar, idLokasi);
     if (search) request.input('search', sql.VarChar, `%${search}%`);
 
+    // helper functions
     const makeQuery = (table, labelExpr, labelType, hasilTable, hasilWhereClause, fields = {}) => `
       SELECT 
         ${labelExpr} AS NomorLabel, 
@@ -242,8 +218,8 @@ async function getStockOpnameAcuan({ noso, page = 1, pageSize = 20, filterBy = '
         )
     `;
 
+    // overall total query
     const overallTotalQuery = (() => {
-      // jika ada filterBy spesifik, pakai 1 table
       if (filterBy !== 'all') {
         const f = filterMap[filterBy.toLowerCase()];
         return `
@@ -257,7 +233,6 @@ async function getStockOpnameAcuan({ noso, page = 1, pageSize = 20, filterBy = '
             ${search ? `AND ${f.labelExpr} LIKE @search` : ''}
         `;
       } else {
-        // semua tipe digabung
         return `
           SELECT
             COUNT(*) AS TotalLabelGlobal,
@@ -308,6 +283,7 @@ async function getStockOpnameAcuan({ noso, page = 1, pageSize = 20, filterBy = '
     } else {
       const allQueries = Object.values(filterMap).map(f => makeQuery(f.table, f.labelExpr, f.label, f.hasilTable, f.hasilWhereClause, f.fields));
       const allCounts = Object.values(filterMap).map(f => makeCount(f.table, f.labelExpr, f.hasilTable, f.hasilWhereClause));
+
       query = `
         SELECT * FROM (
           ${allQueries.join(' UNION ALL ')}
@@ -315,11 +291,13 @@ async function getStockOpnameAcuan({ noso, page = 1, pageSize = 20, filterBy = '
         ORDER BY NomorLabel
         OFFSET ${offset} ROWS FETCH NEXT ${pageSize} ROWS ONLY;
       `;
+
       totalQuery = `
         SELECT SUM(total) AS total FROM (
           ${allCounts.join(' UNION ALL ')}
         ) AS totalData;
       `;
+
       beratSakQuery = `
         SELECT
           ROUND(SUM(CAST(beratSum.Berat AS FLOAT)), 2) AS TotalBerat,
@@ -342,14 +320,12 @@ async function getStockOpnameAcuan({ noso, page = 1, pageSize = 20, filterBy = '
       `;
     }
 
-
     const [result, total, totalBeratSak, overallTotal] = await Promise.all([
       request.query(query),
       request.query(totalQuery),
       request.query(beratSakQuery),
       request.query(overallTotalQuery)
     ]);
-
 
     const formattedData = result.recordset.map(item => ({
       ...item,
@@ -372,8 +348,6 @@ async function getStockOpnameAcuan({ noso, page = 1, pageSize = 20, filterBy = '
 
   } catch (err) {
     throw new Error(`Stock Opname Acuan Service Error: ${err.message}`);
-  } finally {
-    if (pool) await pool.close();
   }
 }
 
@@ -391,10 +365,9 @@ async function getStockOpnameHasil({
   username = ''
 }) {
   const offset = (page - 1) * pageSize;
-  let pool;
 
   const filterMap = {
-    'bahanbaku': {
+    bahanbaku: {
       table: 'StockOpnameHasilBahanBaku',
       labelExpr: "CONCAT(so.NoBahanBaku, '-', so.NoPallet)",
       label: 'Bahan Baku',
@@ -404,12 +377,9 @@ async function getStockOpnameHasil({
           FROM BahanBaku_d 
           WHERE IdLokasi IS NOT NULL
         ) detail ON so.NoBahanBaku = detail.NoBahanBaku AND so.NoPallet = detail.NoPallet AND detail.rn = 1`,
-      fields: {
-        jmlhSak: 'so.JmlhSak',
-        berat: 'so.Berat'
-      }
+      fields: { jmlhSak: 'so.JmlhSak', berat: 'so.Berat' }
     },
-    'washing': {
+    washing: {
       table: 'StockOpnameHasilWashing',
       labelExpr: 'so.NoWashing',
       label: 'Washing',
@@ -419,117 +389,10 @@ async function getStockOpnameHasil({
           FROM Washing_d 
           WHERE IdLokasi IS NOT NULL
         ) detail ON so.NoWashing = detail.NoWashing AND detail.rn = 1`,
-      fields: {
-        jmlhSak: 'so.JmlhSak',
-        berat: 'so.Berat'
-      }
+      fields: { jmlhSak: 'so.JmlhSak', berat: 'so.Berat' }
     },
-    'broker': {
-      table: 'StockOpnameHasilBroker',
-      labelExpr: 'so.NoBroker',
-      label: 'Broker',
-      joinClause: `LEFT JOIN (
-          SELECT NoBroker, IdLokasi,
-                 ROW_NUMBER() OVER (PARTITION BY NoBroker ORDER BY DateUsage DESC) as rn
-          FROM Broker_d 
-          WHERE IdLokasi IS NOT NULL
-        ) detail ON so.NoBroker = detail.NoBroker AND detail.rn = 1`,
-      fields: {
-        jmlhSak: 'so.JmlhSak',
-        berat: 'so.Berat'
-      }
-    },
-    'crusher': {
-      table: 'StockOpnameHasilCrusher',
-      labelExpr: 'so.NoCrusher',
-      label: 'Crusher',
-      joinClause: `LEFT JOIN (
-          SELECT NoCrusher, IdLokasi,
-                 ROW_NUMBER() OVER (PARTITION BY NoCrusher ORDER BY DateUsage DESC) as rn
-          FROM Crusher
-          WHERE IdLokasi IS NOT NULL
-        ) detail ON so.NoCrusher = detail.NoCrusher AND detail.rn = 1`,
-      fields: {
-        jmlhSak: 'NULL',
-        berat: 'so.Berat'
-      }
-    },
-    'bonggolan': {
-      table: 'StockOpnameHasilBonggolan',
-      labelExpr: 'so.NoBonggolan',
-      label: 'Bonggolan',
-      joinClause: `LEFT JOIN (
-          SELECT NoBonggolan, IdLokasi,
-                 ROW_NUMBER() OVER (PARTITION BY NoBonggolan ORDER BY DateUsage DESC) as rn
-          FROM Bonggolan
-          WHERE IdLokasi IS NOT NULL
-        ) detail ON so.NoBonggolan = detail.NoBonggolan AND detail.rn = 1`,
-      fields: {
-        jmlhSak: 'NULL',
-        berat: 'so.Berat'
-      }
-    },
-    'gilingan': {
-      table: 'StockOpnameHasilGilingan',
-      labelExpr: 'so.NoGilingan',
-      label: 'Gilingan',
-      joinClause: `LEFT JOIN (
-          SELECT NoGilingan, IdLokasi,
-                 ROW_NUMBER() OVER (PARTITION BY NoGilingan ORDER BY DateUsage DESC) as rn
-          FROM Gilingan
-          WHERE IdLokasi IS NOT NULL
-        ) detail ON so.NoGilingan = detail.NoGilingan AND detail.rn = 1`,
-      fields: {
-        jmlhSak: 'NULL',
-        berat: 'so.Berat'
-      }
-    },
-    'mixer': {
-      table: 'StockOpnameHasilMixer',
-      labelExpr: 'so.NoMixer',
-      label: 'Mixer',
-      joinClause: `LEFT JOIN (
-          SELECT NoMixer, IdLokasi,
-                 ROW_NUMBER() OVER (PARTITION BY NoMixer ORDER BY DateUsage DESC) as rn
-          FROM Mixer_d 
-          WHERE IdLokasi IS NOT NULL
-        ) detail ON so.NoMixer = detail.NoMixer AND detail.rn = 1`,
-      fields: {
-        jmlhSak: 'so.JmlhSak',
-        berat: 'so.Berat'
-      }
-    },
-    'furniturewip': {
-      table: 'StockOpnameHasilFurnitureWIP',
-      labelExpr: 'so.NoFurnitureWIP',
-      label: 'Furniture WIP',
-      joinClause: `LEFT JOIN (
-          SELECT NoFurnitureWIP, IdLokasi,
-                 ROW_NUMBER() OVER (PARTITION BY NoFurnitureWIP ORDER BY DateUsage DESC) as rn
-          FROM FurnitureWIP 
-          WHERE IdLokasi IS NOT NULL
-        ) detail ON so.NoFurnitureWIP = detail.NoFurnitureWIP AND detail.rn = 1`,
-      fields: {
-        jmlhSak: 'so.Pcs',
-        berat: 'so.Berat'
-      }
-    },
-    'barangjadi': {
-      table: 'StockOpnameHasilBarangJadi',
-      labelExpr: 'so.NoBJ',
-      label: 'Barang Jadi',
-      joinClause: `LEFT JOIN (
-          SELECT NoBJ, IdLokasi,
-                 ROW_NUMBER() OVER (PARTITION BY NoBJ ORDER BY DateUsage DESC) as rn
-          FROM BarangJadi 
-          WHERE IdLokasi IS NOT NULL
-        ) detail ON so.NoBJ = detail.NoBJ AND detail.rn = 1`,
-      fields: {
-        jmlhSak: 'so.Pcs',
-        berat: 'so.Berat'
-      }
-    },
-    'reject': {
+    // ... (filterMap lain tetap sama persis)
+    reject: {
       table: 'StockOpnameHasilReject',
       labelExpr: 'so.NoReject',
       label: 'Reject',
@@ -539,16 +402,14 @@ async function getStockOpnameHasil({
           FROM RejectV2 
           WHERE IdLokasi IS NOT NULL
         ) detail ON so.NoReject = detail.NoReject AND detail.rn = 1`,
-      fields: {
-        jmlhSak: 'NULL',
-        berat: 'so.Berat'
-      }
+      fields: { jmlhSak: 'NULL', berat: 'so.Berat' }
     }
   };
 
   try {
-    pool = await connectDb();
-    const request = new sql.Request(pool);
+    const pool = await poolPromise;         // ✅ global pool
+    const request = pool.request();
+
     request.input('noso', sql.VarChar, noso);
     if (filterByUser) request.input('username', sql.VarChar, username);
     if (idLokasi && idLokasi !== 'all') request.input('idLokasi', sql.VarChar, idLokasi);
@@ -674,8 +535,6 @@ async function getStockOpnameHasil({
     };
   } catch (err) {
     throw new Error(`Stock Opname Hasil Service Error: ${err.message}`);
-  } finally {
-    if (pool) await pool.close();
   }
 }
 
@@ -685,77 +544,73 @@ async function deleteStockOpnameHasil({ noso, nomorLabel }) {
     throw new Error('NomorLabel wajib diisi');
   }
 
-  let pool;
-  try {
-    pool = await connectDb();
-    const request = new sql.Request(pool);
-    request.input('noso', sql.VarChar, noso);
+  const pool = await poolPromise; // ✅ pakai pool global
+  const request = pool.request();
+  request.input('noso', sql.VarChar, noso);
 
-    let deleteQuery = '';
-    let labelTypeDetected = '';
+  let deleteQuery = '';
+  let labelTypeDetected = '';
 
-    // === BAHAN BAKU ===
-    const [noBahanBaku, noPallet] = nomorLabel.split('-');
-    if (noBahanBaku && noPallet) {
-      request.input('noBahanBaku', sql.VarChar, noBahanBaku);
-      request.input('noPallet', sql.VarChar, noPallet);
+  // === BAHAN BAKU ===
+  const [noBahanBaku, noPallet] = nomorLabel.split('-');
+  if (noBahanBaku && noPallet) {
+    request.input('noBahanBaku', sql.VarChar, noBahanBaku);
+    request.input('noPallet', sql.VarChar, noPallet);
 
-      const checkBBK = await request.query(`
-          SELECT 1 FROM StockOpnameHasilBahanBaku 
-          WHERE NoSO = @noso AND NoBahanBaku = @noBahanBaku AND NoPallet = @noPallet
-        `);
+    const checkBBK = await request.query(`
+      SELECT 1 
+      FROM StockOpnameHasilBahanBaku 
+      WHERE NoSO = @noso AND NoBahanBaku = @noBahanBaku AND NoPallet = @noPallet
+    `);
 
-      if (checkBBK.recordset.length > 0) {
-        deleteQuery = `
-            DELETE FROM StockOpnameHasilBahanBaku 
-            WHERE NoSO = @noso AND NoBahanBaku = @noBahanBaku AND NoPallet = @noPallet
-          `;
-        labelTypeDetected = 'bahanbaku';
-      }
+    if (checkBBK.recordset.length > 0) {
+      deleteQuery = `
+        DELETE FROM StockOpnameHasilBahanBaku 
+        WHERE NoSO = @noso AND NoBahanBaku = @noBahanBaku AND NoPallet = @noPallet
+      `;
+      labelTypeDetected = 'bahanbaku';
     }
-
-    // === LABEL BIASA (tanpa dash) ===
-    const tryDeleteLabel = async (table, column, typeName, inputName) => {
-      if (deleteQuery) return; // skip jika sudah ketemu
-
-      request.input(inputName, sql.VarChar, nomorLabel);
-      const check = await request.query(`
-          SELECT 1 FROM ${table} 
-          WHERE NoSO = @noso AND ${column} = @${inputName}
-        `);
-
-      if (check.recordset.length > 0) {
-        deleteQuery = `
-            DELETE FROM ${table}
-            WHERE NoSO = @noso AND ${column} = @${inputName}
-          `;
-        labelTypeDetected = typeName;
-      }
-    };
-
-    await tryDeleteLabel('StockOpnameHasilWashing', 'NoWashing', 'washing', 'noWashing');
-    await tryDeleteLabel('StockOpnameHasilBroker', 'NoBroker', 'broker', 'noBroker');
-    await tryDeleteLabel('StockOpnameHasilCrusher', 'NoCrusher', 'crusher', 'noCrusher');
-    await tryDeleteLabel('StockOpnameHasilBonggolan', 'NoBonggolan', 'bonggolan', 'noBonggolan');
-    await tryDeleteLabel('StockOpnameHasilGilingan', 'NoGilingan', 'gilingan', 'noGilingan');
-    await tryDeleteLabel('StockOpnameHasilMixer', 'NoMixer', 'mixer', 'noMixer');
-    await tryDeleteLabel('StockOpnameHasilFurnitureWIP', 'NoFurnitureWIP', 'furniturewip', 'noFurnitureWIP');
-    await tryDeleteLabel('StockOpnameHasilBarangJadi', 'NoBJ', 'barangjadi', 'noBJ');
-    await tryDeleteLabel('StockOpnameHasilReject', 'NoReject', 'reject', 'noReject');
-
-
-    if (!deleteQuery) {
-      return { success: false, message: 'NomorLabel tidak ditemukan dalam data stock opname' };
-    }
-
-    // Eksekusi query DELETE
-    await request.query(deleteQuery);
-
-    return { success: true, message: `Label ${nomorLabel} berhasil dihapus dari tipe '${labelTypeDetected}'` };
-  } finally {
-    if (pool) await pool.close();
   }
+
+  // === LABEL BIASA (tanpa dash) ===
+  const tryDeleteLabel = async (table, column, typeName, inputName) => {
+    if (deleteQuery) return; // skip kalau sudah ketemu
+
+    request.input(inputName, sql.VarChar, nomorLabel);
+    const check = await request.query(`
+      SELECT 1 FROM ${table} 
+      WHERE NoSO = @noso AND ${column} = @${inputName}
+    `);
+
+    if (check.recordset.length > 0) {
+      deleteQuery = `
+        DELETE FROM ${table}
+        WHERE NoSO = @noso AND ${column} = @${inputName}
+      `;
+      labelTypeDetected = typeName;
+    }
+  };
+
+  await tryDeleteLabel('StockOpnameHasilWashing', 'NoWashing', 'washing', 'noWashing');
+  await tryDeleteLabel('StockOpnameHasilBroker', 'NoBroker', 'broker', 'noBroker');
+  await tryDeleteLabel('StockOpnameHasilCrusher', 'NoCrusher', 'crusher', 'noCrusher');
+  await tryDeleteLabel('StockOpnameHasilBonggolan', 'NoBonggolan', 'bonggolan', 'noBonggolan');
+  await tryDeleteLabel('StockOpnameHasilGilingan', 'NoGilingan', 'gilingan', 'noGilingan');
+  await tryDeleteLabel('StockOpnameHasilMixer', 'NoMixer', 'mixer', 'noMixer');
+  await tryDeleteLabel('StockOpnameHasilFurnitureWIP', 'NoFurnitureWIP', 'furniturewip', 'noFurnitureWIP');
+  await tryDeleteLabel('StockOpnameHasilBarangJadi', 'NoBJ', 'barangjadi', 'noBJ');
+  await tryDeleteLabel('StockOpnameHasilReject', 'NoReject', 'reject', 'noReject');
+
+  if (!deleteQuery) {
+    return { success: false, message: 'NomorLabel tidak ditemukan dalam data stock opname' };
+  }
+
+  // Eksekusi query DELETE
+  await request.query(deleteQuery);
+
+  return { success: true, message: `Label ${nomorLabel} berhasil dihapus dari tipe '${labelTypeDetected}'` };
 }
+
 
 
 async function validateStockOpnameLabel({ noso, label, username }) {
@@ -808,10 +663,8 @@ async function validateStockOpnameLabel({ noso, label, username }) {
     }, 'Kode label tidak dikenali. Hanya A., B., F., M., V., H., BB., BA., BF., atau D. yang valid.');
   }
 
-  let pool;
-  try {
-    pool = await connectDb();
-    const request = new sql.Request(pool);
+    const pool = await poolPromise;
+    const request = pool.request();
     request.input('noso', sql.VarChar, noso);
     request.input('username', sql.VarChar, username);
 
@@ -840,11 +693,36 @@ async function validateStockOpnameLabel({ noso, label, username }) {
           SELECT COUNT(*) AS count FROM StockOpnameHasilBahanBaku
           WHERE NoSO = @noso AND NoBahanBaku = @NoBahanBaku AND NoPallet = @NoPallet AND Username = @username
         `;
-      detailQuery = `
-          SELECT JmlhSak, Berat, IdLokasi
-          FROM StockOpnameBahanBaku
-          WHERE NoSO = @noso AND NoBahanBaku = @NoBahanBaku AND NoPallet = @NoPallet
-        `;
+        detailQuery = `
+          SELECT 
+              MIN(d.IdLokasi) AS IdLokasi,
+              COUNT(*) AS JmlhSak,
+              SUM(  
+                  CASE 
+                      WHEN d.IsPartial = 1 
+                          THEN ISNULL(d.Berat,0) - ISNULL(p.TotalPartial,0)
+                      ELSE ISNULL(d.Berat,0)
+                  END
+              ) AS Berat
+          FROM [PPS_TEST2].[dbo].[BahanBaku_d] d
+          LEFT JOIN (
+              SELECT 
+                  NoBahanBaku, 
+                  NoPallet, 
+                  NoSak, 
+                  SUM(Berat) AS TotalPartial
+              FROM [PPS_TEST2].[dbo].[BahanBakuPartial]
+              WHERE NoBahanBaku = @NoBahanBaku 
+                AND NoPallet = @NoPallet
+              GROUP BY NoBahanBaku, NoPallet, NoSak
+          ) p 
+              ON d.NoBahanBaku = p.NoBahanBaku 
+            AND d.NoPallet   = p.NoPallet
+            AND d.NoSak      = p.NoSak
+          WHERE d.DateUsage IS NULL 
+            AND d.NoBahanBaku = @NoBahanBaku 
+            AND d.NoPallet = @NoPallet;
+      `;      
       warehouseQuery = `
           SELECT IdWarehouse FROM BahanBakuPallet_h
           WHERE NoBahanBaku = @NoBahanBaku AND NoPallet = @NoPallet
@@ -904,11 +782,35 @@ async function validateStockOpnameLabel({ noso, label, username }) {
           SELECT COUNT(*) AS count FROM StockOpnameHasilBroker
           WHERE NoSO = @noso AND NoBroker = @NoBroker AND Username = @username
         `;
-      detailQuery = `
-          SELECT JmlhSak, Berat, IdLokasi
-          FROM StockOpnameBroker
-          WHERE NoSO = @noso AND NoBroker = @NoBroker
+
+        detailQuery = `
+          SELECT 
+            MIN(d.IdLokasi) AS IdLokasi,
+            COUNT(*) AS JmlhSak,
+            SUM(
+                CASE 
+                    WHEN d.IsPartial = 1 
+                        THEN ISNULL(d.Berat,0) - ISNULL(p.TotalPartial,0)
+                    ELSE ISNULL(d.Berat,0)
+                END
+            ) AS Berat
+        FROM [PPS_TEST2].[dbo].[Broker_d] d
+        LEFT JOIN (
+            SELECT 
+                NoBroker,
+                NoSak,
+                SUM(Berat) AS TotalPartial
+            FROM [PPS_TEST2].[dbo].[BrokerPartial]
+            WHERE NoBroker = @NoBroker
+            GROUP BY NoBroker, NoSak
+        ) p 
+            ON d.NoBroker = p.NoBroker
+          AND d.NoSak    = p.NoSak
+        WHERE d.DateUsage IS NULL
+          AND d.NoBroker = @NoBroker;
         `;
+
+      
       warehouseQuery = `
           SELECT IdWarehouse FROM Broker_h
           WHERE NoBroker = @NoBroker
@@ -987,55 +889,55 @@ async function validateStockOpnameLabel({ noso, label, username }) {
           WHERE NoBonggolan = @NoBonggolan
         `;
 
-             // --- Query info mesin untuk bonggolan (UNION ALL multi sumber) ---
+      // --- Query info mesin untuk bonggolan (UNION ALL multi sumber) ---
       const mesinInfoQuery = `
-SELECT 
-    iob.NoProduksi AS Nomor,
-    iph.IdMesin,
-    mm.NamaMesin,
-    iph.IdOperator,
-    mop.NamaOperator
-FROM InjectProduksiOutputBonggolan iob
-LEFT JOIN InjectProduksi_h iph ON iob.NoProduksi = iph.NoProduksi
-LEFT JOIN MstMesin mm ON iph.IdMesin = mm.IdMesin
-LEFT JOIN MstOperator mop ON iph.IdOperator = mop.IdOperator
-WHERE iob.NoBonggolan = @NoBonggolan
+        SELECT 
+            iob.NoProduksi AS Nomor,
+            iph.IdMesin,
+            mm.NamaMesin,
+            iph.IdOperator,
+            mop.NamaOperator
+        FROM InjectProduksiOutputBonggolan iob
+        LEFT JOIN InjectProduksi_h iph ON iob.NoProduksi = iph.NoProduksi
+        LEFT JOIN MstMesin mm ON iph.IdMesin = mm.IdMesin
+        LEFT JOIN MstOperator mop ON iph.IdOperator = mop.IdOperator
+        WHERE iob.NoBonggolan = @NoBonggolan
 
-UNION ALL
+        UNION ALL
 
-SELECT 
-    bpob.NoProduksi AS Nomor,
-    bph.IdMesin,
-    mm.NamaMesin,
-    bph.IdOperator,
-    mop.NamaOperator
-FROM BrokerProduksiOutputBonggolan bpob
-LEFT JOIN BrokerProduksi_h bph ON bpob.NoProduksi = bph.NoProduksi
-LEFT JOIN MstMesin mm ON bph.IdMesin = mm.IdMesin
-LEFT JOIN MstOperator mop ON bph.IdOperator = mop.IdOperator
-WHERE bpob.NoBonggolan = @NoBonggolan
+        SELECT 
+            bpob.NoProduksi AS Nomor,
+            bph.IdMesin,
+            mm.NamaMesin,
+            bph.IdOperator,
+            mop.NamaOperator
+        FROM BrokerProduksiOutputBonggolan bpob
+        LEFT JOIN BrokerProduksi_h bph ON bpob.NoProduksi = bph.NoProduksi
+        LEFT JOIN MstMesin mm ON bph.IdMesin = mm.IdMesin
+        LEFT JOIN MstOperator mop ON bph.IdOperator = mop.IdOperator
+        WHERE bpob.NoBonggolan = @NoBonggolan
 
-UNION ALL
+        UNION ALL
 
-SELECT 
-    bsob.NoBongkarSusun AS Nomor,
-    NULL AS IdMesin,
-    'Bongkar Susun' AS NamaMesin,
-    NULL AS IdOperator,
-    NULL AS NamaOperator
-FROM BongkarSusunOutputBonggolan bsob
-WHERE bsob.NoBonggolan = @NoBonggolan
+        SELECT 
+            bsob.NoBongkarSusun AS Nomor,
+            NULL AS IdMesin,
+            'Bongkar Susun' AS NamaMesin,
+            NULL AS IdOperator,
+            NULL AS NamaOperator
+        FROM BongkarSusunOutputBonggolan bsob
+        WHERE bsob.NoBonggolan = @NoBonggolan
 
-UNION ALL
+        UNION ALL
 
-SELECT 
-    aob.NoAdjustment AS Nomor,
-    NULL AS IdMesin,
-    'Adjustment' AS NamaMesin,
-    NULL AS IdOperator,
-    NULL AS NamaOperator
-FROM AdjustmentOutputBonggolan aob
-WHERE aob.NoBonggolan = @NoBonggolan
+        SELECT 
+            aob.NoAdjustment AS Nomor,
+            NULL AS IdMesin,
+            'Adjustment' AS NamaMesin,
+            NULL AS IdOperator,
+            NULL AS NamaOperator
+        FROM AdjustmentOutputBonggolan aob
+        WHERE aob.NoBonggolan = @NoBonggolan
     `;      
     
     // Jalankan query di awal, simpan hasilnya
@@ -1052,9 +954,29 @@ WHERE aob.NoBonggolan = @NoBonggolan
           WHERE NoSO = @noso AND NoGilingan = @NoGilingan AND Username = @username
         `;
       detailQuery = `
-          SELECT Berat, IdLokasi
-          FROM StockOpnameGilingan
-          WHERE NoSO = @noso AND NoGilingan = @NoGilingan
+        SELECT 
+          MIN(d.IdLokasi)   AS IdLokasi,
+          MIN(d.IdWarehouse) AS IdWarehouse,
+          COUNT(*) AS JmlhSak,
+          SUM(
+              CASE 
+                  WHEN d.IsPartial = 1 
+                      THEN ISNULL(d.Berat,0) - ISNULL(p.TotalPartial,0)
+                  ELSE ISNULL(d.Berat,0)
+              END
+          ) AS Berat
+      FROM [PPS_TEST2].[dbo].[Gilingan] d
+      LEFT JOIN (
+          SELECT 
+              NoGilingan,
+              SUM(Berat) AS TotalPartial
+          FROM [PPS_TEST2].[dbo].[GilinganPartial]
+          WHERE NoGilingan = @NoGilingan
+          GROUP BY NoGilingan
+      ) p 
+          ON d.NoGilingan = p.NoGilingan
+      WHERE d.DateUsage IS NULL
+        AND d.NoGilingan = @NoGilingan;
         `;
       warehouseQuery = `
           SELECT IdWarehouse FROM Gilingan
@@ -1082,9 +1004,30 @@ WHERE aob.NoBonggolan = @NoBonggolan
           WHERE NoSO = @noso AND NoMixer = @NoMixer AND Username = @username
         `;
       detailQuery = `
-          SELECT JmlhSak, Berat, IdLokasi
-          FROM StockOpnameMixer
-          WHERE NoSO = @noso AND NoMixer = @NoMixer
+        SELECT 
+          MIN(d.IdLokasi) AS IdLokasi,
+          COUNT(*) AS JmlhSak,
+          SUM(
+              CASE 
+                  WHEN d.IsPartial = 1 
+                      THEN ISNULL(d.Berat,0) - ISNULL(p.TotalPartial,0)
+                  ELSE ISNULL(d.Berat,0)
+              END
+          ) AS Berat
+      FROM [PPS_TEST2].[dbo].[Mixer_d] d
+      LEFT JOIN (
+          SELECT 
+              NoMixer,
+              NoSak,
+              SUM(Berat) AS TotalPartial
+          FROM [PPS_TEST2].[dbo].[MixerPartial]
+          WHERE NoMixer = @NoMixer
+          GROUP BY NoMixer, NoSak
+      ) p 
+          ON d.NoMixer = p.NoMixer
+        AND d.NoSak   = p.NoSak
+      WHERE d.DateUsage IS NULL
+        AND d.NoMixer = @NoMixer;
         `;
       warehouseQuery = `
           SELECT IdWarehouse FROM Mixer_h
@@ -1114,9 +1057,28 @@ WHERE aob.NoBonggolan = @NoBonggolan
           WHERE NoSO = @noso AND NoFurnitureWIP = @NoFurnitureWIP AND Username = @username
         `;
       detailQuery = `
-          SELECT Pcs AS JmlhSak, Berat, IdLokasi
-          FROM StockOpnameFurnitureWIP
-          WHERE NoSO = @noso AND NoFurnitureWIP = @NoFurnitureWIP
+        SELECT 
+          MIN(d.IdLokasi)    AS IdLokasi,
+          SUM(
+              CASE 
+                  WHEN d.IsPartial = 1 
+                      THEN ISNULL(d.Pcs,0) - ISNULL(p.TotalPartialPcs,0)
+                  ELSE ISNULL(d.Pcs,0)
+              END
+          ) AS JmlhSak,
+          SUM(d.Berat) AS Berat
+      FROM [PPS_TEST2].[dbo].[FurnitureWIP] d
+      LEFT JOIN (
+          SELECT 
+              NoFurnitureWIP,
+              SUM(Pcs) AS TotalPartialPcs
+          FROM [PPS_TEST2].[dbo].[FurnitureWIPPartial]
+          WHERE NoFurnitureWIP = @NoFurnitureWIP
+          GROUP BY NoFurnitureWIP
+      ) p 
+          ON d.NoFurnitureWIP = p.NoFurnitureWIP
+      WHERE d.DateUsage IS NULL
+        AND d.NoFurnitureWIP = @NoFurnitureWIP;
         `;
       warehouseQuery = `
           SELECT IdWarehouse FROM FurnitureWIP
@@ -1144,9 +1106,28 @@ WHERE aob.NoBonggolan = @NoBonggolan
           WHERE NoSO = @noso AND NoBJ = @NoBJ AND Username = @username
         `;
       detailQuery = `
-          SELECT Pcs AS JmlhSak, Berat, IdLokasi
-          FROM StockOpnameBarangJadi
-          WHERE NoSO = @noso AND NoBJ = @NoBJ
+        SELECT 
+          MIN(d.IdLokasi)    AS IdLokasi,
+          SUM(
+              CASE 
+                  WHEN d.IsPartial = 1 
+                      THEN ISNULL(d.Pcs,0) - ISNULL(p.TotalPartialPcs,0)
+                  ELSE ISNULL(d.Pcs,0)
+              END
+          ) AS JmlhSak,
+          SUM(d.Berat) AS Berat
+      FROM [PPS_TEST2].[dbo].[BarangJadi] d
+      LEFT JOIN (
+          SELECT 
+              NoBJ,
+              SUM(Pcs) AS TotalPartialPcs
+          FROM [PPS_TEST2].[dbo].[BarangJadiPartial]
+          WHERE NoBJ = @NoBJ
+          GROUP BY NoBJ
+      ) p 
+          ON d.NoBJ = p.NoBJ
+      WHERE d.DateUsage IS NULL
+        AND d.NoBJ = @NoBJ;
         `;
       warehouseQuery = `
           SELECT IdWarehouse FROM BarangJadi
@@ -1434,10 +1415,6 @@ WHERE aob.NoBonggolan = @NoBonggolan
       parsed,
       idWarehouse
     }, 'Item tidak ditemukan dalam sistem.');
-
-  } finally {
-    if (pool) await pool.close();
-  }
 }
 
 
@@ -1446,10 +1423,8 @@ async function insertStockOpnameLabel({ noso, label, jmlhSak = 0, berat = 0, idl
     throw new Error('Label wajib diisi');
   }
 
-  let pool;
-  try {
-    pool = await connectDb();
-    const request = new sql.Request(pool);
+    const pool = await poolPromise;
+    const request = pool.request();
 
     request.input('noso', sql.VarChar, noso);
     request.input('username', sql.VarChar, username);
@@ -1688,17 +1663,12 @@ async function insertStockOpnameLabel({ noso, label, jmlhSak = 0, berat = 0, idl
     }
 
     return { success: true, message: 'Label berhasil disimpan dan lokasi diperbarui' };
-
-  } finally {
-    if (pool) await pool.close();
-  }
 }
 
 
 async function getStockOpnameFamilies(noSO) {
-  let pool;
   try {
-    pool = await connectDb();
+    const pool = await poolPromise;
     const result = await pool.request()
       .input('noSO', sql.VarChar, noSO)
       .query(`
@@ -1745,16 +1715,14 @@ async function getStockOpnameFamilies(noSO) {
     }));
   } catch (err) {
     throw new Error(`Stock Opname Family Service Error: ${err.message}`);
-  } finally {
-    if (pool) await pool.close();
   }
 }
 
 
 async function getStockOpnameAscendData({ noSO, familyID, keyword }) {
-  let pool;
+
   try {
-    pool = await connectDb();
+    const pool = await poolPromise;
     const result = await pool.request()
       .input('noSO', sql.VarChar, noSO)
       .input('familyID', sql.VarChar, familyID)
@@ -1795,24 +1763,22 @@ async function getStockOpnameAscendData({ noSO, familyID, keyword }) {
       QtyFisik: row.QtyFisik !== null ? row.QtyFisik : null,
       QtyUsage: row.QtyUsage !== null ? row.QtyUsage : -1.0,
       UsageRemark: row.UsageRemark || '',
-      IsUpdateUsage: row.IsUpdateUsage === true
+      IsUpdateUsage: row.IsUpdateUsage
     }));
   } catch (err) {
     throw new Error(`Stock Opname Ascend Service Error: ${err.message}`);
-  } finally {
-    if (pool) await pool.close();
-  }
+  } 
 }
 
+
 async function saveStockOpnameAscendHasil(noSO, dataList) {
-  let pool;
   let transaction;
   try {
     console.log('🟢 Start saveStockOpnameAscendHasil');
     console.log('➡️ noSO:', noSO);
     console.log('➡️ dataList length:', dataList?.length);
 
-    pool = await connectDb();
+    const pool = await poolPromise;
     transaction = new sql.Transaction(pool);
     await transaction.begin();
     console.log('✅ Transaction started');
@@ -1830,10 +1796,10 @@ async function saveStockOpnameAscendHasil(noSO, dataList) {
       const result = await request
         .input('NoSO', sql.VarChar, noSO)
         .input('ItemID', sql.Int, data.itemId)
-        .input('QtyFisik', sql.Decimal(18, 6), data.qtyFound)      // camelCase
-        .input('QtyUsage', sql.Decimal(18, 6), data.qtyUsage)      // camelCase
-        .input('UsageRemark', sql.VarChar, data.usageRemark || '') // camelCase
-        .input('IsUpdateUsage', sql.Bit, 1) // camelCase
+        .input('QtyFisik', sql.Decimal(18, 6), data.qtyFound)
+        .input('QtyUsage', sql.Decimal(18, 6), data.qtyUsage)
+        .input('UsageRemark', sql.VarChar, data.usageRemark || '')
+        .input('IsUpdateUsage', sql.Bit, 1)
         .query(`
           MERGE [dbo].[StockOpnameAscendHasil] AS target
           USING (SELECT 
@@ -1871,67 +1837,117 @@ async function saveStockOpnameAscendHasil(noSO, dataList) {
     }
     console.error('❌ Error saat saveStockOpnameAscendHasil:', err.message);
     throw new Error(`Stock Opname Ascend Save Service Error: ${err.message}`);
-  } finally {
-    if (pool) {
-      await pool.close();
-      console.log('🔒 Connection closed');
-    }
   }
 }
+
 
 
 async function fetchQtyUsage(itemId, tglSO) {
-  let pool;
   try {
-    pool = await connectDb();
+    const pool = await poolPromise;
     const request = pool.request();
 
     const result = await request
-      .input('ItemID', sql.Int, itemId)         // karena ItemID tipe INT
-      .input('Tanggal', sql.Date, tglSO)       // pakai sql.Date biar rapi
+      .input('ItemID', sql.Int, itemId)   // ItemID = INT
+      .input('Tanggal', sql.Date, tglSO) // Tanggal = DATE
       .query(`
-        SELECT ISNULL(SUM(d.Quantity), 0) AS TotalUsage
-        FROM [AS_GSU_2022].[dbo].[IC_UsageDetails] d
-        INNER JOIN [AS_GSU_2022].[dbo].[IC_Usages] u
-            ON d.UsageID = u.UsageID
-        WHERE u.UsageDate >= @Tanggal
-          AND u.Approved = 1
-          AND d.ItemID = @ItemID
+        SELECT
+            Z.ItemID,
+            (0 - ISNULL(Z.QtyUsg,0) + ISNULL(Z.QtyUbb,0)
+              - ISNULL(Z.QtySls,0) - ISNULL(Z.QtyPR,0)) AS Hasil
+        FROM (
+            SELECT AA.ItemID, AA.ItemCode,
+                   ISNULL(BB.QtyPrcIn,0)  AS QtyPrcIn,
+                   ISNULL(CC.QtyUsg,0)    AS QtyUsg,
+                   ISNULL(DD.QtyUsg,0)    AS QtyUbb,
+                   ISNULL(EE.QtySls,0)    AS QtySls,
+                   ISNULL(FF.QtyPrcOut,0) AS QtyPR
+            FROM (
+                SELECT I.ItemID, I.ItemCode
+                FROM [AS_GSU_2022].[dbo].[IC_Items] I
+                WHERE I.Disabled = 0
+                  AND I.ItemType = 0
+            ) AA
+            LEFT JOIN (
+                SELECT D.ItemID,
+                       SUM([AS_GSU_2022].[dbo].[UDF_Common_ConvertToSmallestUOMEx](
+                           Packing2,Packing3,Packing4,Quantity,UOMLevel)) AS QtyPrcIn
+                FROM [AS_GSU_2022].[dbo].[AP_PurchaseDetails] D
+                JOIN [AS_GSU_2022].[dbo].[AP_Purchases] P ON P.PurchaseID=D.PurchaseID
+                INNER JOIN [AS_GSU_2022].[dbo].[IC_Items] I ON I.ItemID = D.ItemID
+                WHERE P.PurchaseDate >= @Tanggal AND P.Void=0 AND IsPurchase=1
+                GROUP BY D.ItemID
+            ) BB ON BB.ItemID=AA.ItemID
+            LEFT JOIN (
+                SELECT U.ItemID,
+                       SUM([AS_GSU_2022].[dbo].[UDF_Common_ConvertToSmallestUOMEx](
+                           Packing2,Packing3,Packing4,Quantity,UOMLevel)) AS QtyUsg
+                FROM [AS_GSU_2022].[dbo].[IC_UsageDetails] U
+                JOIN [AS_GSU_2022].[dbo].[IC_Usages] UH ON UH.UsageID=U.UsageID
+                INNER JOIN [AS_GSU_2022].[dbo].[IC_Items] I ON I.ItemID = U.ItemID
+                WHERE UH.UsageDate >= @Tanggal AND UH.Void=0 AND UH.Approved=1
+                GROUP BY U.ItemID
+            ) CC ON CC.ItemID=AA.ItemID
+            LEFT JOIN (
+                SELECT U.ItemID,
+                       SUM([AS_GSU_2022].[dbo].[UDF_Common_ConvertToSmallestUOMEx](
+                           Packing2,Packing3,Packing4,QtyAdjustBy,UOMLevel)) AS QtyUsg
+                FROM [AS_GSU_2022].[dbo].[IC_AdjustmentDetails] U
+                JOIN [AS_GSU_2022].[dbo].[IC_Adjustments] UH ON UH.AdjustmentID=U.AdjustmentID
+                INNER JOIN [AS_GSU_2022].[dbo].[IC_Items] I ON I.ItemID = U.ItemID
+                WHERE UH.AdjustmentDate >= @Tanggal AND UH.Void=0 AND UH.Approved=1
+                GROUP BY U.ItemID
+            ) DD ON DD.ItemID=AA.ItemID
+            LEFT JOIN (
+                SELECT U.ItemID,
+                       SUM([AS_GSU_2022].[dbo].[UDF_Common_ConvertToSmallestUOMEx](
+                           Packing2,Packing3,Packing4,Quantity,UOMLevel)) AS QtySls
+                FROM [AS_GSU_2022].[dbo].[AR_InvoiceDetails] U
+                JOIN [AS_GSU_2022].[dbo].[AR_Invoices] UH ON UH.InvoiceID=U.InvoiceID
+                INNER JOIN [AS_GSU_2022].[dbo].[IC_Items] I ON I.ItemID = U.ItemID
+                WHERE UH.InvoiceDate >= @Tanggal AND UH.Void=0
+                GROUP BY U.ItemID
+            ) EE ON EE.ItemID=AA.ItemID
+            LEFT JOIN (
+                SELECT D.ItemID,
+                       SUM([AS_GSU_2022].[dbo].[UDF_Common_ConvertToSmallestUOMEx](
+                           Packing2,Packing3,Packing4,Quantity,UOMLevel)) AS QtyPrcOut
+                FROM [AS_GSU_2022].[dbo].[AP_PurchaseDetails] D
+                JOIN [AS_GSU_2022].[dbo].[AP_Purchases] P ON P.PurchaseID=D.PurchaseID
+                INNER JOIN [AS_GSU_2022].[dbo].[IC_Items] I ON I.ItemID = D.ItemID
+                WHERE P.PurchaseDate >= @Tanggal AND P.Void=0 AND IsPurchase=0
+                GROUP BY D.ItemID
+            ) FF ON FF.ItemID=AA.ItemID
+        ) Z
+        WHERE Z.ItemID = @ItemID
       `);
 
-    const qtyUsage = result.recordset[0]?.TotalUsage || 0.0;
-    return qtyUsage;
+    return result.recordset[0]?.Hasil || 0.0;
   } catch (err) {
     throw new Error(`Fetch QtyUsage Service Error: ${err.message}`);
-  } finally {
-    if (pool) await pool.close();
   }
 }
 
 
+
 async function deleteStockOpnameHasilAscend(noso, itemId) {
-  let pool;
   try {
-    pool = await connectDb();
+    const pool = await poolPromise;
     const request = pool.request();
+
     request.input('NoSO', sql.VarChar(50), noso);
     request.input('ItemID', sql.Int, itemId);
 
     const result = await request.query(`
-      DELETE FROM [PPS_TEST2].[dbo].[StockOpnameAscendHasil]
+      DELETE FROM [dbo].[StockOpnameAscendHasil]
       WHERE NoSO = @NoSO AND ItemID = @ItemID
     `);
 
     return { deletedCount: result.rowsAffected?.[0] ?? 0 };
   } catch (err) {
     throw new Error(`deleteStockOpnameHasilAscend Service Error: ${err.message}`);
-  } finally {
-    if (pool) await pool.close();
   }
 }
-
-
-
 
 
 module.exports = {

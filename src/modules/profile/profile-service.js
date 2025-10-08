@@ -1,35 +1,47 @@
-const { sql, connectDb } = require('../../core/config/db');
+const { sql, poolPromise } = require('../../core/config/db');
 const { hashPassword } = require('../../core/utils/crypto-helper');
 
 const getProfileService = async (username) => {
-  await connectDb();
+  const pool = await poolPromise;
 
-  const result = await sql.query`
-    SELECT TOP 1 [Username], [FName], [LName], [Password]
-    FROM MstUsername
-    WHERE Username = ${username}
-  `;
+  const result = await pool.request()
+    .input('username', sql.VarChar, username)
+    .query(`
+      SELECT TOP 1 [Username], [FName], [LName], [Password]
+      FROM MstUsername
+      WHERE Username = @username
+    `);
 
   return result.recordset[0] || null;
 };
 
 const changePasswordService = async (username, oldPassword, newPassword) => {
-  await connectDb();
+  const pool = await poolPromise;
 
   const hashedOld = hashPassword(oldPassword);
   const hashedNew = hashPassword(newPassword);
 
-  const check = await sql.query`
-    SELECT COUNT(*) AS count FROM MstUsername WHERE Username = ${username} AND Password = ${hashedOld}
-  `;
+  const check = await pool.request()
+    .input('username', sql.VarChar, username)
+    .input('oldPassword', sql.VarChar, hashedOld)
+    .query(`
+      SELECT COUNT(*) AS count 
+      FROM MstUsername 
+      WHERE Username = @username AND Password = @oldPassword
+    `);
 
   if (check.recordset[0].count === 0) {
     throw new Error('Password lama tidak cocok.');
   }
 
-  await sql.query`
-    UPDATE MstUsername SET Password = ${hashedNew} WHERE Username = ${username}
-  `;
+  await pool.request()
+    .input('username', sql.VarChar, username)
+    .input('newPassword', sql.VarChar, hashedNew)
+    .query(`
+      UPDATE MstUsername 
+      SET Password = @newPassword 
+      WHERE Username = @username
+    `);
 };
 
 module.exports = { getProfileService, changePasswordService };

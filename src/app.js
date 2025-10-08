@@ -8,7 +8,15 @@ const stockOpnameRoutes = require('./modules/stock-opname/stock-opname-routes');
 const profileRoutes = require('./modules/profile/profile-routes');
 const mstLokasiRoutes = require('./modules/master-lokasi/master-lokasi-routes');
 const detailLabelRoutes = require('./modules/label-detail/label-detail-routes');
-const labelRoutes = require('./modules/label/label-washing-routes');
+const labelWashingRoutes = require('./modules/label/washing/label-washing-routes');
+const plasticTypeRoutes = require('./modules/master-plastic/plastic-routes');
+const produksiWashingRoutes = require('./modules/washing-produksi/washing-produksi-routes');
+const blokRoutes = require('./modules/master-blok/master-blok-routes');
+const labelRoutes = require('./modules/label/all/label-routes');
+
+
+
+
 
 const app = express();
 
@@ -26,12 +34,17 @@ app.get('/health', (req, res) => {
 });
 
 // 📌 API Routes
-app.use('/api/', authRoutes);
+app.use('/api/auth', authRoutes);
 app.use('/api/', stockOpnameRoutes);
 app.use('/api/', profileRoutes);
 app.use('/api/', mstLokasiRoutes);
 app.use('/api/', detailLabelRoutes);
+app.use('/api/', labelWashingRoutes);
+app.use('/api/plastic-type', plasticTypeRoutes);
+app.use('/api/washing-produksi', produksiWashingRoutes);
+app.use('/api/blok', blokRoutes);
 app.use('/api/', labelRoutes);
+
 
 // ❌ Error handling
 app.use((err, req, res, next) => {

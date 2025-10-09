@@ -50,6 +50,8 @@ async function getAllLabelsHandler(req, res) {
 async function updateLabelLocationHandler(req, res) {
   try {
     const { labelCode, idLokasi, blok } = req.body;
+    const { idUsername } = req;
+
 
     // Validasi input wajib
     if (!labelCode || !idLokasi || !blok) {
@@ -59,7 +61,7 @@ async function updateLabelLocationHandler(req, res) {
       });
     }
 
-    const result = await labelService.updateLabelLocation(labelCode, idLokasi, blok);
+    const result = await labelService.updateLabelLocation(labelCode, idLokasi, blok, idUsername);
 
     if (!result.success) {
       return res.status(404).json(result);

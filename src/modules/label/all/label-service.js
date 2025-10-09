@@ -417,16 +417,14 @@ ${lokasiWhere};
   
 }
 
-async function updateLabelLocation(labelCode, idLokasi, blok) {
+
+async function updateLabelLocation(labelCode, idLokasi, blok, idUsername) {
   const pool = await poolPromise;
   const request = pool.request();
 
   const prefix = labelCode.split('.')[0].toUpperCase();
 
-  let query = '';
   let tableName = '';
-
-  // mapping prefix ke tabel
   switch (prefix) {
     case 'A': tableName = 'dbo.BahanBakuPallet_h'; break;
     case 'B': tableName = 'dbo.Washing_h'; break;
@@ -442,50 +440,87 @@ async function updateLabelLocation(labelCode, idLokasi, blok) {
       return { success: false, message: `Prefix ${prefix} tidak dikenali untuk nomor label ${labelCode}` };
   }
 
-  // Cek tipe kolom IdLokasi di tabel target
-  const checkTypeQuery = `
-    SELECT DATA_TYPE 
-    FROM INFORMATION_SCHEMA.COLUMNS 
-    WHERE TABLE_NAME = PARSENAME('${tableName}', 1) 
-      AND COLUMN_NAME = 'IdLokasi'
+  // Tentukan kolom untuk labelCode
+  const labelCol = prefix === 'A'
+    ? "(CAST(NoBahanBaku AS NVARCHAR(50)) + '-' + CAST(NoPallet AS NVARCHAR(10)))"
+    : getLabelColumn(prefix);
+
+  // 🔹 Ambil data lama (Before)
+  const beforeQuery = `
+    SELECT TOP 1 Blok, IdLokasi
+    FROM ${tableName}
+    WHERE ${labelCol} = @LabelCode
   `;
+  const beforeRes = await pool.request()
+    .input('LabelCode', sql.NVarChar, labelCode)
+    .query(beforeQuery);
 
-  const typeResult = await pool.request().query(checkTypeQuery);
-  const idLokasiType = typeResult.recordset[0]?.DATA_TYPE;
-
-  // bikin query update aman untuk dua kolom
-  query = `
-    UPDATE ${tableName}
-    SET 
-      IdLokasi = ${idLokasiType === 'int' ? 'TRY_CONVERT(INT, @IdLokasi)' : '@IdLokasi'},
-      Blok = @Blok
-    WHERE 
-      ${prefix === 'A' 
-        ? "(CAST(NoBahanBaku AS NVARCHAR(50)) + '-' + CAST(NoPallet AS NVARCHAR(10)))" 
-        : getLabelColumn(prefix)
-      } = @LabelCode
-  `;
-
-  // binding parameter
-  request.input('LabelCode', sql.NVarChar, labelCode);
-  request.input('IdLokasi', sql.NVarChar, idLokasi);
-  request.input('Blok', sql.NVarChar(3), blok);
-
-  const result = await request.query(query);
-
-  if (result.rowsAffected[0] === 0) {
+  if (beforeRes.recordset.length === 0) {
     return {
       success: false,
       message: `Nomor label ${labelCode} tidak ditemukan di tabel ${tableName}`,
     };
   }
 
+  const beforeBlok = beforeRes.recordset[0].Blok || null;
+  const beforeIdLokasi = beforeRes.recordset[0].IdLokasi || null;
+
+  // 🔹 Cek tipe kolom IdLokasi
+  const checkTypeQuery = `
+    SELECT DATA_TYPE 
+    FROM INFORMATION_SCHEMA.COLUMNS 
+    WHERE TABLE_NAME = PARSENAME('${tableName}', 1) 
+      AND COLUMN_NAME = 'IdLokasi'
+  `;
+  const typeResult = await pool.request().query(checkTypeQuery);
+  const idLokasiType = typeResult.recordset[0]?.DATA_TYPE;
+
+  // 🔹 Jalankan UPDATE
+  const updateQuery = `
+    UPDATE ${tableName}
+    SET 
+      IdLokasi = ${idLokasiType === 'int' ? 'TRY_CONVERT(INT, @IdLokasi)' : '@IdLokasi'},
+      Blok = @Blok
+    WHERE ${labelCol} = @LabelCode
+  `;
+
+  const updateRes = await pool.request()
+    .input('LabelCode', sql.NVarChar(50), labelCode)
+    .input('IdLokasi', sql.NVarChar(50), idLokasi)
+    .input('Blok', sql.NVarChar(3), blok)
+    .query(updateQuery);
+
+  if (updateRes.rowsAffected[0] === 0) {
+    return {
+      success: false,
+      message: `Gagal update lokasi label ${labelCode}`,
+    };
+  }
+
+  // 🔹 Simpan log setelah berhasil update
+  await insertLogMappingLokasi(
+    labelCode,
+    beforeBlok,
+    beforeIdLokasi,
+    blok,
+    idLokasi,
+    idUsername // ✅ dari token JWT (req.idUsername)
+  );
+
   return {
     success: true,
     message: `Lokasi label ${labelCode} berhasil diupdate ke ${idLokasi} (blok ${blok})`,
-    updated: { labelCode, idLokasi, blok },
+    updated: {
+      labelCode,
+      beforeBlok,
+      beforeIdLokasi,
+      afterBlok: blok,
+      afterIdLokasi: idLokasi,
+      idUsername,
+    },
   };
 }
+
 
 // helper fungsi untuk ambil kolom label
 function getLabelColumn(prefix) {
@@ -502,6 +537,70 @@ function getLabelColumn(prefix) {
     default: return 'NoLabel';
   }
 }
+
+async function insertLogMappingLokasi(noLabel, beforeBlok, beforeIdLokasi, afterBlok, afterIdLokasi, idUsername) {
+  const pool = await poolPromise;
+  const request = pool.request();
+
+  // ⚠️ pastikan INT dikirim sebagai INT (atau NULL)
+  const _beforeId = (beforeIdLokasi === null || beforeIdLokasi === undefined || isNaN(Number(beforeIdLokasi)))
+    ? null : Number(beforeIdLokasi);
+  const _afterId  = (afterIdLokasi  === null || afterIdLokasi  === undefined || isNaN(Number(afterIdLokasi)))
+    ? null : Number(afterIdLokasi);
+
+  const query = `
+    INSERT INTO dbo.LogMappingLokasi (
+      IdUsername,
+      Tgl,
+      NoLabel,
+      BeforeBlok,
+      BeforeIdLokasi,
+      AfterBlok,
+      AfterIdLokasi
+    )
+    OUTPUT INSERTED.IdLog, INSERTED.Tgl
+    VALUES (
+      @IdUsername,
+      GETDATE(),
+      @NoLabel,
+      @BeforeBlok,
+      @BeforeIdLokasi,
+      @AfterBlok,
+      @AfterIdLokasi
+    )
+  `;
+
+  try {
+    request.input('IdUsername', sql.Int, idUsername ?? null);
+    request.input('NoLabel', sql.VarChar(50), noLabel ?? null);
+    request.input('BeforeBlok', sql.VarChar(3), beforeBlok ?? null);
+    request.input('BeforeIdLokasi', sql.Int, _beforeId);
+    request.input('AfterBlok', sql.VarChar(3), afterBlok ?? null);
+    request.input('AfterIdLokasi', sql.Int, _afterId);
+
+    const result = await request.query(query);
+
+    const inserted = result.recordset?.[0] || {};
+    const idLog = inserted.IdLog ?? null;
+    const tglInserted = inserted.Tgl ?? null;
+
+    console.info(`✅ Mapping ${idUsername}: ${beforeBlok}:${_beforeId} -> ${afterBlok}:${_afterId} (${idLog})`);
+    return {
+      success: true,
+      message: 'Log mapping lokasi berhasil ditambahkan',
+      idLog,
+      tgl: tglInserted,
+    };
+  } catch (err) {
+    // ❌ LOG error
+    console.error('❌ Failed to insert LogMappingLokasi', {
+      err: err.message,
+      idUsername, noLabel, beforeBlok, beforeIdLokasi, afterBlok, afterIdLokasi
+    });
+    return { success: false, message: err.message };
+  }
+}
+
 
 
 module.exports = { getAllLabels, updateLabelLocation };

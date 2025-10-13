@@ -1,13 +1,12 @@
 const jwt = require('jsonwebtoken');
 const authService = require('./auth-service');
+const getUserPermissions = require('../../core/utils/get-user-permissions');
 
 async function login(req, res) {
   const { username, password } = req.body;
 
   try {
-    // 🔹 verifyUser sekarang return data user (bukan boolean)
     const user = await authService.verifyUser(username, password);
-
     if (!user) {
       return res.status(400).json({
         success: false,
@@ -15,7 +14,9 @@ async function login(req, res) {
       });
     }
 
-    // 🔹 buat token yang berisi idUsername & username
+    // 🔹 Ambil permission pakai helper (tanpa duplikasi query)
+    const permissions = await getUserPermissions(user.IdUsername);
+
     const token = jwt.sign(
       {
         idUsername: user.IdUsername,
@@ -25,7 +26,6 @@ async function login(req, res) {
       { expiresIn: '12h' }
     );
 
-    // 🔹 kirim response sukses
     res.status(200).json({
       success: true,
       message: 'Login berhasil',
@@ -34,6 +34,7 @@ async function login(req, res) {
         idUsername: user.IdUsername,
         username: user.Username,
         fullName: `${user.FName ?? ''} ${user.LName ?? ''}`.trim(),
+        permissions, // ✅ ambil dari helper, bukan query ulang
       },
     });
   } catch (err) {

@@ -13,8 +13,9 @@ const plasticTypeRoutes = require('./modules/master-plastic/plastic-routes');
 const produksiWashingRoutes = require('./modules/washing-produksi/washing-produksi-routes');
 const blokRoutes = require('./modules/master-blok/master-blok-routes');
 const labelRoutes = require('./modules/label/all/label-routes');
-
-
+const productionRoutes = require('./modules/production/production-routes');
+const bongkarSusunRoutes = require('./modules/bongkar-susun/bongkar-susun-route');
+const maxSak = require('./modules/master-max-sak/max-sak-routes');
 
 
 
@@ -44,6 +45,12 @@ app.use('/api/plastic-type', plasticTypeRoutes);
 app.use('/api/washing-produksi', produksiWashingRoutes);
 app.use('/api/blok', blokRoutes);
 app.use('/api/', labelRoutes);
+app.use('/api/production', productionRoutes);
+app.use('/api/bongkar-susun', bongkarSusunRoutes);
+app.use('/api/max-sak', maxSak);
+
+
+
 
 
 // ❌ Error handling

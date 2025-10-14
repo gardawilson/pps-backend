@@ -670,7 +670,7 @@ async function updateLabelLocation(labelCode, idLokasi, blok, idUsername) {
 
   return {
     success: true,
-    message: `Lokasi label ${labelCode} berhasil diupdate ke ${idLokasi} (blok ${blok})`,
+    message: `Lokasi label ${labelCode} berhasil diupdate ke ${blok}${idLokasi}`,
     updated: {
       labelCode,
       beforeBlok,

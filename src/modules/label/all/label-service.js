@@ -418,12 +418,172 @@ ${lokasiWhere};
 }
 
 
+// =====================
+// Helper: mapping kolom nomor label per prefix
+// =====================
+function getLabelColumn(prefix) {
+  switch (prefix) {
+    case 'A': // handled khusus (gabungan NoBahanBaku-NoPallet)
+      return null;
+    case 'B': return 'NoWashing';
+    case 'D': return 'NoBroker';
+    case 'F': return 'NoCrusher';
+    case 'M': return 'NoBonggolan';
+    case 'V': return 'NoGilingan';
+    case 'H': return 'NoMixer';
+    case 'BB': return 'NoFurnitureWIP';
+    case 'BA': return 'NoBJ';
+    case 'BF': return 'NoReject';
+    default:  return 'NoLabel';
+  }
+}
+
+// =====================
+// Helper: query cek ketersediaan (DateUsage)
+// return SQL yang mengembalikan: Blok, IdLokasi, Available (bit)
+// =====================
+function getAvailabilityCheckSQL(prefix, tableName) {
+  switch (prefix) {
+    // DETAIL-BASED: valid bila MASIH ADA detail DateUsage IS NULL
+    case 'A': // BahanBakuPallet_h + BahanBaku_d
+      return `
+        SELECT TOP 1 
+          p.Blok, p.IdLokasi,
+          CASE 
+            WHEN EXISTS (
+              SELECT 1 FROM dbo.BahanBaku_d d
+              WHERE d.NoBahanBaku = p.NoBahanBaku 
+                AND d.NoPallet = p.NoPallet
+                AND d.DateUsage IS NULL
+            ) THEN CAST(1 AS bit) ELSE CAST(0 AS bit) 
+          END AS Available
+        FROM dbo.BahanBakuPallet_h p
+        WHERE (CAST(p.NoBahanBaku AS NVARCHAR(50)) + '-' + CAST(p.NoPallet AS NVARCHAR(10))) = @LabelCode
+      `;
+    case 'B': // Washing_h + Washing_d
+      return `
+        SELECT TOP 1 
+          h.Blok, h.IdLokasi,
+          CASE 
+            WHEN EXISTS (
+              SELECT 1 FROM dbo.Washing_d d
+              WHERE d.NoWashing = h.NoWashing
+                AND d.DateUsage IS NULL
+            ) THEN CAST(1 AS bit) ELSE CAST(0 AS bit) 
+          END AS Available
+        FROM dbo.Washing_h h
+        WHERE h.NoWashing = @LabelCode
+      `;
+    case 'D': // Broker_h + Broker_d
+      return `
+        SELECT TOP 1 
+          h.Blok, h.IdLokasi,
+          CASE 
+            WHEN EXISTS (
+              SELECT 1 FROM dbo.Broker_d d
+              WHERE d.NoBroker = h.NoBroker
+                AND d.DateUsage IS NULL
+            ) THEN CAST(1 AS bit) ELSE CAST(0 AS bit) 
+          END AS Available
+        FROM dbo.Broker_h h
+        WHERE h.NoBroker = @LabelCode
+      `;
+    case 'H': // Mixer_h + Mixer_d
+      return `
+        SELECT TOP 1 
+          h.Blok, h.IdLokasi,
+          CASE 
+            WHEN EXISTS (
+              SELECT 1 FROM dbo.Mixer_d d
+              WHERE d.NoMixer = h.NoMixer
+                AND d.DateUsage IS NULL
+            ) THEN CAST(1 AS bit) ELSE CAST(0 AS bit) 
+          END AS Available
+        FROM dbo.Mixer_h h
+        WHERE h.NoMixer = @LabelCode
+      `;
+
+    // HEADER-ONLY: valid bila header.DateUsage IS NULL
+    case 'F': // Crusher
+      return `
+        SELECT TOP 1 
+          c.Blok, c.IdLokasi,
+          CASE WHEN c.DateUsage IS NULL 
+               THEN CAST(1 AS bit) ELSE CAST(0 AS bit) END AS Available
+        FROM dbo.Crusher c
+        WHERE c.NoCrusher = @LabelCode
+      `;
+    case 'M': // Bonggolan
+      return `
+        SELECT TOP 1 
+          b.Blok, b.IdLokasi,
+          CASE WHEN b.DateUsage IS NULL 
+               THEN CAST(1 AS bit) ELSE CAST(0 AS bit) END AS Available
+        FROM dbo.Bonggolan b
+        WHERE b.NoBonggolan = @LabelCode
+      `;
+    case 'V': // Gilingan (dipakai sebagai header di implementasi kamu)
+      return `
+        SELECT TOP 1 
+          g.Blok, g.IdLokasi,
+          CASE WHEN g.DateUsage IS NULL 
+               THEN CAST(1 AS bit) ELSE CAST(0 AS bit) END AS Available
+        FROM dbo.Gilingan g
+        WHERE g.NoGilingan = @LabelCode
+      `;
+    case 'BB': // FurnitureWIP (header)
+      return `
+        SELECT TOP 1 
+          fw.Blok, fw.IdLokasi,
+          CASE WHEN fw.DateUsage IS NULL 
+               THEN CAST(1 AS bit) ELSE CAST(0 AS bit) END AS Available
+        FROM dbo.FurnitureWIP fw
+        WHERE fw.NoFurnitureWIP = @LabelCode
+      `;
+    case 'BA': // BarangJadi (header)
+      return `
+        SELECT TOP 1 
+          bj.Blok, bj.IdLokasi,
+          CASE WHEN bj.DateUsage IS NULL 
+               THEN CAST(1 AS bit) ELSE CAST(0 AS bit) END AS Available
+        FROM dbo.BarangJadi bj
+        WHERE bj.NoBJ = @LabelCode
+      `;
+    case 'BF': // RejectV2 (header)
+      return `
+        SELECT TOP 1 
+          r.Blok, r.IdLokasi,
+          CASE WHEN r.DateUsage IS NULL 
+               THEN CAST(1 AS bit) ELSE CAST(0 AS bit) END AS Available
+        FROM dbo.RejectV2 r
+        WHERE r.NoReject = @LabelCode
+      `;
+    default:
+      // fallback generic (anggap header-only punya kolom DateUsage & labelCol)
+      const labelCol = getLabelColumn(prefix) || 'NoLabel';
+      return `
+        SELECT TOP 1 
+          h.Blok, h.IdLokasi,
+          CASE WHEN h.DateUsage IS NULL 
+               THEN CAST(1 AS bit) ELSE CAST(0 AS bit) END AS Available
+        FROM ${tableName} h
+        WHERE ${labelCol} = @LabelCode
+      `;
+  }
+}
+
+
+// =====================
+// UPDATE lokasi + validasi ketersediaan (DateUsage)
+// =====================
 async function updateLabelLocation(labelCode, idLokasi, blok, idUsername) {
   const pool = await poolPromise;
-  const request = pool.request();
 
-  const prefix = labelCode.split('.')[0].toUpperCase();
+  // Normalisasi prefix
+  const parts = String(labelCode).split('.');
+  const prefix = (parts[0] || '').toUpperCase();
 
+  // Mapping tabel berdasarkan prefix
   let tableName = '';
   switch (prefix) {
     case 'A': tableName = 'dbo.BahanBakuPallet_h'; break;
@@ -440,32 +600,36 @@ async function updateLabelLocation(labelCode, idLokasi, blok, idUsername) {
       return { success: false, message: `Prefix ${prefix} tidak dikenali untuk nomor label ${labelCode}` };
   }
 
-  // Tentukan kolom untuk labelCode
   const labelCol = prefix === 'A'
     ? "(CAST(NoBahanBaku AS NVARCHAR(50)) + '-' + CAST(NoPallet AS NVARCHAR(10)))"
     : getLabelColumn(prefix);
 
-  // 🔹 Ambil data lama (Before)
-  const beforeQuery = `
-    SELECT TOP 1 Blok, IdLokasi
-    FROM ${tableName}
-    WHERE ${labelCol} = @LabelCode
-  `;
-  const beforeRes = await pool.request()
-    .input('LabelCode', sql.NVarChar, labelCode)
-    .query(beforeQuery);
+  // ========= 1) CEK: label ada + status Available (berdasarkan DateUsage) =========
+  const availabilitySQL = getAvailabilityCheckSQL(prefix, tableName);
 
-  if (beforeRes.recordset.length === 0) {
+  const availRes = await pool.request()
+    .input('LabelCode', sql.NVarChar(50), labelCode)
+    .query(availabilitySQL);
+
+  if (availRes.recordset.length === 0) {
     return {
       success: false,
-      message: `Nomor label ${labelCode} tidak ditemukan di tabel ${tableName}`,
+      message: `Nomor label ${labelCode} tidak ditemukan di tabel ${tableName}`
     };
   }
 
-  const beforeBlok = beforeRes.recordset[0].Blok || null;
-  const beforeIdLokasi = beforeRes.recordset[0].IdLokasi || null;
+  const beforeBlok = availRes.recordset[0].Blok ?? null;
+  const beforeIdLokasi = availRes.recordset[0].IdLokasi ?? null;
+  const available = !!availRes.recordset[0].Available;
 
-  // 🔹 Cek tipe kolom IdLokasi
+  if (!available) {
+    return {
+      success: false,
+      message: `Label ${labelCode} sudah terpakai!`
+    };
+  }
+
+  // ========= 2) Cek tipe kolom IdLokasi (varchar vs int) =========
   const checkTypeQuery = `
     SELECT DATA_TYPE 
     FROM INFORMATION_SCHEMA.COLUMNS 
@@ -475,7 +639,7 @@ async function updateLabelLocation(labelCode, idLokasi, blok, idUsername) {
   const typeResult = await pool.request().query(checkTypeQuery);
   const idLokasiType = typeResult.recordset[0]?.DATA_TYPE;
 
-  // 🔹 Jalankan UPDATE
+  // ========= 3) UPDATE lokasi =========
   const updateQuery = `
     UPDATE ${tableName}
     SET 
@@ -486,25 +650,22 @@ async function updateLabelLocation(labelCode, idLokasi, blok, idUsername) {
 
   const updateRes = await pool.request()
     .input('LabelCode', sql.NVarChar(50), labelCode)
-    .input('IdLokasi', sql.NVarChar(50), idLokasi)
-    .input('Blok', sql.NVarChar(3), blok)
+    .input('IdLokasi', sql.NVarChar(50), idLokasi) // aman untuk keduanya (TO_INT jika perlu)
+    .input('Blok', sql.NVarChar(10), blok)         // naikkan ke 10 jika blok kamu >3 char
     .query(updateQuery);
 
-  if (updateRes.rowsAffected[0] === 0) {
-    return {
-      success: false,
-      message: `Gagal update lokasi label ${labelCode}`,
-    };
+  if ((updateRes.rowsAffected?.[0] || 0) === 0) {
+    return { success: false, message: `Gagal update lokasi label ${labelCode}` };
   }
 
-  // 🔹 Simpan log setelah berhasil update
+  // ========= 4) LOG =========
   await insertLogMappingLokasi(
     labelCode,
     beforeBlok,
     beforeIdLokasi,
     blok,
     idLokasi,
-    idUsername // ✅ dari token JWT (req.idUsername)
+    idUsername
   );
 
   return {
@@ -516,26 +677,9 @@ async function updateLabelLocation(labelCode, idLokasi, blok, idUsername) {
       beforeIdLokasi,
       afterBlok: blok,
       afterIdLokasi: idLokasi,
-      idUsername,
-    },
+      idUsername
+    }
   };
-}
-
-
-// helper fungsi untuk ambil kolom label
-function getLabelColumn(prefix) {
-  switch (prefix) {
-    case 'B': return 'NoWashing';
-    case 'D': return 'NoBroker';
-    case 'F': return 'NoCrusher';
-    case 'M': return 'NoBonggolan';
-    case 'V': return 'NoGilingan';
-    case 'H': return 'NoMixer';
-    case 'BB': return 'NoFurnitureWIP';
-    case 'BA': return 'NoBJ';
-    case 'BF': return 'NoReject';
-    default: return 'NoLabel';
-  }
 }
 
 async function insertLogMappingLokasi(noLabel, beforeBlok, beforeIdLokasi, afterBlok, afterIdLokasi, idUsername) {

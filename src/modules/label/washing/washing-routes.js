@@ -3,7 +3,7 @@ const router = express.Router();
 const verifyToken = require('../../../core/middleware/verify-token');
 const attachPermissions = require('../../../core/middleware/attach-permissions');
 const requirePermission = require('../../../core/middleware/require-permission');
-const ctrl = require('./label-washing-controller');
+const ctrl = require('./washing-controller');
 
 // urutan penting: verify → attach → require → controller
 router.use(verifyToken, attachPermissions);

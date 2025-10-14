@@ -1,4 +1,4 @@
-const labelWashingService = require('./label-washing-service');
+const labelWashingService = require('./washing-service');
 
 // GET all header washing
 exports.getAll = async (req, res) => {

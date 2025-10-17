@@ -17,32 +17,39 @@ router.get(
   ctrl.getAll
 );
 
-// // GET one
-// router.get(
-//   '/labels/broker/:nobroker',
-//   requirePermission('label_broker:read'),
-//   ctrl.getOne
-// );
+// GET one header's details by NoBroker
+router.get(
+  '/labels/broker/:nobroker',
+  requirePermission('label_broker:read'),
+  ctrl.getOne
+);
 
-// // CREATE
-// router.post(
-//   '/labels/broker',
-//   requirePermission('label_broker:create'),
-//   ctrl.create
-// );
+// CREATE broker header + details (+ optional outputs)
+router.post(
+  '/labels/broker',
+  requirePermission('label_broker:create'),
+  ctrl.create
+);
 
-// // UPDATE
-// router.put(
-//   '/labels/broker/:nobroker',
-//   requirePermission('label_broker:update'),
-//   ctrl.update
-// );
+// UPDATE broker header + details (+ optional outputs)
+router.put(
+  '/labels/broker/:nobroker',
+  requirePermission('label_broker:update'),
+  ctrl.update
+);
 
-// // DELETE
-// router.delete(
-//   '/labels/broker/:nobroker',
-//   requirePermission('label_broker:delete'),
-//   ctrl.remove
-// );
+router.delete(
+  '/labels/broker/:nobroker',
+  requirePermission('label_broker:delete'),
+  ctrl.remove
+);
+
+
+// Example: GET /api/labels/broker/partials/D.0000000123/45
+router.get(
+  '/labels/broker/partials/:nobroker/:nosak',
+  requirePermission('label_broker:read'),
+  ctrl.getPartialInfo
+);
 
 module.exports = router;

@@ -1,5 +1,5 @@
 // controllers/production-controller.js
-const washingProduksiService = require('./production-service');
+const washingProduksiService = require('./washing-production-service');
 
 async function getProduksiByDate(req, res) {
   const { username } = req;

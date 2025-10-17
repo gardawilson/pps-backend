@@ -1,5 +1,5 @@
 // services/production-service.js
-const { sql, poolPromise } = require('../../core/config/db');
+const { sql, poolPromise } = require('../../../core/config/db');
 
 async function getProduksiByDate(date) {
   const pool = await poolPromise;

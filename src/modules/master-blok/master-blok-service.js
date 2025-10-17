@@ -6,7 +6,7 @@ async function getAllBlok() {
 
   const query = `
     SELECT TOP (1000) Blok, IdWarehouse
-    FROM PPS_TEST2.dbo.MstBlok
+    FROM dbo.MstBlok
     ORDER BY Blok ASC
   `;
 

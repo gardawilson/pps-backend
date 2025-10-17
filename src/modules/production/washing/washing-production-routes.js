@@ -1,8 +1,8 @@
 // routes/production-route.js
 const express = require('express');
 const router = express.Router();
-const verifyToken = require('../../core/middleware/verify-token');
-const washingProduksiController = require('./production-controller');
+const verifyToken = require('../../../core/middleware/verify-token');
+const washingProduksiController = require('./washing-production-controller');
 
 // Validasi pola tanggal langsung di route (YYYY-MM-DD)
 router.get(
@@ -10,5 +10,6 @@ router.get(
   verifyToken,
   washingProduksiController.getProduksiByDate
 );
+
 
 module.exports = router;

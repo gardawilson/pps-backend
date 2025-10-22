@@ -87,13 +87,14 @@ async function getNoStockOpname() {
 
 
 
-async function getStockOpnameAcuan({ 
-  noso, 
-  page = 1, 
-  pageSize = 20, 
-  filterBy = 'all', 
-  idLokasi, 
-  search = '' 
+async function getStockOpnameAcuan({
+  noso,
+  page = 1,
+  pageSize = 20,
+  filterBy = 'all',
+  blok,                // ✅ varchar
+  idLokasi,            // ✅ int
+  search = ''
 }) {
   const offset = (page - 1) * pageSize;
 
@@ -184,21 +185,36 @@ async function getStockOpnameAcuan({
     const pool = await poolPromise;
     const request = pool.request();
 
+    // --- input dasar ---
     request.input('noso', sql.VarChar, noso);
-    if (idLokasi && idLokasi !== 'all') request.input('idLokasi', sql.VarChar, idLokasi);
+    if (blok && blok !== 'all') request.input('blok', sql.VarChar, blok);
+    if (idLokasi && idLokasi !== 'all') request.input('idLokasi', sql.Int, parseInt(idLokasi));
     if (search) request.input('search', sql.VarChar, `%${search}%`);
 
-    // helper functions
+    // === helper untuk filter blok & lokasi ===
+    const makeWhereLokasi = () => {
+      if (blok && blok !== 'all' && idLokasi && idLokasi !== 'all') {
+        return 'AND Blok = @blok AND IdLokasi = @idLokasi';
+      } else if (blok && blok !== 'all') {
+        return 'AND Blok = @blok';
+      } else if (idLokasi && idLokasi !== 'all') {
+        return 'AND IdLokasi = @idLokasi';
+      }
+      return '';
+    };
+
+    // === builder ===
     const makeQuery = (table, labelExpr, labelType, hasilTable, hasilWhereClause, fields = {}) => `
       SELECT 
         ${labelExpr} AS NomorLabel, 
         '${labelType}' AS LabelType,
         ${fields.jmlhSak || 'NULL'} AS JmlhSak,
         ${fields.berat || 'NULL'} AS Berat,
+        Blok,
         IdLokasi
       FROM ${table} AS src
       WHERE NoSO = @noso
-        ${idLokasi && idLokasi !== 'all' ? 'AND IdLokasi = @idLokasi' : ''}
+        ${makeWhereLokasi()}
         ${search ? `AND ${labelExpr} LIKE @search` : ''}
         AND NOT EXISTS (
           SELECT 1 FROM ${hasilTable} AS hasil
@@ -210,7 +226,7 @@ async function getStockOpnameAcuan({
       SELECT COUNT(*) AS total
       FROM ${table} AS src
       WHERE NoSO = @noso
-        ${idLokasi && idLokasi !== 'all' ? 'AND IdLokasi = @idLokasi' : ''}
+        ${makeWhereLokasi()}
         ${search ? `AND ${labelExpr} LIKE @search` : ''}
         AND NOT EXISTS (
           SELECT 1 FROM ${hasilTable} AS hasil
@@ -218,7 +234,7 @@ async function getStockOpnameAcuan({
         )
     `;
 
-    // overall total query
+    // === total global builder ===
     const overallTotalQuery = (() => {
       if (filterBy !== 'all') {
         const f = filterMap[filterBy.toLowerCase()];
@@ -229,7 +245,7 @@ async function getStockOpnameAcuan({
             SUM(CAST(${f.fields.jmlhSak || '0'} AS INT)) AS TotalSakGlobal
           FROM ${f.table} AS src
           WHERE NoSO = @noso
-            ${idLokasi && idLokasi !== 'all' ? 'AND IdLokasi = @idLokasi' : ''}
+            ${makeWhereLokasi()}
             ${search ? `AND ${f.labelExpr} LIKE @search` : ''}
         `;
       } else {
@@ -245,7 +261,7 @@ async function getStockOpnameAcuan({
                 ${f.fields.jmlhSak || '0'} AS JmlhSak
               FROM ${f.table} AS src
               WHERE NoSO = @noso
-                ${idLokasi && idLokasi !== 'all' ? 'AND IdLokasi = @idLokasi' : ''}
+                ${makeWhereLokasi()}
                 ${search ? `AND ${f.labelExpr} LIKE @search` : ''}
             `).join(' UNION ALL ')}
           ) AS beratSum
@@ -256,33 +272,34 @@ async function getStockOpnameAcuan({
     let query = '', totalQuery = '', beratSakQuery = '';
 
     if (filterBy !== 'all') {
-      const filter = filterMap[filterBy.toLowerCase()];
-      if (!filter) throw new Error('Invalid filterBy');
+      const f = filterMap[filterBy.toLowerCase()];
+      if (!f) throw new Error('Invalid filterBy');
 
       query = `
-        ${makeQuery(filter.table, filter.labelExpr, filter.label, filter.hasilTable, filter.hasilWhereClause, filter.fields)}
+        ${makeQuery(f.table, f.labelExpr, f.label, f.hasilTable, f.hasilWhereClause, f.fields)}
         ORDER BY NomorLabel
         OFFSET ${offset} ROWS FETCH NEXT ${pageSize} ROWS ONLY;
       `;
 
-      totalQuery = makeCount(filter.table, filter.labelExpr, filter.hasilTable, filter.hasilWhereClause);
+      totalQuery = makeCount(f.table, f.labelExpr, f.hasilTable, f.hasilWhereClause);
 
       beratSakQuery = `
         SELECT
-          ROUND(SUM(CAST(${filter.fields.berat || '0'} AS FLOAT)), 2) AS TotalBerat,
-          SUM(CAST(${filter.fields.jmlhSak || '0'} AS INT)) AS TotalSak
-        FROM ${filter.table} AS src
+          ROUND(SUM(CAST(${f.fields.berat || '0'} AS FLOAT)), 2) AS TotalBerat,
+          SUM(CAST(${f.fields.jmlhSak || '0'} AS INT)) AS TotalSak
+        FROM ${f.table} AS src
         WHERE NoSO = @noso
-          ${idLokasi && idLokasi !== 'all' ? 'AND IdLokasi = @idLokasi' : ''}
-          ${search ? `AND ${filter.labelExpr} LIKE @search` : ''}
+          ${makeWhereLokasi()}
+          ${search ? `AND ${f.labelExpr} LIKE @search` : ''}
           AND NOT EXISTS (
-            SELECT 1 FROM ${filter.hasilTable} AS hasil
-            WHERE hasil.NoSO = src.NoSO AND ${filter.hasilWhereClause}
+            SELECT 1 FROM ${f.hasilTable} AS hasil
+            WHERE hasil.NoSO = src.NoSO AND ${f.hasilWhereClause}
           )
       `;
     } else {
-      const allQueries = Object.values(filterMap).map(f => makeQuery(f.table, f.labelExpr, f.label, f.hasilTable, f.hasilWhereClause, f.fields));
-      const allCounts = Object.values(filterMap).map(f => makeCount(f.table, f.labelExpr, f.hasilTable, f.hasilWhereClause));
+      const all = Object.values(filterMap);
+      const allQueries = all.map(f => makeQuery(f.table, f.labelExpr, f.label, f.hasilTable, f.hasilWhereClause, f.fields));
+      const allCounts = all.map(f => makeCount(f.table, f.labelExpr, f.hasilTable, f.hasilWhereClause));
 
       query = `
         SELECT * FROM (
@@ -303,13 +320,13 @@ async function getStockOpnameAcuan({
           ROUND(SUM(CAST(beratSum.Berat AS FLOAT)), 2) AS TotalBerat,
           SUM(CAST(beratSum.JmlhSak AS INT)) AS TotalSak
         FROM (
-          ${Object.values(filterMap).map(f => `
+          ${all.map(f => `
             SELECT
               ${f.fields.berat || '0'} AS Berat,
               ${f.fields.jmlhSak || '0'} AS JmlhSak
             FROM ${f.table} AS src
             WHERE NoSO = @noso
-              ${idLokasi && idLokasi !== 'all' ? 'AND IdLokasi = @idLokasi' : ''}
+              ${makeWhereLokasi()}
               ${search ? `AND ${f.labelExpr} LIKE @search` : ''}
               AND NOT EXISTS (
                 SELECT 1 FROM ${f.hasilTable} AS hasil
@@ -354,12 +371,15 @@ async function getStockOpnameAcuan({
 
 
 
+// ✅ getStockOpnameHasil.js (versi final, blok dan idLokasi dipisah)
+
 async function getStockOpnameHasil({
   noso,
   page = 1,
   pageSize = 20,
   filterBy = 'all',
-  idLokasi,
+  blok,                // varchar
+  idLokasi,            // int
   search = '',
   filterByUser = false,
   username = ''
@@ -371,50 +391,240 @@ async function getStockOpnameHasil({
       table: 'StockOpnameHasilBahanBaku',
       labelExpr: "CONCAT(so.NoBahanBaku, '-', so.NoPallet)",
       label: 'Bahan Baku',
-      joinClause: `LEFT JOIN (
-          SELECT NoBahanBaku, NoPallet, IdLokasi,
-                 ROW_NUMBER() OVER (PARTITION BY NoBahanBaku, NoPallet ORDER BY TimeCreate DESC) as rn
-          FROM BahanBaku_d 
+      joinClause: `
+        LEFT JOIN (
+          SELECT 
+            NoBahanBaku,
+            NoPallet,
+            Blok,
+            IdLokasi,
+            ROW_NUMBER() OVER (PARTITION BY NoBahanBaku, NoPallet ORDER BY IdLokasi DESC) AS rn
+          FROM BahanBakuPallet_h
           WHERE IdLokasi IS NOT NULL
-        ) detail ON so.NoBahanBaku = detail.NoBahanBaku AND so.NoPallet = detail.NoPallet AND detail.rn = 1`,
-      fields: { jmlhSak: 'so.JmlhSak', berat: 'so.Berat' }
-    },
+        ) detail 
+          ON so.NoBahanBaku = detail.NoBahanBaku 
+          AND so.NoPallet = detail.NoPallet
+          AND detail.rn = 1
+      `,
+      fields: { 
+        jmlhSak: 'so.JmlhSak', 
+        berat: 'so.Berat' 
+      }
+    },    
     washing: {
       table: 'StockOpnameHasilWashing',
       labelExpr: 'so.NoWashing',
       label: 'Washing',
-      joinClause: `LEFT JOIN (
-          SELECT NoWashing, IdLokasi,
-                 ROW_NUMBER() OVER (PARTITION BY NoWashing ORDER BY DateUsage DESC) as rn
-          FROM Washing_d 
+      joinClause: `
+        LEFT JOIN (
+          SELECT 
+            NoWashing, 
+            Blok, 
+            IdLokasi,
+            ROW_NUMBER() OVER (PARTITION BY NoWashing ORDER BY DateCreate DESC) AS rn
+          FROM Washing_h
           WHERE IdLokasi IS NOT NULL
-        ) detail ON so.NoWashing = detail.NoWashing AND detail.rn = 1`,
-      fields: { jmlhSak: 'so.JmlhSak', berat: 'so.Berat' }
+        ) detail ON so.NoWashing = detail.NoWashing
+                 AND detail.rn = 1
+      `,
+      fields: {
+        jmlhSak: 'so.JmlhSak',
+        berat: 'so.Berat'
+      }
     },
-    // ... (filterMap lain tetap sama persis)
+
+    broker: {
+      table: 'StockOpnameHasilBroker',
+      labelExpr: 'so.NoBroker',
+      label: 'Broker',
+      joinClause: `
+        LEFT JOIN (
+          SELECT 
+            NoBroker,
+            Blok,
+            IdLokasi,
+            ROW_NUMBER() OVER (PARTITION BY NoBroker ORDER BY DateCreate DESC) AS rn
+          FROM Broker_h
+          WHERE IdLokasi IS NOT NULL
+        ) detail ON so.NoBroker = detail.NoBroker
+                 AND detail.rn = 1
+      `,
+      fields: {
+        jmlhSak: 'so.JmlhSak',
+        berat: 'so.Berat'
+      }
+    },
+    crusher: {
+      table: 'StockOpnameHasilCrusher',
+      labelExpr: 'so.NoCrusher',
+      label: 'Crusher',
+      joinClause: `
+        LEFT JOIN (
+          SELECT 
+            NoCrusher,
+            Blok,
+            IdLokasi,
+            ROW_NUMBER() OVER (PARTITION BY NoCrusher ORDER BY DateCreate DESC) AS rn
+          FROM Crusher
+          WHERE IdLokasi IS NOT NULL
+        ) detail ON so.NoCrusher = detail.NoCrusher
+                 AND detail.rn = 1
+      `,
+      fields: {
+        jmlhSak: 'NULL',    // ⚠️ tidak ada kolom JmlhSak di tabel ini
+        berat: 'so.Berat'
+      }
+    },
+    bonggolan: {
+      table: 'StockOpnameHasilBonggolan',
+      labelExpr: 'so.NoBonggolan',
+      label: 'Bonggolan',
+      joinClause: `
+        LEFT JOIN (
+          SELECT 
+            NoBonggolan,
+            Blok,
+            IdLokasi,
+            ROW_NUMBER() OVER (PARTITION BY NoBonggolan ORDER BY DateCreate DESC) AS rn
+          FROM Bonggolan
+          WHERE IdLokasi IS NOT NULL
+        ) detail ON so.NoBonggolan = detail.NoBonggolan
+                 AND detail.rn = 1
+      `,
+      fields: {
+        jmlhSak: 'NULL',   // ❌ tidak ada jumlah sak
+        berat: 'so.Berat'
+      }
+    },
+    gilingan: {
+      table: 'StockOpnameHasilGilingan',     // ✅ pakai tabel yang benar
+      labelExpr: 'so.NoGilingan',
+      label: 'Gilingan',
+      joinClause: `
+        LEFT JOIN (
+          SELECT 
+            NoGilingan,
+            Blok,
+            IdLokasi,
+            ROW_NUMBER() OVER (PARTITION BY NoGilingan ORDER BY DateCreate DESC) AS rn
+          FROM Gilingan
+          WHERE IdLokasi IS NOT NULL
+        ) detail ON so.NoGilingan = detail.NoGilingan
+                 AND detail.rn = 1
+      `,
+      fields: {
+        jmlhSak: 'NULL',   // ❌ Gilingan tidak punya jumlah sak, hanya berat
+        berat: 'so.Berat'
+      }
+    },    
+    mixer: {
+      table: 'StockOpnameHasilMixer',
+      labelExpr: 'so.NoMixer',
+      label: 'Mixer',
+      joinClause: `
+        LEFT JOIN (
+          SELECT 
+            NoMixer,
+            Blok,
+            IdLokasi,
+            ROW_NUMBER() OVER (PARTITION BY NoMixer ORDER BY DateCreate DESC) AS rn
+          FROM Mixer_h
+          WHERE IdLokasi IS NOT NULL
+        ) detail ON so.NoMixer = detail.NoMixer
+                 AND detail.rn = 1
+      `,
+      fields: {
+        jmlhSak: 'so.JmlhSak',
+        berat: 'so.Berat'
+      }
+    },
+    furniturewip: {
+      table: 'StockOpnameHasilFurnitureWIP',
+      labelExpr: 'so.NoFurnitureWIP',
+      label: 'Furniture WIP',
+      joinClause: `
+        LEFT JOIN (
+          SELECT 
+            NoFurnitureWIP,
+            Blok,
+            IdLokasi,
+            ROW_NUMBER() OVER (PARTITION BY NoFurnitureWIP ORDER BY DateCreate DESC) AS rn
+          FROM FurnitureWIP
+          WHERE IdLokasi IS NOT NULL
+        ) detail ON so.NoFurnitureWIP = detail.NoFurnitureWIP
+                 AND detail.rn = 1
+      `,
+      fields: {
+        jmlhSak: 'so.Pcs',     // ⚠️ gunakan Pcs sebagai pengganti jumlah sak
+        berat: 'so.Berat'
+      }
+    },
+    barangjadi: {
+      table: 'StockOpnameHasilBarangJadi',
+      labelExpr: 'so.NoBJ',
+      label: 'Barang Jadi',
+      joinClause: `
+        LEFT JOIN (
+          SELECT 
+            NoBJ,
+            Blok,
+            IdLokasi,
+            ROW_NUMBER() OVER (PARTITION BY NoBJ ORDER BY DateCreate DESC) AS rn
+          FROM BarangJadi
+          WHERE IdLokasi IS NOT NULL
+        ) detail ON so.NoBJ = detail.NoBJ
+                 AND detail.rn = 1
+      `,
+      fields: {
+        jmlhSak: 'so.Pcs',     // ✅ gunakan PCS sebagai pengganti jumlah sak
+        berat: 'so.Berat'
+      }
+    },
     reject: {
       table: 'StockOpnameHasilReject',
       labelExpr: 'so.NoReject',
       label: 'Reject',
-      joinClause: `LEFT JOIN (
-          SELECT NoReject, IdLokasi,
-                 ROW_NUMBER() OVER (PARTITION BY NoReject ORDER BY DateUsage DESC) as rn
-          FROM RejectV2 
+      joinClause: `
+        LEFT JOIN (
+          SELECT 
+            NoReject,
+            Blok,
+            IdLokasi,
+            ROW_NUMBER() OVER (PARTITION BY NoReject ORDER BY DateCreate DESC) AS rn
+          FROM RejectV2
           WHERE IdLokasi IS NOT NULL
-        ) detail ON so.NoReject = detail.NoReject AND detail.rn = 1`,
+        ) detail ON so.NoReject = detail.NoReject
+                 AND detail.rn = 1
+      `,
       fields: { jmlhSak: 'NULL', berat: 'so.Berat' }
     }
   };
 
   try {
-    const pool = await poolPromise;         // ✅ global pool
+    const pool = await poolPromise;
     const request = pool.request();
 
+    // --- input dasar ---
     request.input('noso', sql.VarChar, noso);
     if (filterByUser) request.input('username', sql.VarChar, username);
-    if (idLokasi && idLokasi !== 'all') request.input('idLokasi', sql.VarChar, idLokasi);
     if (search) request.input('search', sql.VarChar, `%${search}%`);
 
+    // --- lokasi & blok dipisah ---
+    if (blok && blok !== 'all') request.input('blok', sql.VarChar, blok);
+    if (idLokasi && idLokasi !== 'all') request.input('idLokasi', sql.Int, parseInt(idLokasi));
+
+    const makeWhereLokasi = () => {
+      if (blok && blok !== 'all' && idLokasi && idLokasi !== 'all') {
+        return 'AND detail.Blok = @blok AND detail.IdLokasi = @idLokasi';
+      } else if (blok && blok !== 'all') {
+        return 'AND detail.Blok = @blok';
+      } else if (idLokasi && idLokasi !== 'all') {
+        return 'AND detail.IdLokasi = @idLokasi';
+      }
+      return '';
+    };
+
+    // === query builder ===
     const makeQuery = (table, labelExpr, labelType, joinClause, fields = {}) => `
       SELECT 
         ${labelExpr} AS NomorLabel, 
@@ -422,13 +632,14 @@ async function getStockOpnameHasil({
         ${fields.jmlhSak || 'NULL'} AS JmlhSak, 
         ${fields.berat || 'NULL'} AS Berat,
         ISNULL(so.DateTimeScan, '1900-01-01') AS DateTimeScan,
+        detail.Blok,
         detail.IdLokasi,
         so.Username
       FROM ${table} so
       ${joinClause}
       WHERE so.NoSO = @noso
       ${filterByUser ? 'AND so.Username = @username' : ''}
-      ${idLokasi && idLokasi !== 'all' ? 'AND detail.IdLokasi = @idLokasi' : ''}
+      ${makeWhereLokasi()}
       ${search ? `AND ${labelExpr} LIKE @search` : ''}
     `;
 
@@ -438,29 +649,21 @@ async function getStockOpnameHasil({
       ${joinClause}
       WHERE so.NoSO = @noso
       ${filterByUser ? 'AND so.Username = @username' : ''}
-      ${idLokasi && idLokasi !== 'all' ? 'AND detail.IdLokasi = @idLokasi' : ''}
+      ${makeWhereLokasi()}
       ${search ? `AND ${labelExpr} LIKE @search` : ''}
     `;
 
-    const makeTotalSak = (table, fieldSak, joinClause) => `
-      SELECT ROUND(SUM(${fieldSak}), 2) AS total FROM ${table} so
+    const makeTotal = (field, table, joinClause) => `
+      SELECT ROUND(SUM(${field}), 2) AS total
+      FROM ${table} so
       ${joinClause}
       WHERE so.NoSO = @noso
       ${filterByUser ? 'AND so.Username = @username' : ''}
-      ${idLokasi && idLokasi !== 'all' ? 'AND detail.IdLokasi = @idLokasi' : ''}
-      ${search ? `AND ${fieldSak !== 'NULL' ? fieldSak : '1'} IS NOT NULL AND 1=1` : ''}
+      ${makeWhereLokasi()}
     `;
 
-    const makeTotalBerat = (table, fieldBerat, joinClause) => `
-      SELECT ROUND(SUM(${fieldBerat}), 2) AS total FROM ${table} so
-      ${joinClause}
-      WHERE so.NoSO = @noso
-      ${filterByUser ? 'AND so.Username = @username' : ''}
-      ${idLokasi && idLokasi !== 'all' ? 'AND detail.IdLokasi = @idLokasi' : ''}
-      ${search ? `AND ${fieldBerat !== 'NULL' ? fieldBerat : '1'} IS NOT NULL AND 1=1` : ''}
-    `;
-
-    let query = '', totalQuery = '', totalBeratQuery = '', totalSakQuery = '';
+    // === generate final query ===
+    let query = '', totalQuery = '', totalSakQuery = '', totalBeratQuery = '';
 
     if (filterBy !== 'all') {
       const filter = filterMap[filterBy.toLowerCase()];
@@ -472,16 +675,20 @@ async function getStockOpnameHasil({
         OFFSET ${offset} ROWS FETCH NEXT ${pageSize} ROWS ONLY;
       `;
       totalQuery = makeCount(filter.table, filter.labelExpr, filter.joinClause);
-      totalBeratQuery = makeTotalBerat(filter.table, filter.fields.berat, filter.joinClause);
       totalSakQuery = filter.fields.jmlhSak !== 'NULL'
-        ? makeTotalSak(filter.table, filter.fields.jmlhSak, filter.joinClause)
-        : 'SELECT NULL AS total;';
+        ? makeTotal(filter.fields.jmlhSak, filter.table, filter.joinClause)
+        : 'SELECT NULL AS total';
+      totalBeratQuery = makeTotal(filter.fields.berat, filter.table, filter.joinClause);
     } else {
       const all = Object.values(filterMap);
       const allQueries = all.map(f => makeQuery(f.table, f.labelExpr, f.label, f.joinClause, f.fields));
       const allCounts = all.map(f => makeCount(f.table, f.labelExpr, f.joinClause));
-      const allSak = all.map(f => f.fields.jmlhSak !== 'NULL' ? makeTotalSak(f.table, f.fields.jmlhSak, f.joinClause) : 'SELECT 0 AS total');
-      const allBerat = all.map(f => makeTotalBerat(f.table, f.fields.berat, f.joinClause));
+      const allSak = all.map(f =>
+        f.fields.jmlhSak !== 'NULL'
+          ? makeTotal(f.fields.jmlhSak, f.table, f.joinClause)
+          : 'SELECT 0 AS total'
+      );
+      const allBerat = all.map(f => makeTotal(f.fields.berat, f.table, f.joinClause));
 
       query = `
         SELECT * FROM (
@@ -490,23 +697,12 @@ async function getStockOpnameHasil({
         ORDER BY DateTimeScan DESC
         OFFSET ${offset} ROWS FETCH NEXT ${pageSize} ROWS ONLY;
       `;
-      totalQuery = `
-        SELECT SUM(total) AS total FROM (
-          ${allCounts.join(' UNION ALL ')}
-        ) AS totalData;
-      `;
-      totalSakQuery = `
-        SELECT ROUND(SUM(total), 2) AS total FROM (
-          ${allSak.join(' UNION ALL ')}
-        ) AS sakData;
-      `;
-      totalBeratQuery = `
-        SELECT ROUND(SUM(total), 2) AS total FROM (
-          ${allBerat.join(' UNION ALL ')}
-        ) AS beratData;
-      `;
+      totalQuery = `SELECT SUM(total) AS total FROM (${allCounts.join(' UNION ALL ')}) AS totalData;`;
+      totalSakQuery = `SELECT ROUND(SUM(total), 2) AS total FROM (${allSak.join(' UNION ALL ')}) AS sakData;`;
+      totalBeratQuery = `SELECT ROUND(SUM(total), 2) AS total FROM (${allBerat.join(' UNION ALL ')}) AS beratData;`;
     }
 
+    // === eksekusi paralel ===
     const [result, total, berat, sak] = await Promise.all([
       request.query(query),
       request.query(totalQuery),
@@ -514,6 +710,7 @@ async function getStockOpnameHasil({
       request.query(totalSakQuery)
     ]);
 
+    // === format output ===
     const formattedData = result.recordset.map(item => ({
       ...item,
       DateTimeScan:
@@ -537,6 +734,7 @@ async function getStockOpnameHasil({
     throw new Error(`Stock Opname Hasil Service Error: ${err.message}`);
   }
 }
+
 
 
 async function deleteStockOpnameHasil({ noso, nomorLabel }) {
@@ -1418,7 +1616,7 @@ async function validateStockOpnameLabel({ noso, label, username }) {
 }
 
 
-async function insertStockOpnameLabel({ noso, label, jmlhSak = 0, berat = 0, idlokasi, username }) {
+async function insertStockOpnameLabel({ noso, label, jmlhSak = 0, berat = 0, idlokasi, blok, username }) {
   if (!label) {
     throw new Error('Label wajib diisi');
   }
@@ -1431,8 +1629,9 @@ async function insertStockOpnameLabel({ noso, label, jmlhSak = 0, berat = 0, idl
     request.input('jmlhSak', sql.Int, jmlhSak);
     request.input('berat', sql.Float, berat);
     request.input('DateTimeScan', sql.DateTime, new Date());
-    request.input('idlokasi', sql.VarChar, idlokasi);
-
+    request.input('idlokasi', sql.Int, idlokasi);         // <<== INT (penting)
+    request.input('blok', sql.VarChar(3), blok);          // <<== Blok (char/varchar(3))
+    
     const isBahanBaku = label.startsWith('A.') && label.includes('-');
     const isWashing = label.startsWith('B.') && !label.includes('-');
     const isBroker = label.startsWith('D.') && !label.includes('-');
@@ -1462,194 +1661,365 @@ async function insertStockOpnameLabel({ noso, label, jmlhSak = 0, berat = 0, idl
           VALUES (@noso, @NoBahanBaku, @NoPallet, @jmlhSak, @berat, @username, @DateTimeScan)
         `);
 
-      await request.query(`
-          UPDATE BahanBaku_d
-          SET IdLokasi = @idlokasi
+        await request.query(`
+          UPDATE BahanBakuPallet_h
+          SET Blok = @blok, IdLokasi = @idlokasi
           WHERE NoBahanBaku = @NoBahanBaku AND NoPallet = @NoPallet
         `);
 
-      insertedData = {
-        noso, nomorLabel: label, labelType: 'Bahan Baku', labelTypeCode: 'bahanbaku',
-        jmlhSak, berat, idlokasi, username, timestamp: new Date()
-      };
+        insertedData = {
+          noso, nomorLabel: label, labelType: 'Bahan Baku', labelTypeCode: 'bahanbaku',
+          jmlhSak, berat, idlokasi, blok, username, timestamp: new Date()
+        };
 
     } else if (isWashing) {
       request.input('NoWashing', sql.VarChar, label);
-
+      // pastikan sudah bind ini di atas:
+      // request.input('idlokasi', sql.Int, idlokasi);
+      // request.input('blok', sql.VarChar(3), blok);
+    
+      // 1) insert hasil scan
       await request.query(`
-          INSERT INTO StockOpnameHasilWashing
+        INSERT INTO StockOpnameHasilWashing
           (NoSO, NoWashing, JmlhSak, Berat, Username, DateTimeScan)
-          VALUES (@noso, @NoWashing, @jmlhSak, @berat, @username, @DateTimeScan)
-        `);
-
-      await request.query(`
-          UPDATE Washing_d
-          SET IdLokasi = @idlokasi
-          WHERE NoWashing = @NoWashing
-        `);
-
+        VALUES
+          (@noso, @NoWashing, @jmlhSak, @berat, @username, @DateTimeScan)
+      `);
+    
+      // 2) update lokasi di HEADER saja
+      const upd = await request.query(`
+        UPDATE Washing_h
+        SET Blok = @blok,
+            IdLokasi = @idlokasi
+        WHERE NoWashing = @NoWashing
+      `);
+    
+      // jika tidak ada baris yang ter-update, fail fast
+      if (!upd.rowsAffected || upd.rowsAffected[0] === 0) {
+        throw new Error('NoWashing tidak ditemukan di Washing_h');
+      }
+    
       insertedData = {
-        noso, nomorLabel: label, labelType: 'Washing', labelTypeCode: 'washing',
-        jmlhSak, berat, idlokasi, username, timestamp: new Date()
+        noso,
+        nomorLabel: label,
+        labelType: 'Washing',
+        labelTypeCode: 'washing',
+        jmlhSak,
+        berat,
+        idlokasi,
+        blok,
+        username,
+        timestamp: new Date()
       };
 
     } else if (isBroker) {
       request.input('NoBroker', sql.VarChar, label);
-
+      // pastikan sudah bind ini di atas service:
+      // request.input('idlokasi', sql.Int, idlokasi);
+      // request.input('blok', sql.VarChar(3), blok);
+    
+      // 1) insert hasil scan
       await request.query(`
-          INSERT INTO StockOpnameHasilBroker
+        INSERT INTO StockOpnameHasilBroker
           (NoSO, NoBroker, JmlhSak, Berat, Username, DateTimeScan)
-          VALUES (@noso, @NoBroker, @jmlhSak, @berat, @username, @DateTimeScan)
-        `);
-
-      await request.query(`
-          UPDATE Broker_d
-          SET IdLokasi = @idlokasi
-          WHERE NoBroker = @NoBroker
-        `);
-
+        VALUES
+          (@noso, @NoBroker, @jmlhSak, @berat, @username, @DateTimeScan)
+      `);
+    
+      // 2) update lokasi di HEADER saja (Broker_h)
+      const upd = await request.query(`
+        UPDATE Broker_h
+        SET Blok = @blok,
+            IdLokasi = @idlokasi
+        WHERE NoBroker = @NoBroker
+      `);
+    
+      // jika tidak ada baris ter-update, lempar error biar ketahuan datanya belum ada
+      if (!upd.rowsAffected || upd.rowsAffected[0] === 0) {
+        throw new Error('NoBroker tidak ditemukan di Broker_h');
+      }
+    
       insertedData = {
-        noso, nomorLabel: label, labelType: 'Broker', labelTypeCode: 'broker',
-        jmlhSak, berat, idlokasi, username, timestamp: new Date()
+        noso,
+        nomorLabel: label,
+        labelType: 'Broker',
+        labelTypeCode: 'broker',
+        jmlhSak,
+        berat,
+        idlokasi,
+        blok,
+        username,
+        timestamp: new Date()
       };
-
+      
     } else if (isCrusher) {
       request.input('NoCrusher', sql.VarChar, label);
 
+      // 1) catat hasil scan (Crusher tidak pakai jmlhSak)
       await request.query(`
-          INSERT INTO StockOpnameHasilCrusher
+        INSERT INTO StockOpnameHasilCrusher
           (NoSO, NoCrusher, Berat, Username, DateTimeScan)
-          VALUES (@noso, @NoCrusher, @berat, @username, @DateTimeScan)
-        `);
-
-      await request.query(`
-          UPDATE Crusher
-          SET IdLokasi = @idlokasi
-          WHERE NoCrusher = @NoCrusher
-        `);
-
+        VALUES
+          (@noso, @NoCrusher, @berat, @username, @DateTimeScan)
+      `);
+    
+      // 2) update lokasi & blok di HEADER Crusher
+      const upd = await request.query(`
+        UPDATE Crusher
+        SET Blok = @blok,
+            IdLokasi = @idlokasi
+        WHERE NoCrusher = @NoCrusher
+      `);
+    
+      if (!upd.rowsAffected || upd.rowsAffected[0] === 0) {
+        throw new Error('NoCrusher tidak ditemukan di tabel Crusher');
+      }
+    
       insertedData = {
-        noso, nomorLabel: label, labelType: 'Crusher', labelTypeCode: 'crusher',
-        jmlhSak, berat, idlokasi, username, timestamp: new Date()
+        noso,
+        nomorLabel: label,
+        labelType: 'Crusher',
+        labelTypeCode: 'crusher',
+        jmlhSak,           // tetap ikut dikembalikan meski tidak dipakai saat insert
+        berat,
+        idlokasi,
+        blok,              // <-- tambahkan supaya client tahu blok yang di-set
+        username,
+        timestamp: new Date()
       };
 
     } else if (isBonggolan) {
       request.input('NoBonggolan', sql.VarChar, label);
-
+      // pastikan di atas sudah ada:
+      // request.input('idlokasi', sql.Int, idlokasi);
+      // request.input('blok', sql.VarChar(3), blok);
+    
+      // 1) insert hasil scan (Bonggolan tidak pakai jmlhSak)
       await request.query(`
-          INSERT INTO StockOpnameHasilBonggolan
+        INSERT INTO StockOpnameHasilBonggolan
           (NoSO, NoBonggolan, Berat, Username, DateTimeScan)
-          VALUES (@noso, @NoBonggolan, @berat, @username, @DateTimeScan)
-        `);
-
-      await request.query(`
-          UPDATE Bonggolan
-          SET IdLokasi = @idlokasi
-          WHERE NoBonggolan = @NoBonggolan
-        `);
-
+        VALUES
+          (@noso, @NoBonggolan, @berat, @username, @DateTimeScan)
+      `);
+    
+      // 2) update lokasi & blok di header Bonggolan
+      const upd = await request.query(`
+        UPDATE Bonggolan
+        SET Blok = @blok,
+            IdLokasi = @idlokasi
+        WHERE NoBonggolan = @NoBonggolan
+      `);
+    
+      if (!upd.rowsAffected || upd.rowsAffected[0] === 0) {
+        throw new Error('NoBonggolan tidak ditemukan di tabel Bonggolan');
+      }
+    
       insertedData = {
-        noso, nomorLabel: label, labelType: 'Bonggolan', labelTypeCode: 'bonggolan',
-        jmlhSak, berat, idlokasi, username, timestamp: new Date()
+        noso,
+        nomorLabel: label,
+        labelType: 'Bonggolan',
+        labelTypeCode: 'bonggolan',
+        jmlhSak,         // dikembalikan apa adanya (walau tidak di-insert)
+        berat,
+        idlokasi,
+        blok,            // <-- kirim balik blok yang di-set
+        username,
+        timestamp: new Date()
       };
 
     } else if (isGilingan) {
       request.input('NoGilingan', sql.VarChar, label);
-
+      // pastikan sebelum ini sudah ada:
+      // request.input('idlokasi', sql.Int, idlokasi);
+      // request.input('blok', sql.VarChar(3), blok);
+    
+      // 1) insert hasil scan (Gilingan tidak pakai jmlhSak)
       await request.query(`
-          INSERT INTO StockOpnameHasilGilingan
+        INSERT INTO StockOpnameHasilGilingan
           (NoSO, NoGilingan, Berat, Username, DateTimeScan)
-          VALUES (@noso, @NoGilingan, @berat, @username, @DateTimeScan)
-        `);
-
-      await request.query(`
-          UPDATE Gilingan
-          SET IdLokasi = @idlokasi
-          WHERE NoGilingan = @NoGilingan
-        `);
-
+        VALUES
+          (@noso, @NoGilingan, @berat, @username, @DateTimeScan)
+      `);
+    
+      // 2) update lokasi & blok di header Gilingan
+      const upd = await request.query(`
+        UPDATE Gilingan
+        SET Blok = @blok,
+            IdLokasi = @idlokasi
+        WHERE NoGilingan = @NoGilingan
+      `);
+    
+      if (!upd.rowsAffected || upd.rowsAffected[0] === 0) {
+        throw new Error('NoGilingan tidak ditemukan di tabel Gilingan');
+      }
+    
       insertedData = {
-        noso, nomorLabel: label, labelType: 'Gilingan', labelTypeCode: 'gilingan',
-        jmlhSak, berat, idlokasi, username, timestamp: new Date()
+        noso,
+        nomorLabel: label,
+        labelType: 'Gilingan',
+        labelTypeCode: 'gilingan',
+        jmlhSak,       // dikembalikan apa adanya (walau tidak dipakai saat insert)
+        berat,
+        idlokasi,
+        blok,          // kirim balik blok yang di-set
+        username,
+        timestamp: new Date()
       };
 
     } else if (isMixer) {
       request.input('NoMixer', sql.VarChar, label);
+      // pastikan di atas sudah ada:
+      // request.input('idlokasi', sql.Int, idlokasi);
+      // request.input('blok', sql.VarChar(3), blok);
 
+      // 1) insert hasil scan
       await request.query(`
-          INSERT INTO StockOpnameHasilMixer
+        INSERT INTO StockOpnameHasilMixer
           (NoSO, NoMixer, JmlhSak, Berat, Username, DateTimeScan)
-          VALUES (@noso, @NoMixer, @jmlhSak, @berat, @username, @DateTimeScan)
-        `);
+        VALUES
+          (@noso, @NoMixer, @jmlhSak, @berat, @username, @DateTimeScan)
+      `);
 
-      await request.query(`
-          UPDATE Mixer_d
-          SET IdLokasi = @idlokasi
-          WHERE NoMixer = @NoMixer
-        `);
+      // 2) update lokasi & blok di HEADER: Mixer_h
+      const upd = await request.query(`
+        UPDATE Mixer_h
+        SET Blok = @blok,
+            IdLokasi = @idlokasi
+        WHERE NoMixer = @NoMixer
+      `);
+
+      if (!upd.rowsAffected || upd.rowsAffected[0] === 0) {
+        throw new Error('NoMixer tidak ditemukan di Mixer_h');
+      }
 
       insertedData = {
-        noso, nomorLabel: label, labelType: 'Mixer', labelTypeCode: 'mixer',
-        jmlhSak, berat, idlokasi, username, timestamp: new Date()
+        noso,
+        nomorLabel: label,
+        labelType: 'Mixer',
+        labelTypeCode: 'mixer',
+        jmlhSak,
+        berat,
+        idlokasi,
+        blok,          // kirim balik blok yang di-set
+        username,
+        timestamp: new Date()
       };
 
     } else if (isFurnitureWIP) {
       request.input('NoFurnitureWIP', sql.VarChar, label);
-
+      // pastikan di atas sudah ada:
+      // request.input('idlokasi', sql.Int, idlokasi);
+      // request.input('blok', sql.VarChar(3), blok);
+    
+      // 1) insert hasil scan (Pcs = jmlhSak)
       await request.query(`
-          INSERT INTO StockOpnameHasilFurnitureWIP
+        INSERT INTO StockOpnameHasilFurnitureWIP
           (NoSO, NoFurnitureWIP, Pcs, Berat, Username, DateTimeScan)
-          VALUES (@noso, @NoFurnitureWIP, @jmlhSak, @berat, @username, @DateTimeScan)
-        `);
-
-      await request.query(`
-          UPDATE FurnitureWIP
-          SET IdLokasi = @idlokasi
-          WHERE NoFurnitureWIP = @NoFurnitureWIP
-        `);
-
+        VALUES
+          (@noso, @NoFurnitureWIP, @jmlhSak, @berat, @username, @DateTimeScan)
+      `);
+    
+      // 2) update lokasi & blok di header FurnitureWIP
+      const upd = await request.query(`
+        UPDATE FurnitureWIP
+        SET Blok = @blok,
+            IdLokasi = @idlokasi
+        WHERE NoFurnitureWIP = @NoFurnitureWIP
+      `);
+    
+      if (!upd.rowsAffected || upd.rowsAffected[0] === 0) {
+        throw new Error('NoFurnitureWIP tidak ditemukan di tabel FurnitureWIP');
+      }
+    
       insertedData = {
-        noso, nomorLabel: label, labelType: 'Furniture WIP', labelTypeCode: 'furniturewip',
-        jmlhSak, berat, idlokasi, username, timestamp: new Date()
+        noso,
+        nomorLabel: label,
+        labelType: 'Furniture WIP',
+        labelTypeCode: 'furniturewip',
+        jmlhSak,      // dipakai sebagai Pcs pada insert hasil
+        berat,
+        idlokasi,
+        blok,         // kirim balik blok yang di-set
+        username,
+        timestamp: new Date()
       };
 
     } else if (isBarangJadi) {
       request.input('NoBJ', sql.VarChar, label);
-
+      // pastikan di atas sudah ada binding:
+      // request.input('idlokasi', sql.Int, idlokasi);
+      // request.input('blok', sql.VarChar(3), blok);
+    
+      // 1) insert hasil scan (Pcs = jmlhSak)
       await request.query(`
-          INSERT INTO StockOpnameHasilBarangJadi
+        INSERT INTO StockOpnameHasilBarangJadi
           (NoSO, NoBJ, Pcs, Berat, Username, DateTimeScan)
-          VALUES (@noso, @NoBJ, @jmlhSak, @berat, @username, @DateTimeScan)
-        `);
-
-      await request.query(`
-          UPDATE BarangJadi
-          SET IdLokasi = @idlokasi
-          WHERE NoBJ = @NoBJ
-        `);
-
+        VALUES
+          (@noso, @NoBJ, @jmlhSak, @berat, @username, @DateTimeScan)
+      `);
+    
+      // 2) update lokasi & blok di header BarangJadi
+      const upd = await request.query(`
+        UPDATE BarangJadi
+        SET Blok = @blok,
+            IdLokasi = @idlokasi
+        WHERE NoBJ = @NoBJ
+      `);
+    
+      if (!upd.rowsAffected || upd.rowsAffected[0] === 0) {
+        throw new Error('NoBJ tidak ditemukan di tabel BarangJadi');
+      }
+    
       insertedData = {
-        noso, nomorLabel: label, labelType: 'Barang Jadi', labelTypeCode: 'barangjadi',
-        jmlhSak, berat, idlokasi, username, timestamp: new Date()
+        noso,
+        nomorLabel: label,
+        labelType: 'Barang Jadi',
+        labelTypeCode: 'barangjadi',
+        jmlhSak,     // dipakai sebagai Pcs pada insert hasil
+        berat,
+        idlokasi,
+        blok,        // kirim balik blok yang di-set
+        username,
+        timestamp: new Date()
       };
+
     } else if (isReject) {
       request.input('NoReject', sql.VarChar, label);
-
+      // pastikan sebelum ini sudah ada:
+      // request.input('idlokasi', sql.Int, idlokasi);
+      // request.input('blok', sql.VarChar(3), blok);
+    
+      // 1) insert hasil scan (Reject tidak pakai jmlhSak)
       await request.query(`
-          INSERT INTO StockOpnameHasilReject
+        INSERT INTO StockOpnameHasilReject
           (NoSO, NoReject, Berat, Username, DateTimeScan)
-          VALUES (@noso, @NoReject, @berat, @username, @DateTimeScan)
-        `);
-
-      await request.query(`
-          UPDATE RejectV2
-          SET IdLokasi = @idlokasi
-          WHERE NoReject = @NoReject
-        `);
-
+        VALUES
+          (@noso, @NoReject, @berat, @username, @DateTimeScan)
+      `);
+    
+      // 2) update lokasi & blok di RejectV2
+      const upd = await request.query(`
+        UPDATE RejectV2
+        SET Blok = @blok,
+            IdLokasi = @idlokasi
+        WHERE NoReject = @NoReject
+      `);
+    
+      if (!upd.rowsAffected || upd.rowsAffected[0] === 0) {
+        throw new Error('NoReject tidak ditemukan di tabel RejectV2');
+      }
+    
       insertedData = {
-        noso, nomorLabel: label, labelType: 'Reject', labelTypeCode: 'reject',
-        jmlhSak, berat, idlokasi, username, timestamp: new Date()
+        noso,
+        nomorLabel: label,
+        labelType: 'Reject',
+        labelTypeCode: 'reject',
+        jmlhSak,      // dikembalikan apa adanya (tidak di-insert)
+        berat,
+        idlokasi,
+        blok,         // kirim balik blok yang di-set
+        username,
+        timestamp: new Date()
       };
     }
 

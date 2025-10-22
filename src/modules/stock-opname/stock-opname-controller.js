@@ -29,53 +29,87 @@ async function noStockOpnameHandler(req, res) {
 
 async function stockOpnameAcuanHandler(req, res) {
   const { noso } = req.params;
-  const page = parseInt(req.query.page) || 1;
-  const pageSize = parseInt(req.query.pageSize) || 20;
+
+  // 📄 Ambil query parameter
+  const page = parseInt(req.query.page, 10) || 1;
+  const pageSize = parseInt(req.query.pageSize, 10) || 20;
   const filterBy = req.query.filterBy || 'all';
-  const idLokasi = req.query.idlokasi;
+
+  // ✅ Sekarang blok & idLokasi dipisah
+  const blok = req.query.blok || null;        // varchar(3)
+  const idLokasi = req.query.idLokasi || null; // int
   const search = req.query.search || '';
   const { username } = req;
 
-  console.log(`[${new Date().toISOString()}] StockOpnameAcuan - ${username} mengakses kategori: ${filterBy} search: ${search}`);
+  // Logging untuk debugging
+  console.log(
+    `[${new Date().toISOString()}] StockOpnameAcuan - ${username} ` +
+    `kategori=${filterBy} | blok=${blok || '-'} | idLokasi=${idLokasi || '-'} | search="${search}"`
+  );
 
   try {
-    const result = await getStockOpnameAcuan({ noso, page, pageSize, filterBy, idLokasi, search });
-    res.json(result);
+    const result = await getStockOpnameAcuan({
+      noso,
+      page,
+      pageSize,
+      filterBy,
+      blok,       // ✅ kirim ke service
+      idLokasi,   // ✅ kirim ke service
+      search
+    });
+
+    res.status(200).json(result);
   } catch (err) {
-    console.error('❌ Error:', err.message);
-    res.status(500).json({ message: 'Internal Server Error', error: err.message });
+    console.error('❌ Error StockOpnameAcuanHandler:', err.message);
+    res.status(500).json({
+      message: 'Internal Server Error',
+      error: err.message
+    });
   }
 }
 
+
+// ✅ Controller: stockOpnameHasilHandler.js
 async function stockOpnameHasilHandler(req, res) {
-    const { noso } = req.params;
-    const page = parseInt(req.query.page) || 1;
-    const pageSize = parseInt(req.query.pageSize) || 20;
-    const filterBy = req.query.filterBy || 'all';
-    const idLokasi = req.query.idlokasi;
-    const search = req.query.search || '';
-    const filterByUser = req.query.filterbyuser === 'true';
-    const { username } = req;
-  
-    console.log(`[${new Date().toISOString()}] StockOpnameHasil - ${username} mengakses kategori: ${filterBy} | filterByUser=${filterByUser} | search="${search}"`);
-  
-    try {
-      const result = await getStockOpnameHasil({
-        noso,
-        page,
-        pageSize,
-        filterBy,
-        idLokasi,
-        search,
-        filterByUser,
-        username
-      });
-      res.json(result);
-    } catch (err) {
-      console.error('❌ Error:', err.message);
-      res.status(500).json({ message: 'Internal Server Error', error: err.message });
-    }
+  const { noso } = req.params;
+  const page = parseInt(req.query.page, 10) || 1;
+  const pageSize = parseInt(req.query.pageSize, 10) || 20;
+  const filterBy = req.query.filterBy || 'all';
+
+  // 🔹 Sekarang blok & idLokasi terpisah dari query
+  const blok = req.query.blok || null;
+  const idLokasi = req.query.idLokasi || null;
+
+  const search = req.query.search || '';
+  const filterByUser = req.query.filterbyuser === 'true';
+  const { username } = req;
+
+  console.log(`[${new Date().toISOString()}] StockOpnameHasil - ${username} 
+    mengakses kategori: ${filterBy} | blok=${blok || '-'} | idLokasi=${idLokasi || '-'} 
+    | filterByUser=${filterByUser} | search="${search}"`);
+
+  try {
+    const result = await getStockOpnameHasil({
+      noso,
+      page,
+      pageSize,
+      filterBy,
+      blok,             // ✅ kirim ke service
+      idLokasi,         // ✅ kirim ke service
+      search,
+      filterByUser,
+      username,
+    });
+
+    res.json(result);
+  } catch (err) {
+    console.error('❌ Error StockOpnameHasilHandler:', err.message);
+    res.status(500).json({
+      message: 'Internal Server Error',
+      error: err.message,
+    });
   }
+}
 
 
   async function deleteStockOpnameHasilHandler(req, res) {
@@ -111,18 +145,54 @@ async function stockOpnameHasilHandler(req, res) {
   
   async function insertStockOpnameLabelHandler(req, res) {
     const { noso } = req.params;
-    const { label, jmlhSak = 0, berat = 0, idlokasi } = req.body;
+    const { label, jmlhSak = 0, berat = 0, idlokasi, blok } = req.body;
     const { username } = req;
   
     try {
+      // ====== basic validations ======
+      if (!label || String(label).trim() === '') {
+        return res.status(400).json({ message: 'Label wajib diisi' });
+      }
+      if (blok == null || String(blok).trim() === '') {
+        return res.status(400).json({ message: 'Blok wajib diisi' });
+      }
+  
+      // paksa tipe angka utk idlokasi/jmlhSak/berat
+      const idlokasiNum = Number(idlokasi);
+      const jmlhSakNum  = Number(jmlhSak);
+      const beratNum    = Number(berat);
+  
+      if (!Number.isInteger(idlokasiNum)) {
+        return res.status(400).json({ message: "idlokasi harus bertipe integer" });
+      }
+      if (Number.isNaN(jmlhSakNum) || jmlhSakNum < 0) {
+        return res.status(400).json({ message: "jmlhSak harus angka >= 0" });
+      }
+      if (Number.isNaN(beratNum) || beratNum < 0) {
+        return res.status(400).json({ message: "berat harus angka >= 0" });
+      }
+  
+      // normalisasi ringan utk blok (opsional): trim + uppercase
+      const blokNorm = String(blok).trim().toUpperCase();
+      // kalau kolom di DB char(3), kamu boleh validasi panjangnya:
+      // if (blokNorm.length > 3) return res.status(400).json({ message: "blok max 3 karakter" });
+  
       const result = await insertStockOpnameLabel({
-        noso, label, jmlhSak, berat, idlokasi, username
+        noso,
+        label: String(label).trim(),
+        jmlhSak: jmlhSakNum,
+        berat: beratNum,
+        idlokasi: idlokasiNum,
+        blok: blokNorm,
+        username
       });
-      res.json(result);
+  
+      return res.json(result);
     } catch (err) {
-      res.status(400).json({ message: err.message });
+      return res.status(400).json({ message: err.message });
     }
   }
+  
 
   async function stockOpnameFamiliesHandler(req, res) {
     const { noso } = req.params;

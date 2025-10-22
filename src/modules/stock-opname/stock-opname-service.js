@@ -902,14 +902,14 @@ async function validateStockOpnameLabel({ noso, label, username }) {
                       ELSE ISNULL(d.Berat,0)
                   END
               ) AS Berat
-          FROM [PPS_TEST2].[dbo].[BahanBaku_d] d
+          FROM [dbo].[BahanBaku_d] d
           LEFT JOIN (
               SELECT 
                   NoBahanBaku, 
                   NoPallet, 
                   NoSak, 
                   SUM(Berat) AS TotalPartial
-              FROM [PPS_TEST2].[dbo].[BahanBakuPartial]
+              FROM [dbo].[BahanBakuPartial]
               WHERE NoBahanBaku = @NoBahanBaku 
                 AND NoPallet = @NoPallet
               GROUP BY NoBahanBaku, NoPallet, NoSak
@@ -992,13 +992,13 @@ async function validateStockOpnameLabel({ noso, label, username }) {
                     ELSE ISNULL(d.Berat,0)
                 END
             ) AS Berat
-        FROM [PPS_TEST2].[dbo].[Broker_d] d
+        FROM [dbo].[Broker_d] d
         LEFT JOIN (
             SELECT 
                 NoBroker,
                 NoSak,
                 SUM(Berat) AS TotalPartial
-            FROM [PPS_TEST2].[dbo].[BrokerPartial]
+            FROM [dbo].[BrokerPartial]
             WHERE NoBroker = @NoBroker
             GROUP BY NoBroker, NoSak
         ) p 
@@ -1163,12 +1163,12 @@ async function validateStockOpnameLabel({ noso, label, username }) {
                   ELSE ISNULL(d.Berat,0)
               END
           ) AS Berat
-      FROM [PPS_TEST2].[dbo].[Gilingan] d
+      FROM [dbo].[Gilingan] d
       LEFT JOIN (
           SELECT 
               NoGilingan,
               SUM(Berat) AS TotalPartial
-          FROM [PPS_TEST2].[dbo].[GilinganPartial]
+          FROM [dbo].[GilinganPartial]
           WHERE NoGilingan = @NoGilingan
           GROUP BY NoGilingan
       ) p 
@@ -1212,13 +1212,13 @@ async function validateStockOpnameLabel({ noso, label, username }) {
                   ELSE ISNULL(d.Berat,0)
               END
           ) AS Berat
-      FROM [PPS_TEST2].[dbo].[Mixer_d] d
+      FROM [dbo].[Mixer_d] d
       LEFT JOIN (
           SELECT 
               NoMixer,
               NoSak,
               SUM(Berat) AS TotalPartial
-          FROM [PPS_TEST2].[dbo].[MixerPartial]
+          FROM [dbo].[MixerPartial]
           WHERE NoMixer = @NoMixer
           GROUP BY NoMixer, NoSak
       ) p 
@@ -1265,12 +1265,12 @@ async function validateStockOpnameLabel({ noso, label, username }) {
               END
           ) AS JmlhSak,
           SUM(d.Berat) AS Berat
-      FROM [PPS_TEST2].[dbo].[FurnitureWIP] d
+      FROM [dbo].[FurnitureWIP] d
       LEFT JOIN (
           SELECT 
               NoFurnitureWIP,
               SUM(Pcs) AS TotalPartialPcs
-          FROM [PPS_TEST2].[dbo].[FurnitureWIPPartial]
+          FROM [dbo].[FurnitureWIPPartial]
           WHERE NoFurnitureWIP = @NoFurnitureWIP
           GROUP BY NoFurnitureWIP
       ) p 
@@ -1314,12 +1314,12 @@ async function validateStockOpnameLabel({ noso, label, username }) {
               END
           ) AS JmlhSak,
           SUM(d.Berat) AS Berat
-      FROM [PPS_TEST2].[dbo].[BarangJadi] d
+      FROM [dbo].[BarangJadi] d
       LEFT JOIN (
           SELECT 
               NoBJ,
               SUM(Pcs) AS TotalPartialPcs
-          FROM [PPS_TEST2].[dbo].[BarangJadiPartial]
+          FROM [dbo].[BarangJadiPartial]
           WHERE NoBJ = @NoBJ
           GROUP BY NoBJ
       ) p 

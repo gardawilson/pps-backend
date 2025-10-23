@@ -146,7 +146,7 @@ async function stockOpnameHasilHandler(req, res) {
   async function insertStockOpnameLabelHandler(req, res) {
     const { noso } = req.params;
     const { label, jmlhSak = 0, berat = 0, idlokasi, blok } = req.body;
-    const { username } = req;
+    const { idUsername, username } = req;
   
     try {
       // ====== basic validations ======
@@ -184,7 +184,8 @@ async function stockOpnameHasilHandler(req, res) {
         berat: beratNum,
         idlokasi: idlokasiNum,
         blok: blokNorm,
-        username
+        username,
+        idUsername
       });
   
       return res.json(result);

@@ -9,7 +9,7 @@ async function getAllProduksi(page = 1, pageSize = 20) {
   // 1) Total baris (tanpa JOIN supaya ringan)
   const countQry = `
     SELECT COUNT(1) AS total
-    FROM PPS_TEST2.dbo.WashingProduksi_h WITH (NOLOCK);
+    FROM dbo.WashingProduksi_h WITH (NOLOCK);
   `;
   const countRes = await pool.request().query(countQry);
   const total = countRes.recordset?.[0]?.total || 0;
@@ -34,9 +34,9 @@ async function getAllProduksi(page = 1, pageSize = 20) {
       h.JmlhAnggota,
       h.Hadir,
       h.HourMeter
-    FROM PPS_TEST2.dbo.WashingProduksi_h h WITH (NOLOCK)
-    LEFT JOIN PPS_TEST2.dbo.MstMesin ms     WITH (NOLOCK) ON ms.IdMesin    = h.IdMesin
-    LEFT JOIN PPS_TEST2.dbo.MstOperator op  WITH (NOLOCK) ON op.IdOperator = h.IdOperator
+    FROM dbo.WashingProduksi_h h WITH (NOLOCK)
+    LEFT JOIN dbo.MstMesin ms     WITH (NOLOCK) ON ms.IdMesin    = h.IdMesin
+    LEFT JOIN dbo.MstOperator op  WITH (NOLOCK) ON op.IdOperator = h.IdOperator
     ORDER BY h.TglProduksi DESC, h.JamKerja ASC, h.NoProduksi ASC
     OFFSET @offset ROWS FETCH NEXT @limit ROWS ONLY;
   `;

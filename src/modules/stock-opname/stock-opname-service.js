@@ -1,5 +1,7 @@
 const { sql, poolPromise } = require('../../core/config/db');
 const { formatDate } = require('../../core/utils/date-helper');
+const { insertLogMappingLokasi } = require('../../core/shared/log'); // sesuaikan path
+
 
 
 async function getNoStockOpname() {
@@ -922,8 +924,12 @@ async function validateStockOpnameLabel({ noso, label, username }) {
             AND d.NoPallet = @NoPallet;
       `;      
       warehouseQuery = `
-          SELECT IdWarehouse FROM BahanBakuPallet_h
-          WHERE NoBahanBaku = @NoBahanBaku AND NoPallet = @NoPallet
+        SELECT mb.IdWarehouse
+        FROM [dbo].[BahanBakuPallet_h] bbh
+        JOIN [dbo].[MstBlok] mb
+          ON mb.Blok = bbh.Blok
+        WHERE bbh.NoBahanBaku = @NoBahanBaku
+          AND bbh.NoPallet    = @NoPallet;
         `;
       fallbackQuery = `
           SELECT COUNT(*) AS JumlahSak, SUM(Berat) AS Berat, MAX(IdLokasi) AS IdLokasi, MAX(IdWarehouse) AS IdWarehouse
@@ -954,8 +960,11 @@ async function validateStockOpnameLabel({ noso, label, username }) {
           WHERE NoSO = @noso AND NoWashing = @NoWashing
         `;
       warehouseQuery = `
-          SELECT IdWarehouse FROM Washing_h
-          WHERE NoWashing = @NoWashing
+        SELECT mb.IdWarehouse
+        FROM [dbo].[Washing_h] wh
+        JOIN [dbo].[MstBlok]   mb
+          ON UPPER(LTRIM(RTRIM(mb.Blok))) = UPPER(LTRIM(RTRIM(wh.Blok)))
+        WHERE wh.NoWashing = @NoWashing;
         `;
       fallbackQuery = `
           SELECT COUNT(*) AS JumlahSak, SUM(Berat) AS Berat, MAX(IdLokasi) AS IdLokasi, MAX(IdWarehouse) AS IdWarehouse
@@ -1616,424 +1625,469 @@ async function validateStockOpnameLabel({ noso, label, username }) {
 }
 
 
-async function insertStockOpnameLabel({ noso, label, jmlhSak = 0, berat = 0, idlokasi, blok, username }) {
-  if (!label) {
-    throw new Error('Label wajib diisi');
-  }
+/**
+ * Insert hasil scan stock-opname + update lokasi + tulis log mapping lokasi.
+ * SELALU dalam 1 transaksi agar konsisten.
+ *
+ * @param {Object} p
+ * @param {string} p.noso
+ * @param {string} p.label
+ * @param {number} [p.jmlhSak=0]
+ * @param {number} [p.berat=0]
+ * @param {number} p.idlokasi
+ * @param {string} p.blok                 // char(3)
+ * @param {string} p.username             // untuk catatan hasil scan
+ * @param {number} p.idUsername           // INT, untuk log (wajib jika ingin log berisi user id)
+ */
+async function insertStockOpnameLabel({
+  noso, label, jmlhSak = 0, berat = 0, idlokasi, blok, username, idUsername
+}) {
+  if (!label) throw new Error('Label wajib diisi');
 
-    const pool = await poolPromise;
-    const request = pool.request();
+  // deteksi tipe label
+  const isBahanBaku    = label.startsWith('A.')  && label.includes('-');
+  const isWashing      = label.startsWith('B.')  && !label.includes('-');
+  const isBroker       = label.startsWith('D.')  && !label.includes('-');
+  const isCrusher      = label.startsWith('F.')  && !label.includes('-');
+  const isBonggolan    = label.startsWith('M.')  && !label.includes('-');
+  const isGilingan     = label.startsWith('V.')  && !label.includes('-');
+  const isMixer        = label.startsWith('H.')  && !label.includes('-');
+  const isFurnitureWIP = label.startsWith('BB.') && !label.includes('-');
+  const isBarangJadi   = label.startsWith('BA.') && !label.includes('-');
+  const isReject       = label.startsWith('BF.') && !label.includes('-');
 
-    request.input('noso', sql.VarChar, noso);
-    request.input('username', sql.VarChar, username);
-    request.input('jmlhSak', sql.Int, jmlhSak);
-    request.input('berat', sql.Float, berat);
+  const pool = await poolPromise;
+  const tx = new sql.Transaction(pool);
+  await tx.begin();
+
+  try {
+    const request = new sql.Request(tx);
+
+    // common bindings
+    request.input('noso',         sql.VarChar, noso);
+    request.input('username',     sql.VarChar, username);
+    request.input('jmlhSak',      sql.Int,     jmlhSak);
+    request.input('berat',        sql.Float,   berat);
     request.input('DateTimeScan', sql.DateTime, new Date());
-    request.input('idlokasi', sql.Int, idlokasi);         // <<== INT (penting)
-    request.input('blok', sql.VarChar(3), blok);          // <<== Blok (char/varchar(3))
-    
-    const isBahanBaku = label.startsWith('A.') && label.includes('-');
-    const isWashing = label.startsWith('B.') && !label.includes('-');
-    const isBroker = label.startsWith('D.') && !label.includes('-');
-    const isCrusher = label.startsWith('F.') && !label.includes('-');
-    const isBonggolan = label.startsWith('M.') && !label.includes('-');
-    const isGilingan = label.startsWith('V.') && !label.includes('-');
-    const isMixer = label.startsWith('H.') && !label.includes('-');
-    const isFurnitureWIP = label.startsWith('BB.') && !label.includes('-');
-    const isBarangJadi = label.startsWith('BA.') && !label.includes('-');
-    const isReject = label.startsWith('BF.') && !label.includes('-');
-
+    request.input('idlokasi',     sql.Int,     idlokasi);  // INT
+    request.input('blok',         sql.VarChar(3), blok);   // char(3)
 
     let insertedData = null;
 
+    // ======= BAHAN BAKU =======
     if (isBahanBaku) {
       const [noBahanBaku, noPallet] = label.split('-');
-      if (!noBahanBaku || !noPallet) {
-        throw new Error('Format label bahan baku tidak valid. Contoh: A.0001-1');
-      }
+      if (!noBahanBaku || !noPallet) throw new Error('Format label bahan baku tidak valid. Contoh: A.0001-1');
 
       request.input('NoBahanBaku', sql.VarChar, noBahanBaku);
-      request.input('NoPallet', sql.VarChar, noPallet);
+      request.input('NoPallet',    sql.VarChar, noPallet);
 
+      // BEFORE
+      const before = await request.query(`
+        SELECT TOP 1 Blok AS BeforeBlok, IdLokasi AS BeforeIdLokasi
+        FROM BahanBakuPallet_h
+        WHERE NoBahanBaku=@NoBahanBaku AND NoPallet=@NoPallet
+      `);
+      const beforeBlok = before.recordset?.[0]?.BeforeBlok ?? null;
+      const beforeId   = before.recordset?.[0]?.BeforeIdLokasi ?? null;
+
+      // INSERT hasil
       await request.query(`
-          INSERT INTO StockOpnameHasilBahanBaku
+        INSERT INTO StockOpnameHasilBahanBaku
           (NoSO, NoBahanBaku, NoPallet, JmlhSak, Berat, Username, DateTimeScan)
-          VALUES (@noso, @NoBahanBaku, @NoPallet, @jmlhSak, @berat, @username, @DateTimeScan)
-        `);
+        VALUES (@noso, @NoBahanBaku, @NoPallet, @jmlhSak, @berat, @username, @DateTimeScan)
+      `);
 
-        await request.query(`
-          UPDATE BahanBakuPallet_h
-          SET Blok = @blok, IdLokasi = @idlokasi
-          WHERE NoBahanBaku = @NoBahanBaku AND NoPallet = @NoPallet
-        `);
+      // UPDATE header
+      const upd = await request.query(`
+        UPDATE BahanBakuPallet_h
+        SET Blok=@blok, IdLokasi=@idlokasi
+        WHERE NoBahanBaku=@NoBahanBaku AND NoPallet=@NoPallet
+      `);
+      if (upd.rowsAffected?.[0] === 0) throw new Error('Pallet tidak ditemukan di BahanBakuPallet_h');
 
-        insertedData = {
-          noso, nomorLabel: label, labelType: 'Bahan Baku', labelTypeCode: 'bahanbaku',
-          jmlhSak, berat, idlokasi, blok, username, timestamp: new Date()
-        };
+      // LOG (hanya kalau berubah)
+      if (beforeBlok !== blok || Number(beforeId) !== Number(idlokasi)) {
+        await insertLogMappingLokasi({
+          runner: tx, noLabel: label,
+          beforeBlok, beforeIdLokasi: beforeId,
+          afterBlok: blok, afterIdLokasi: idlokasi,
+          idUsername: idUsername ?? null,
+        });
+      }
 
+      insertedData = {
+        noso, nomorLabel: label, labelType: 'Bahan Baku', labelTypeCode: 'bahanbaku',
+        jmlhSak, berat, idlokasi, blok, username, timestamp: new Date()
+      };
+
+    // ======= WASHING =======
     } else if (isWashing) {
       request.input('NoWashing', sql.VarChar, label);
-      // pastikan sudah bind ini di atas:
-      // request.input('idlokasi', sql.Int, idlokasi);
-      // request.input('blok', sql.VarChar(3), blok);
-    
-      // 1) insert hasil scan
+
+      const before = await request.query(`
+        SELECT TOP 1 Blok AS BeforeBlok, IdLokasi AS BeforeIdLokasi
+        FROM Washing_h WHERE NoWashing=@NoWashing
+      `);
+      const beforeBlok = before.recordset?.[0]?.BeforeBlok ?? null;
+      const beforeId   = before.recordset?.[0]?.BeforeIdLokasi ?? null;
+
       await request.query(`
         INSERT INTO StockOpnameHasilWashing
           (NoSO, NoWashing, JmlhSak, Berat, Username, DateTimeScan)
-        VALUES
-          (@noso, @NoWashing, @jmlhSak, @berat, @username, @DateTimeScan)
+        VALUES (@noso, @NoWashing, @jmlhSak, @berat, @username, @DateTimeScan)
       `);
-    
-      // 2) update lokasi di HEADER saja
+
       const upd = await request.query(`
         UPDATE Washing_h
-        SET Blok = @blok,
-            IdLokasi = @idlokasi
-        WHERE NoWashing = @NoWashing
+        SET Blok=@blok, IdLokasi=@idlokasi
+        WHERE NoWashing=@NoWashing
       `);
-    
-      // jika tidak ada baris yang ter-update, fail fast
-      if (!upd.rowsAffected || upd.rowsAffected[0] === 0) {
-        throw new Error('NoWashing tidak ditemukan di Washing_h');
+      if (upd.rowsAffected?.[0] === 0) throw new Error('NoWashing tidak ditemukan di Washing_h');
+
+      if (beforeBlok !== blok || Number(beforeId) !== Number(idlokasi)) {
+        await insertLogMappingLokasi({
+          runner: tx, noLabel: label,
+          beforeBlok, beforeIdLokasi: beforeId,
+          afterBlok: blok, afterIdLokasi: idlokasi,
+          idUsername: idUsername ?? null,
+        });
       }
-    
+
       insertedData = {
-        noso,
-        nomorLabel: label,
-        labelType: 'Washing',
-        labelTypeCode: 'washing',
-        jmlhSak,
-        berat,
-        idlokasi,
-        blok,
-        username,
-        timestamp: new Date()
+        noso, nomorLabel: label, labelType: 'Washing', labelTypeCode: 'washing',
+        jmlhSak, berat, idlokasi, blok, username, timestamp: new Date()
       };
 
+    // ======= BROKER =======
     } else if (isBroker) {
       request.input('NoBroker', sql.VarChar, label);
-      // pastikan sudah bind ini di atas service:
-      // request.input('idlokasi', sql.Int, idlokasi);
-      // request.input('blok', sql.VarChar(3), blok);
-    
-      // 1) insert hasil scan
+
+      const before = await request.query(`
+        SELECT TOP 1 Blok AS BeforeBlok, IdLokasi AS BeforeIdLokasi
+        FROM Broker_h WHERE NoBroker=@NoBroker
+      `);
+      const beforeBlok = before.recordset?.[0]?.BeforeBlok ?? null;
+      const beforeId   = before.recordset?.[0]?.BeforeIdLokasi ?? null;
+
       await request.query(`
         INSERT INTO StockOpnameHasilBroker
           (NoSO, NoBroker, JmlhSak, Berat, Username, DateTimeScan)
-        VALUES
-          (@noso, @NoBroker, @jmlhSak, @berat, @username, @DateTimeScan)
+        VALUES (@noso, @NoBroker, @jmlhSak, @berat, @username, @DateTimeScan)
       `);
-    
-      // 2) update lokasi di HEADER saja (Broker_h)
+
       const upd = await request.query(`
         UPDATE Broker_h
-        SET Blok = @blok,
-            IdLokasi = @idlokasi
-        WHERE NoBroker = @NoBroker
+        SET Blok=@blok, IdLokasi=@idlokasi
+        WHERE NoBroker=@NoBroker
       `);
-    
-      // jika tidak ada baris ter-update, lempar error biar ketahuan datanya belum ada
-      if (!upd.rowsAffected || upd.rowsAffected[0] === 0) {
-        throw new Error('NoBroker tidak ditemukan di Broker_h');
+      if (upd.rowsAffected?.[0] === 0) throw new Error('NoBroker tidak ditemukan di Broker_h');
+
+      if (beforeBlok !== blok || Number(beforeId) !== Number(idlokasi)) {
+        await insertLogMappingLokasi({
+          runner: tx, noLabel: label,
+          beforeBlok, beforeIdLokasi: beforeId,
+          afterBlok: blok, afterIdLokasi: idlokasi,
+          idUsername: idUsername ?? null,
+        });
       }
-    
+
       insertedData = {
-        noso,
-        nomorLabel: label,
-        labelType: 'Broker',
-        labelTypeCode: 'broker',
-        jmlhSak,
-        berat,
-        idlokasi,
-        blok,
-        username,
-        timestamp: new Date()
+        noso, nomorLabel: label, labelType: 'Broker', labelTypeCode: 'broker',
+        jmlhSak, berat, idlokasi, blok, username, timestamp: new Date()
       };
-      
+
+    // ======= CRUSHER =======
     } else if (isCrusher) {
       request.input('NoCrusher', sql.VarChar, label);
 
-      // 1) catat hasil scan (Crusher tidak pakai jmlhSak)
+      const before = await request.query(`
+        SELECT TOP 1 Blok AS BeforeBlok, IdLokasi AS BeforeIdLokasi
+        FROM Crusher WHERE NoCrusher=@NoCrusher
+      `);
+      const beforeBlok = before.recordset?.[0]?.BeforeBlok ?? null;
+      const beforeId   = before.recordset?.[0]?.BeforeIdLokasi ?? null;
+
       await request.query(`
         INSERT INTO StockOpnameHasilCrusher
           (NoSO, NoCrusher, Berat, Username, DateTimeScan)
-        VALUES
-          (@noso, @NoCrusher, @berat, @username, @DateTimeScan)
+        VALUES (@noso, @NoCrusher, @berat, @username, @DateTimeScan)
       `);
-    
-      // 2) update lokasi & blok di HEADER Crusher
+
       const upd = await request.query(`
         UPDATE Crusher
-        SET Blok = @blok,
-            IdLokasi = @idlokasi
-        WHERE NoCrusher = @NoCrusher
+        SET Blok=@blok, IdLokasi=@idlokasi
+        WHERE NoCrusher=@NoCrusher
       `);
-    
-      if (!upd.rowsAffected || upd.rowsAffected[0] === 0) {
-        throw new Error('NoCrusher tidak ditemukan di tabel Crusher');
+      if (upd.rowsAffected?.[0] === 0) throw new Error('NoCrusher tidak ditemukan di tabel Crusher');
+
+      if (beforeBlok !== blok || Number(beforeId) !== Number(idlokasi)) {
+        await insertLogMappingLokasi({
+          runner: tx, noLabel: label,
+          beforeBlok, beforeIdLokasi: beforeId,
+          afterBlok: blok, afterIdLokasi: idlokasi,
+          idUsername: idUsername ?? null,
+        });
       }
-    
+
       insertedData = {
-        noso,
-        nomorLabel: label,
-        labelType: 'Crusher',
-        labelTypeCode: 'crusher',
-        jmlhSak,           // tetap ikut dikembalikan meski tidak dipakai saat insert
-        berat,
-        idlokasi,
-        blok,              // <-- tambahkan supaya client tahu blok yang di-set
-        username,
-        timestamp: new Date()
+        noso, nomorLabel: label, labelType: 'Crusher', labelTypeCode: 'crusher',
+        jmlhSak, berat, idlokasi, blok, username, timestamp: new Date()
       };
 
+    // ======= BONGGOLAN =======
     } else if (isBonggolan) {
       request.input('NoBonggolan', sql.VarChar, label);
-      // pastikan di atas sudah ada:
-      // request.input('idlokasi', sql.Int, idlokasi);
-      // request.input('blok', sql.VarChar(3), blok);
-    
-      // 1) insert hasil scan (Bonggolan tidak pakai jmlhSak)
+
+      const before = await request.query(`
+        SELECT TOP 1 Blok AS BeforeBlok, IdLokasi AS BeforeIdLokasi
+        FROM Bonggolan WHERE NoBonggolan=@NoBonggolan
+      `);
+      const beforeBlok = before.recordset?.[0]?.BeforeBlok ?? null;
+      const beforeId   = before.recordset?.[0]?.BeforeIdLokasi ?? null;
+
       await request.query(`
         INSERT INTO StockOpnameHasilBonggolan
           (NoSO, NoBonggolan, Berat, Username, DateTimeScan)
-        VALUES
-          (@noso, @NoBonggolan, @berat, @username, @DateTimeScan)
+        VALUES (@noso, @NoBonggolan, @berat, @username, @DateTimeScan)
       `);
-    
-      // 2) update lokasi & blok di header Bonggolan
+
       const upd = await request.query(`
         UPDATE Bonggolan
-        SET Blok = @blok,
-            IdLokasi = @idlokasi
-        WHERE NoBonggolan = @NoBonggolan
+        SET Blok=@blok, IdLokasi=@idlokasi
+        WHERE NoBonggolan=@NoBonggolan
       `);
-    
-      if (!upd.rowsAffected || upd.rowsAffected[0] === 0) {
-        throw new Error('NoBonggolan tidak ditemukan di tabel Bonggolan');
+      if (upd.rowsAffected?.[0] === 0) throw new Error('NoBonggolan tidak ditemukan di tabel Bonggolan');
+
+      if (beforeBlok !== blok || Number(beforeId) !== Number(idlokasi)) {
+        await insertLogMappingLokasi({
+          runner: tx, noLabel: label,
+          beforeBlok, beforeIdLokasi: beforeId,
+          afterBlok: blok, afterIdLokasi: idlokasi,
+          idUsername: idUsername ?? null,
+        });
       }
-    
+
       insertedData = {
-        noso,
-        nomorLabel: label,
-        labelType: 'Bonggolan',
-        labelTypeCode: 'bonggolan',
-        jmlhSak,         // dikembalikan apa adanya (walau tidak di-insert)
-        berat,
-        idlokasi,
-        blok,            // <-- kirim balik blok yang di-set
-        username,
-        timestamp: new Date()
+        noso, nomorLabel: label, labelType: 'Bonggolan', labelTypeCode: 'bonggolan',
+        jmlhSak, berat, idlokasi, blok, username, timestamp: new Date()
       };
 
+    // ======= GILINGAN =======
     } else if (isGilingan) {
       request.input('NoGilingan', sql.VarChar, label);
-      // pastikan sebelum ini sudah ada:
-      // request.input('idlokasi', sql.Int, idlokasi);
-      // request.input('blok', sql.VarChar(3), blok);
-    
-      // 1) insert hasil scan (Gilingan tidak pakai jmlhSak)
+
+      const before = await request.query(`
+        SELECT TOP 1 Blok AS BeforeBlok, IdLokasi AS BeforeIdLokasi
+        FROM Gilingan WHERE NoGilingan=@NoGilingan
+      `);
+      const beforeBlok = before.recordset?.[0]?.BeforeBlok ?? null;
+      const beforeId   = before.recordset?.[0]?.BeforeIdLokasi ?? null;
+
       await request.query(`
         INSERT INTO StockOpnameHasilGilingan
           (NoSO, NoGilingan, Berat, Username, DateTimeScan)
-        VALUES
-          (@noso, @NoGilingan, @berat, @username, @DateTimeScan)
+        VALUES (@noso, @NoGilingan, @berat, @username, @DateTimeScan)
       `);
-    
-      // 2) update lokasi & blok di header Gilingan
+
       const upd = await request.query(`
         UPDATE Gilingan
-        SET Blok = @blok,
-            IdLokasi = @idlokasi
-        WHERE NoGilingan = @NoGilingan
+        SET Blok=@blok, IdLokasi=@idlokasi
+        WHERE NoGilingan=@NoGilingan
       `);
-    
-      if (!upd.rowsAffected || upd.rowsAffected[0] === 0) {
-        throw new Error('NoGilingan tidak ditemukan di tabel Gilingan');
+      if (upd.rowsAffected?.[0] === 0) throw new Error('NoGilingan tidak ditemukan di tabel Gilingan');
+
+      if (beforeBlok !== blok || Number(beforeId) !== Number(idlokasi)) {
+        await insertLogMappingLokasi({
+          runner: tx, noLabel: label,
+          beforeBlok, beforeIdLokasi: beforeId,
+          afterBlok: blok, afterIdLokasi: idlokasi,
+          idUsername: idUsername ?? null,
+        });
       }
-    
+
       insertedData = {
-        noso,
-        nomorLabel: label,
-        labelType: 'Gilingan',
-        labelTypeCode: 'gilingan',
-        jmlhSak,       // dikembalikan apa adanya (walau tidak dipakai saat insert)
-        berat,
-        idlokasi,
-        blok,          // kirim balik blok yang di-set
-        username,
-        timestamp: new Date()
+        noso, nomorLabel: label, labelType: 'Gilingan', labelTypeCode: 'gilingan',
+        jmlhSak, berat, idlokasi, blok, username, timestamp: new Date()
       };
 
+    // ======= MIXER =======
     } else if (isMixer) {
       request.input('NoMixer', sql.VarChar, label);
-      // pastikan di atas sudah ada:
-      // request.input('idlokasi', sql.Int, idlokasi);
-      // request.input('blok', sql.VarChar(3), blok);
 
-      // 1) insert hasil scan
+      const before = await request.query(`
+        SELECT TOP 1 Blok AS BeforeBlok, IdLokasi AS BeforeIdLokasi
+        FROM Mixer_h WHERE NoMixer=@NoMixer
+      `);
+      const beforeBlok = before.recordset?.[0]?.BeforeBlok ?? null;
+      const beforeId   = before.recordset?.[0]?.BeforeIdLokasi ?? null;
+
       await request.query(`
         INSERT INTO StockOpnameHasilMixer
           (NoSO, NoMixer, JmlhSak, Berat, Username, DateTimeScan)
-        VALUES
-          (@noso, @NoMixer, @jmlhSak, @berat, @username, @DateTimeScan)
+        VALUES (@noso, @NoMixer, @jmlhSak, @berat, @username, @DateTimeScan)
       `);
 
-      // 2) update lokasi & blok di HEADER: Mixer_h
       const upd = await request.query(`
         UPDATE Mixer_h
-        SET Blok = @blok,
-            IdLokasi = @idlokasi
-        WHERE NoMixer = @NoMixer
+        SET Blok=@blok, IdLokasi=@idlokasi
+        WHERE NoMixer=@NoMixer
       `);
+      if (upd.rowsAffected?.[0] === 0) throw new Error('NoMixer tidak ditemukan di Mixer_h');
 
-      if (!upd.rowsAffected || upd.rowsAffected[0] === 0) {
-        throw new Error('NoMixer tidak ditemukan di Mixer_h');
+      if (beforeBlok !== blok || Number(beforeId) !== Number(idlokasi)) {
+        await insertLogMappingLokasi({
+          runner: tx, noLabel: label,
+          beforeBlok, beforeIdLokasi: beforeId,
+          afterBlok: blok, afterIdLokasi: idlokasi,
+          idUsername: idUsername ?? null,
+        });
       }
 
       insertedData = {
-        noso,
-        nomorLabel: label,
-        labelType: 'Mixer',
-        labelTypeCode: 'mixer',
-        jmlhSak,
-        berat,
-        idlokasi,
-        blok,          // kirim balik blok yang di-set
-        username,
-        timestamp: new Date()
+        noso, nomorLabel: label, labelType: 'Mixer', labelTypeCode: 'mixer',
+        jmlhSak, berat, idlokasi, blok, username, timestamp: new Date()
       };
 
+    // ======= FURNITURE WIP =======
     } else if (isFurnitureWIP) {
       request.input('NoFurnitureWIP', sql.VarChar, label);
-      // pastikan di atas sudah ada:
-      // request.input('idlokasi', sql.Int, idlokasi);
-      // request.input('blok', sql.VarChar(3), blok);
-    
-      // 1) insert hasil scan (Pcs = jmlhSak)
+
+      const before = await request.query(`
+        SELECT TOP 1 Blok AS BeforeBlok, IdLokasi AS BeforeIdLokasi
+        FROM FurnitureWIP WHERE NoFurnitureWIP=@NoFurnitureWIP
+      `);
+      const beforeBlok = before.recordset?.[0]?.BeforeBlok ?? null;
+      const beforeId   = before.recordset?.[0]?.BeforeIdLokasi ?? null;
+
       await request.query(`
         INSERT INTO StockOpnameHasilFurnitureWIP
           (NoSO, NoFurnitureWIP, Pcs, Berat, Username, DateTimeScan)
-        VALUES
-          (@noso, @NoFurnitureWIP, @jmlhSak, @berat, @username, @DateTimeScan)
+        VALUES (@noso, @NoFurnitureWIP, @jmlhSak, @berat, @username, @DateTimeScan)
       `);
-    
-      // 2) update lokasi & blok di header FurnitureWIP
+
       const upd = await request.query(`
         UPDATE FurnitureWIP
-        SET Blok = @blok,
-            IdLokasi = @idlokasi
-        WHERE NoFurnitureWIP = @NoFurnitureWIP
+        SET Blok=@blok, IdLokasi=@idlokasi
+        WHERE NoFurnitureWIP=@NoFurnitureWIP
       `);
-    
-      if (!upd.rowsAffected || upd.rowsAffected[0] === 0) {
-        throw new Error('NoFurnitureWIP tidak ditemukan di tabel FurnitureWIP');
+      if (upd.rowsAffected?.[0] === 0) throw new Error('NoFurnitureWIP tidak ditemukan di tabel FurnitureWIP');
+
+      if (beforeBlok !== blok || Number(beforeId) !== Number(idlokasi)) {
+        await insertLogMappingLokasi({
+          runner: tx, noLabel: label,
+          beforeBlok, beforeIdLokasi: beforeId,
+          afterBlok: blok, afterIdLokasi: idlokasi,
+          idUsername: idUsername ?? null,
+        });
       }
-    
+
       insertedData = {
-        noso,
-        nomorLabel: label,
-        labelType: 'Furniture WIP',
-        labelTypeCode: 'furniturewip',
-        jmlhSak,      // dipakai sebagai Pcs pada insert hasil
-        berat,
-        idlokasi,
-        blok,         // kirim balik blok yang di-set
-        username,
-        timestamp: new Date()
+        noso, nomorLabel: label, labelType: 'Furniture WIP', labelTypeCode: 'furniturewip',
+        jmlhSak, berat, idlokasi, blok, username, timestamp: new Date()
       };
 
+    // ======= BARANG JADI =======
     } else if (isBarangJadi) {
       request.input('NoBJ', sql.VarChar, label);
-      // pastikan di atas sudah ada binding:
-      // request.input('idlokasi', sql.Int, idlokasi);
-      // request.input('blok', sql.VarChar(3), blok);
-    
-      // 1) insert hasil scan (Pcs = jmlhSak)
+
+      const before = await request.query(`
+        SELECT TOP 1 Blok AS BeforeBlok, IdLokasi AS BeforeIdLokasi
+        FROM BarangJadi WHERE NoBJ=@NoBJ
+      `);
+      const beforeBlok = before.recordset?.[0]?.BeforeBlok ?? null;
+      const beforeId   = before.recordset?.[0]?.BeforeIdLokasi ?? null;
+
       await request.query(`
         INSERT INTO StockOpnameHasilBarangJadi
           (NoSO, NoBJ, Pcs, Berat, Username, DateTimeScan)
-        VALUES
-          (@noso, @NoBJ, @jmlhSak, @berat, @username, @DateTimeScan)
+        VALUES (@noso, @NoBJ, @jmlhSak, @berat, @username, @DateTimeScan)
       `);
-    
-      // 2) update lokasi & blok di header BarangJadi
+
       const upd = await request.query(`
         UPDATE BarangJadi
-        SET Blok = @blok,
-            IdLokasi = @idlokasi
-        WHERE NoBJ = @NoBJ
+        SET Blok=@blok, IdLokasi=@idlokasi
+        WHERE NoBJ=@NoBJ
       `);
-    
-      if (!upd.rowsAffected || upd.rowsAffected[0] === 0) {
-        throw new Error('NoBJ tidak ditemukan di tabel BarangJadi');
+      if (upd.rowsAffected?.[0] === 0) throw new Error('NoBJ tidak ditemukan di tabel BarangJadi');
+
+      if (beforeBlok !== blok || Number(beforeId) !== Number(idlokasi)) {
+        await insertLogMappingLokasi({
+          runner: tx, noLabel: label,
+          beforeBlok, beforeIdLokasi: beforeId,
+          afterBlok: blok, afterIdLokasi: idlokasi,
+          idUsername: idUsername ?? null,
+        });
       }
-    
+
       insertedData = {
-        noso,
-        nomorLabel: label,
-        labelType: 'Barang Jadi',
-        labelTypeCode: 'barangjadi',
-        jmlhSak,     // dipakai sebagai Pcs pada insert hasil
-        berat,
-        idlokasi,
-        blok,        // kirim balik blok yang di-set
-        username,
-        timestamp: new Date()
+        noso, nomorLabel: label, labelType: 'Barang Jadi', labelTypeCode: 'barangjadi',
+        jmlhSak, berat, idlokasi, blok, username, timestamp: new Date()
       };
 
+    // ======= REJECT =======
     } else if (isReject) {
       request.input('NoReject', sql.VarChar, label);
-      // pastikan sebelum ini sudah ada:
-      // request.input('idlokasi', sql.Int, idlokasi);
-      // request.input('blok', sql.VarChar(3), blok);
-    
-      // 1) insert hasil scan (Reject tidak pakai jmlhSak)
+
+      const before = await request.query(`
+        SELECT TOP 1 Blok AS BeforeBlok, IdLokasi AS BeforeIdLokasi
+        FROM RejectV2 WHERE NoReject=@NoReject
+      `);
+      const beforeBlok = before.recordset?.[0]?.BeforeBlok ?? null;
+      const beforeId   = before.recordset?.[0]?.BeforeIdLokasi ?? null;
+
       await request.query(`
         INSERT INTO StockOpnameHasilReject
           (NoSO, NoReject, Berat, Username, DateTimeScan)
-        VALUES
-          (@noso, @NoReject, @berat, @username, @DateTimeScan)
+        VALUES (@noso, @NoReject, @berat, @username, @DateTimeScan)
       `);
-    
-      // 2) update lokasi & blok di RejectV2
+
       const upd = await request.query(`
         UPDATE RejectV2
-        SET Blok = @blok,
-            IdLokasi = @idlokasi
-        WHERE NoReject = @NoReject
+        SET Blok=@blok, IdLokasi=@idlokasi
+        WHERE NoReject=@NoReject
       `);
-    
-      if (!upd.rowsAffected || upd.rowsAffected[0] === 0) {
-        throw new Error('NoReject tidak ditemukan di tabel RejectV2');
+      if (upd.rowsAffected?.[0] === 0) throw new Error('NoReject tidak ditemukan di tabel RejectV2');
+
+      if (beforeBlok !== blok || Number(beforeId) !== Number(idlokasi)) {
+        await insertLogMappingLokasi({
+          runner: tx, noLabel: label,
+          beforeBlok, beforeIdLokasi: beforeId,
+          afterBlok: blok, afterIdLokasi: idlokasi,
+          idUsername: idUsername ?? null,
+        });
       }
-    
+
       insertedData = {
-        noso,
-        nomorLabel: label,
-        labelType: 'Reject',
-        labelTypeCode: 'reject',
-        jmlhSak,      // dikembalikan apa adanya (tidak di-insert)
-        berat,
-        idlokasi,
-        blok,         // kirim balik blok yang di-set
-        username,
-        timestamp: new Date()
+        noso, nomorLabel: label, labelType: 'Reject', labelTypeCode: 'reject',
+        jmlhSak, berat, idlokasi, blok, username, timestamp: new Date()
       };
+
+    } else {
+      throw new Error('Kode label tidak dikenali. Valid: A., B., D., F., M., V., H., BB., BA., BF.');
     }
 
-    else {
-      throw new Error('Kode label tidak dikenali dalam sistem. Hanya label dengan awalan A., B., F., M., V., H., BB., BA., BF., atau D. yang valid.');
-    }
+    // selesai OK → commit
+    await tx.commit();
 
-    // Emit ke socket jika global.io tersedia
+    // broadcast (di luar trx)
     if (global.io) {
       global.io.emit('label_inserted', insertedData);
     }
 
     return { success: true, message: 'Label berhasil disimpan dan lokasi diperbarui' };
+
+  } catch (err) {
+    await tx.rollback();
+    throw err;
+  }
 }
+
+
+
+//////////////////////////
+////ASCEND SERVICES//////
+////////////////////////
 
 
 async function getStockOpnameFamilies(noSO) {

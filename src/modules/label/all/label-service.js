@@ -579,6 +579,21 @@ function getAvailabilityCheckSQL(prefix, tableName) {
 async function updateLabelLocation(labelCode, idLokasi, blok, idUsername) {
   const pool = await poolPromise;
 
+  // helper
+  const toIntOrNull = (v) =>
+    (v === null || v === undefined || Number.isNaN(Number(v))) ? null : Number(v);
+  const normBlok = (v) => (v ?? '').toString().trim().toUpperCase();
+
+  // Validasi minimal
+  const idLokasiInt = toIntOrNull(idLokasi);
+  if (idLokasiInt === null) {
+    return { success: false, message: 'idLokasi wajib angka (INT)' };
+  }
+  const blokNorm = normBlok(blok);
+  if (!blokNorm) {
+    return { success: false, message: 'blok wajib diisi' };
+  }
+
   // Normalisasi prefix
   const parts = String(labelCode).split('.');
   const prefix = (parts[0] || '').toUpperCase();
@@ -602,10 +617,10 @@ async function updateLabelLocation(labelCode, idLokasi, blok, idUsername) {
 
   const labelCol = prefix === 'A'
     ? "(CAST(NoBahanBaku AS NVARCHAR(50)) + '-' + CAST(NoPallet AS NVARCHAR(10)))"
-    : getLabelColumn(prefix);
+    : getLabelColumn(prefix); // pastikan helper ini ada
 
   // ========= 1) CEK: label ada + status Available (berdasarkan DateUsage) =========
-  const availabilitySQL = getAvailabilityCheckSQL(prefix, tableName);
+  const availabilitySQL = getAvailabilityCheckSQL(prefix, tableName); // pastikan helper ini ada
 
   const availRes = await pool.request()
     .input('LabelCode', sql.NVarChar(50), labelCode)
@@ -619,68 +634,76 @@ async function updateLabelLocation(labelCode, idLokasi, blok, idUsername) {
   }
 
   const beforeBlok = availRes.recordset[0].Blok ?? null;
-  const beforeIdLokasi = availRes.recordset[0].IdLokasi ?? null;
+  const beforeIdLokasi = toIntOrNull(availRes.recordset[0].IdLokasi);
   const available = !!availRes.recordset[0].Available;
 
   if (!available) {
+    return { success: false, message: `Label ${labelCode} sudah terpakai!` };
+  }
+
+  // ========= 1.5) GUARD: jika tidak ada perubahan, hentikan di sini =========
+  const sameBlok = normBlok(beforeBlok) === blokNorm;
+  const sameLokasi = Number(beforeIdLokasi ?? null) === Number(idLokasiInt ?? null);
+
+  if (sameBlok && sameLokasi) {
     return {
-      success: false,
-      message: `Label ${labelCode} sudah terpakai!`
+      success: true,
+      code: 'NO_CHANGE',
+      message: `Label ini telah di ${blokNorm}${idLokasiInt}`,
+      updated: {
+        labelCode,
+        beforeBlok,
+        beforeIdLokasi,
+        afterBlok: blokNorm,
+        afterIdLokasi: idLokasiInt,
+        idUsername
+      }
     };
   }
 
-  // ========= 2) Cek tipe kolom IdLokasi (varchar vs int) =========
-  const checkTypeQuery = `
-    SELECT DATA_TYPE 
-    FROM INFORMATION_SCHEMA.COLUMNS 
-    WHERE TABLE_NAME = PARSENAME('${tableName}', 1) 
-      AND COLUMN_NAME = 'IdLokasi'
-  `;
-  const typeResult = await pool.request().query(checkTypeQuery);
-  const idLokasiType = typeResult.recordset[0]?.DATA_TYPE;
-
-  // ========= 3) UPDATE lokasi =========
+  // ========= 2) UPDATE lokasi (IdLokasi INT selalu) =========
   const updateQuery = `
     UPDATE ${tableName}
     SET 
-      IdLokasi = ${idLokasiType === 'int' ? 'TRY_CONVERT(INT, @IdLokasi)' : '@IdLokasi'},
-      Blok = @Blok
+      IdLokasi = @IdLokasi,
+      Blok     = @Blok
     WHERE ${labelCol} = @LabelCode
   `;
 
   const updateRes = await pool.request()
     .input('LabelCode', sql.NVarChar(50), labelCode)
-    .input('IdLokasi', sql.NVarChar(50), idLokasi) // aman untuk keduanya (TO_INT jika perlu)
-    .input('Blok', sql.NVarChar(10), blok)         // naikkan ke 10 jika blok kamu >3 char
+    .input('IdLokasi', sql.Int, idLokasiInt)
+    .input('Blok',     sql.NVarChar(10), blokNorm) // naikkan ke 10 jika blok >3 char
     .query(updateQuery);
 
   if ((updateRes.rowsAffected?.[0] || 0) === 0) {
     return { success: false, message: `Gagal update lokasi label ${labelCode}` };
   }
 
-  // ========= 4) LOG =========
+  // ========= 3) LOG (karena pasti berubah) =========
   await insertLogMappingLokasi(
     labelCode,
     beforeBlok,
     beforeIdLokasi,
-    blok,
-    idLokasi,
+    blokNorm,
+    idLokasiInt,
     idUsername
   );
 
   return {
     success: true,
-    message: `Lokasi label ${labelCode} berhasil diupdate ke ${blok}${idLokasi}`,
+    message: `Lokasi label ${labelCode} berhasil diupdate ke ${blokNorm}${idLokasiInt}`,
     updated: {
       labelCode,
       beforeBlok,
       beforeIdLokasi,
-      afterBlok: blok,
-      afterIdLokasi: idLokasi,
+      afterBlok: blokNorm,
+      afterIdLokasi: idLokasiInt,
       idUsername
     }
   };
 }
+
 
 async function insertLogMappingLokasi(noLabel, beforeBlok, beforeIdLokasi, afterBlok, afterIdLokasi, idUsername) {
   const pool = await poolPromise;

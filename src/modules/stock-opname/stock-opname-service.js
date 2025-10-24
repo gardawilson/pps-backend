@@ -830,6 +830,7 @@ async function validateStockOpnameLabel({ noso, label, username }) {
       // Detail fields - flatten seperti di route
       jmlhSak: data.detail?.JmlhSak || null,
       berat: data.detail?.Berat || null,
+      blok: data.detail?.Blok || null,
       idLokasi: data.detail?.IdLokasi || null,
       mesinInfo: data.mesinInfo || [] // tambahkan ini untuk info mesin bonggolan
 
@@ -889,36 +890,43 @@ async function validateStockOpnameLabel({ noso, label, username }) {
           SELECT COUNT(*) AS count FROM StockOpnameHasilBahanBaku
           WHERE NoSO = @noso AND NoBahanBaku = @NoBahanBaku AND NoPallet = @NoPallet AND Username = @username
         `;
+        // --- ganti detailQuery DALAM CABANG isBahanBaku ---
         detailQuery = `
           SELECT 
-              MIN(d.IdLokasi) AS IdLokasi,
+              bbh.Blok,
+              bbh.IdLokasi,
               COUNT(*) AS JmlhSak,
-              SUM(  
-                  CASE 
-                      WHEN d.IsPartial = 1 
-                          THEN ISNULL(d.Berat,0) - ISNULL(p.TotalPartial,0)
-                      ELSE ISNULL(d.Berat,0)
-                  END
+              SUM(
+                CASE 
+                  WHEN d.IsPartial = 1 
+                    THEN ISNULL(d.Berat,0) - ISNULL(p.TotalPartial,0)
+                  ELSE ISNULL(d.Berat,0)
+                END
               ) AS Berat
-          FROM [dbo].[BahanBaku_d] d
+          FROM dbo.BahanBaku_d d
           LEFT JOIN (
               SELECT 
                   NoBahanBaku, 
                   NoPallet, 
                   NoSak, 
                   SUM(Berat) AS TotalPartial
-              FROM [dbo].[BahanBakuPartial]
+              FROM dbo.BahanBakuPartial
               WHERE NoBahanBaku = @NoBahanBaku 
-                AND NoPallet = @NoPallet
+                AND NoPallet    = @NoPallet
               GROUP BY NoBahanBaku, NoPallet, NoSak
           ) p 
               ON d.NoBahanBaku = p.NoBahanBaku 
-            AND d.NoPallet   = p.NoPallet
-            AND d.NoSak      = p.NoSak
-          WHERE d.DateUsage IS NULL 
-            AND d.NoBahanBaku = @NoBahanBaku 
-            AND d.NoPallet = @NoPallet;
-      `;      
+            AND d.NoPallet    = p.NoPallet
+            AND d.NoSak       = p.NoSak
+          INNER JOIN dbo.BahanBakuPallet_h bbh
+              ON bbh.NoBahanBaku = d.NoBahanBaku
+            AND bbh.NoPallet    = d.NoPallet
+          WHERE d.DateUsage IS NULL
+            AND d.NoBahanBaku = @NoBahanBaku
+            AND d.NoPallet    = @NoPallet
+          GROUP BY bbh.Blok, bbh.IdLokasi;
+        `;
+  
       warehouseQuery = `
         SELECT mb.IdWarehouse
         FROM [dbo].[BahanBakuPallet_h] bbh
@@ -1475,6 +1483,7 @@ async function validateStockOpnameLabel({ noso, label, username }) {
         detail: originalData ? {
           JmlhSak: originalData.JumlahSak || null,
           Berat: originalData?.Berat != null ? Number(originalData.Berat.toFixed(2)) : null,
+          Blok: originalData.Blok,
           IdLokasi: originalData.IdLokasi
         } : null,
         mesinInfo: isBonggolan ? mesinInfo : []
@@ -1499,6 +1508,7 @@ async function validateStockOpnameLabel({ noso, label, username }) {
         detail: originalData ? {
           JmlhSak: originalData.JumlahSak || null,
           Berat: originalData?.Berat != null ? Number(originalData.Berat.toFixed(2)) : null,
+          Blok: originalData.Blok,
           IdLokasi: originalData.IdLokasi
         } : null,
         mesinInfo: isBonggolan ? mesinInfo : []
@@ -1576,6 +1586,7 @@ async function validateStockOpnameLabel({ noso, label, username }) {
         detail: {
           JmlhSak: fallbackData.JumlahSak || null,
           Berat: fallbackData?.Berat != null ? Number(fallbackData.Berat.toFixed(2)) : null,
+          Blok: fallbackData.Blok,
           IdLokasi: fallbackData.IdLokasi
         },
         mesinInfo: isBonggolan ? mesinInfo : []
@@ -1601,6 +1612,7 @@ async function validateStockOpnameLabel({ noso, label, username }) {
         detail: {
           JmlhSak: originalData.JumlahSak || null,
           Berat: originalData?.Berat != null ? Number(originalData.Berat.toFixed(2)) : null,
+          Blok: originalData.Blok,
           IdLokasi: originalData.IdLokasi
         },
         mesinInfo: isBonggolan ? mesinInfo : []
@@ -2140,7 +2152,6 @@ async function getStockOpnameFamilies(noSO) {
 
 
 async function getStockOpnameAscendData({ noSO, familyID, keyword }) {
-
   try {
     const pool = await poolPromise;
     const result = await pool.request()
@@ -2148,6 +2159,15 @@ async function getStockOpnameAscendData({ noSO, familyID, keyword }) {
       .input('familyID', sql.VarChar, familyID)
       .input('keyword', sql.VarChar, `%${keyword || ''}%`)
       .query(`
+        -- Agregasi shelf per ItemID agar tidak menduplikasi baris
+        WITH ShelfPerItem AS (
+          SELECT
+            iwd.ItemID,
+            STRING_AGG(LTRIM(RTRIM(iwd.ShelfCode)), ', ') WITHIN GROUP (ORDER BY LTRIM(RTRIM(iwd.ShelfCode))) AS ShelfCodes
+          FROM [AS_GSU_2022].[dbo].[IC_ItemWarehouseDetails] iwd
+          WHERE iwd.ShelfCode IS NOT NULL AND LTRIM(RTRIM(iwd.ShelfCode)) <> ''
+          GROUP BY iwd.ItemID
+        )
         SELECT 
           so.NoSO,
           so.ItemID,
@@ -2157,13 +2177,16 @@ async function getStockOpnameAscendData({ noSO, familyID, keyword }) {
           sh.QtyFisik,
           sh.QtyUsage,
           sh.UsageRemark,
-          sh.IsUpdateUsage
+          sh.IsUpdateUsage,
+          spi.ShelfCodes AS ShelfCode
         FROM [dbo].[StockOpnameAscend] so
         LEFT JOIN [AS_GSU_2022].[dbo].[IC_Items] it 
                ON so.ItemID = it.ItemID
         LEFT JOIN [dbo].[StockOpnameAscendHasil] sh 
                ON so.NoSO = sh.NoSO 
               AND so.ItemID = sh.ItemID
+        LEFT JOIN ShelfPerItem spi
+               ON spi.ItemID = so.ItemID
         WHERE so.NoSO = @noSO 
           AND so.FamilyID = @familyID
           AND (so.ItemID LIKE @keyword OR it.ItemName LIKE @keyword)
@@ -2178,17 +2201,19 @@ async function getStockOpnameAscendData({ noSO, familyID, keyword }) {
       NoSO: row.NoSO,
       ItemID: row.ItemID,
       ItemCode: row.ItemCode,
+      ShelfCode: row.ShelfCode,
       ItemName: row.ItemName,
       Pcs: row.Pcs,
       QtyFisik: row.QtyFisik !== null ? row.QtyFisik : null,
       QtyUsage: row.QtyUsage !== null ? row.QtyUsage : -1.0,
-      UsageRemark: row.UsageRemark || '',
+      UsageRemark: row.UsageRemark,
       IsUpdateUsage: row.IsUpdateUsage
     }));
   } catch (err) {
     throw new Error(`Stock Opname Ascend Service Error: ${err.message}`);
-  } 
+  }
 }
+
 
 
 async function saveStockOpnameAscendHasil(noSO, dataList) {

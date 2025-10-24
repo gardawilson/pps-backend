@@ -6,12 +6,19 @@ const { insertLogMappingLokasi } = require('../../core/shared/log'); // sesuaika
 
 async function getNoStockOpname() {
   try {
-    const pool = await poolPromise; // ✅ ambil pool global
+    const pool = await poolPromise;
+
     const result = await pool.request().query(`
       SELECT
         soh.NoSO,
         soh.Tanggal,
-        STRING_AGG(wh.NamaWarehouse, ', ') AS NamaWarehouse,
+        STRING_AGG(
+          CASE 
+            WHEN soh.IsAscend = 1 THEN icw.Name            -- nama gudang dari IC_Warehouses
+            ELSE wh.NamaWarehouse                          -- nama gudang dari MstWarehouse
+          END, 
+          ', '
+        ) AS NamaWarehouse,
         soh.IsBahanBaku,
         soh.IsWashing,
         soh.IsBonggolan,
@@ -24,8 +31,19 @@ async function getNoStockOpname() {
         soh.IsReject,
         soh.IsAscend
       FROM StockOpname_h soh
-      LEFT JOIN StockOpname_h_WarehouseID sohw ON soh.NoSO = sohw.NoSO
-      LEFT JOIN MstWarehouse wh ON sohw.IdWarehouse = wh.IdWarehouse
+      LEFT JOIN StockOpname_h_WarehouseID sohw 
+        ON soh.NoSO = sohw.NoSO
+
+      -- Join ke master lokal hanya bila IsAscend = 0
+      LEFT JOIN MstWarehouse wh 
+        ON sohw.IdWarehouse = wh.IdWarehouse
+       AND soh.IsAscend = 0
+
+      -- Join ke master ASCEND hanya bila IsAscend = 1
+      LEFT JOIN [AS_GSU_2022].[dbo].[IC_Warehouses] icw
+        ON sohw.IdWarehouse = icw.WarehouseID
+       AND soh.IsAscend = 1
+
       WHERE soh.Tanggal > (
         SELECT ISNULL(MAX(PeriodHarian), '2000-01-01') 
         FROM MstTutupTransaksiHarian
@@ -47,40 +65,18 @@ async function getNoStockOpname() {
       ORDER BY soh.NoSO DESC
     `);
 
-    if (!result.recordset || result.recordset.length === 0) {
-      return null;
-    }
+    if (!result.recordset || result.recordset.length === 0) return null;
 
     return result.recordset.map(({
-      NoSO,
-      Tanggal,
-      NamaWarehouse,
-      IsBahanBaku,
-      IsWashing,
-      IsBonggolan,
-      IsCrusher,
-      IsBroker,
-      IsGilingan,
-      IsMixer,
-      IsFurnitureWIP,
-      IsBarangJadi,
-      IsReject,
-      IsAscend
+      NoSO, Tanggal, NamaWarehouse,
+      IsBahanBaku, IsWashing, IsBonggolan, IsCrusher, IsBroker,
+      IsGilingan, IsMixer, IsFurnitureWIP, IsBarangJadi, IsReject, IsAscend
     }) => ({
       NoSO,
       Tanggal: formatDate(Tanggal),
       NamaWarehouse: NamaWarehouse || '-',
-      IsBahanBaku,
-      IsWashing,
-      IsBonggolan,
-      IsCrusher,
-      IsBroker,
-      IsGilingan,
-      IsMixer,
-      IsFurnitureWIP,
-      IsBarangJadi,
-      IsReject,
-      IsAscend
+      IsBahanBaku, IsWashing, IsBonggolan, IsCrusher, IsBroker,
+      IsGilingan, IsMixer, IsFurnitureWIP, IsBarangJadi, IsReject, IsAscend
     }));
   } catch (err) {
     throw new Error(`Stock Opname Service Error: ${err.message}`);

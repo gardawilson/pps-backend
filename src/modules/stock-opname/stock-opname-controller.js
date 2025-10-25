@@ -131,11 +131,11 @@ async function stockOpnameHasilHandler(req, res) {
   
   async function validateStockOpnameLabelHandler(req, res) {
     const { noso } = req.params;
-    const { label } = req.body;
+    const { label, blok, idlokasi } = req.body;
     const { username } = req;
   
     try {
-      const result = await validateStockOpnameLabel({ noso, label, username });
+      const result = await validateStockOpnameLabel({ noso, label, username, blok, idlokasi });
       res.status(result.success ? 200 : 400).json(result);
     } catch (err) {
       res.status(500).json({ message: 'Gagal memvalidasi label', error: err.message });

@@ -809,8 +809,8 @@ async function deleteStockOpnameHasil({ noso, nomorLabel }) {
 
 
 
-async function validateStockOpnameLabel({ noso, label, username }) {
-  // Helper function untuk membuat response format yang konsisten
+async function validateStockOpnameLabel({ noso, label, username, blok, idlokasi }) {
+  // Helper response
   const createResponse = (success, data = {}, message = '') => {
     return {
       success,
@@ -827,14 +827,31 @@ async function validateStockOpnameLabel({ noso, label, username }) {
       foundInStockOpname: data.foundInStockOpname || false,
       canInsert: data.canInsert || false,
       idWarehouse: data.idWarehouse || null,
-      // Detail fields - flatten seperti di route
-      jmlhSak: data.detail?.JmlhSak || null,
-      berat: data.detail?.Berat || null,
-      blok: data.detail?.Blok || null,
-      idLokasi: data.detail?.IdLokasi || null,
-      mesinInfo: data.mesinInfo || [] // tambahkan ini untuk info mesin bonggolan
-
+      // flatten detail
+      jmlhSak: data.detail?.JmlhSak ?? null,
+      berat: data.detail?.Berat ?? null,
+      blok: data.detail?.Blok ?? null,
+      idLokasi: data.detail?.IdLokasi ?? null,
+      mesinInfo: data.mesinInfo || []
     };
+  };
+
+  // Normalizer & mismatch checker for Blok & IdLokasi
+  const normBlok = (s) => (s ?? '').toString().trim().toUpperCase();
+  const ctrlBlok = normBlok(blok);
+  const ctrlIdLokasi = (idlokasi ?? idlokasi === 0) ? Number(idlokasi) : null;
+
+  const isBlokLokasiMismatch = (dataDetail) => {
+    if (!dataDetail) return false;
+    const dataBlok = normBlok(dataDetail.Blok);
+    const dataId = (dataDetail.IdLokasi ?? dataDetail.IdLokasi === 0) ? Number(dataDetail.IdLokasi) : null;
+
+    // Jika controller mengirim blok dan/atau idlokasi, bandingkan yang tersedia.
+    const blokMismatch = ctrlBlok ? (ctrlBlok !== dataBlok) : false;
+    const idMismatch = (ctrlIdLokasi !== null && dataId !== null) ? (ctrlIdLokasi !== dataId) : false;
+
+    // Anggap "gabungan tidak serupa" jika salah satu beda (blok atau idlokasi)
+    return blokMismatch || idMismatch;
   };
 
   // Validasi input dasar
@@ -842,7 +859,7 @@ async function validateStockOpnameLabel({ noso, label, username }) {
     return createResponse(false, {}, 'Label wajib diisi');
   }
 
-  // 1. VALIDASI FORMAT LABEL
+  // 1) Validasi format label
   const isBahanBaku = label.startsWith('A.') && label.includes('-');
   const isWashing = label.startsWith('B.') && !label.includes('-');
   const isBroker = label.startsWith('D.') && !label.includes('-');
@@ -855,724 +872,804 @@ async function validateStockOpnameLabel({ noso, label, username }) {
   const isReject = label.startsWith('BF.') && !label.includes('-');
 
   if (!isBahanBaku && !isWashing && !isBroker && !isCrusher && !isBonggolan && !isGilingan && !isMixer && !isFurnitureWIP && !isBarangJadi && !isReject) {
-    return createResponse(false, {
-      isValidFormat: false
-    }, 'Kode label tidak dikenali. Hanya A., B., F., M., V., H., BB., BA., BF., atau D. yang valid.');
+    return createResponse(false, { isValidFormat: false }, 'Kode label tidak dikenali. Hanya A., B., F., M., V., H., BB., BA., BF., atau D. yang valid.');
   }
 
-    const pool = await poolPromise;
-    const request = pool.request();
-    request.input('noso', sql.VarChar, noso);
-    request.input('username', sql.VarChar, username);
+  const pool = await poolPromise;
+  const request = pool.request();
+  request.input('noso', sql.VarChar, noso);
+  request.input('username', sql.VarChar, username);
 
-    let checkQuery = '', detailQuery = '', parsed = {}, labelType = '';
-    let idWarehouse = null;
-    let fallbackQuery = '';
-    let originalDataQuery = '';
-    let warehouseQuery = '';
+  let checkQuery = '', detailQuery = '', parsed = {}, labelType = '';
+  let idWarehouse = null;
+  let fallbackQuery = '';
+  let originalDataQuery = '';
+  let warehouseQuery = '';
+  var mesinInfo = []; // function-scoped agar aman diakses di return
 
-    // 2. SETUP QUERIES BERDASARKAN TIPE LABEL
-    if (isBahanBaku) {
-      labelType = 'Bahan Baku';
-      const [noBahanBaku, noPallet] = label.split('-');
-      if (!noBahanBaku || !noPallet) {
-        return createResponse(false, {
-          isValidFormat: false,
-          labelType
-        }, 'Format label bahan baku tidak valid. Contoh: A.0001-1');
-      }
+  // 2) Setup queries per tipe
+  if (isBahanBaku) {
+    labelType = 'Bahan Baku';
+    const [noBahanBaku, noPallet] = label.split('-');
+    if (!noBahanBaku || !noPallet) {
+      return createResponse(false, { isValidFormat: false, labelType }, 'Format label bahan baku tidak valid. Contoh: A.0001-1');
+    }
+    parsed = { NoBahanBaku: noBahanBaku, NoPallet: noPallet };
+    request.input('NoBahanBaku', sql.VarChar, noBahanBaku);
+    request.input('NoPallet', sql.VarChar, noPallet);
 
-      parsed = { NoBahanBaku: noBahanBaku, NoPallet: noPallet };
-      request.input('NoBahanBaku', sql.VarChar, noBahanBaku);
-      request.input('NoPallet', sql.VarChar, noPallet);
-
-      checkQuery = `
-          SELECT COUNT(*) AS count FROM StockOpnameHasilBahanBaku
-          WHERE NoSO = @noso AND NoBahanBaku = @NoBahanBaku AND NoPallet = @NoPallet AND Username = @username
-        `;
-        // --- ganti detailQuery DALAM CABANG isBahanBaku ---
-        detailQuery = `
-          SELECT 
-              bbh.Blok,
-              bbh.IdLokasi,
-              COUNT(*) AS JmlhSak,
-              SUM(
-                CASE 
-                  WHEN d.IsPartial = 1 
-                    THEN ISNULL(d.Berat,0) - ISNULL(p.TotalPartial,0)
-                  ELSE ISNULL(d.Berat,0)
-                END
-              ) AS Berat
-          FROM dbo.BahanBaku_d d
-          LEFT JOIN (
-              SELECT 
-                  NoBahanBaku, 
-                  NoPallet, 
-                  NoSak, 
-                  SUM(Berat) AS TotalPartial
-              FROM dbo.BahanBakuPartial
-              WHERE NoBahanBaku = @NoBahanBaku 
-                AND NoPallet    = @NoPallet
-              GROUP BY NoBahanBaku, NoPallet, NoSak
-          ) p 
-              ON d.NoBahanBaku = p.NoBahanBaku 
-            AND d.NoPallet    = p.NoPallet
-            AND d.NoSak       = p.NoSak
-          INNER JOIN dbo.BahanBakuPallet_h bbh
-              ON bbh.NoBahanBaku = d.NoBahanBaku
-            AND bbh.NoPallet    = d.NoPallet
-          WHERE d.DateUsage IS NULL
-            AND d.NoBahanBaku = @NoBahanBaku
-            AND d.NoPallet    = @NoPallet
-          GROUP BY bbh.Blok, bbh.IdLokasi;
-        `;
-  
-      warehouseQuery = `
-        SELECT mb.IdWarehouse
-        FROM [dbo].[BahanBakuPallet_h] bbh
-        JOIN [dbo].[MstBlok] mb
-          ON mb.Blok = bbh.Blok
-        WHERE bbh.NoBahanBaku = @NoBahanBaku
-          AND bbh.NoPallet    = @NoPallet;
-        `;
-      fallbackQuery = `
-          SELECT COUNT(*) AS JumlahSak, SUM(Berat) AS Berat, MAX(IdLokasi) AS IdLokasi, MAX(IdWarehouse) AS IdWarehouse
-          FROM BahanBaku_d bb
-          JOIN BahanBakuPallet_h bbh ON bb.NoBahanBaku = bbh.NoBahanBaku AND bb.NoPallet = bbh.NoPallet
-          WHERE bb.NoBahanBaku = @NoBahanBaku AND bb.NoPallet = @NoPallet 
-          AND (bb.DateUsage IS NULL OR bbh.IdWarehouse NOT IN (SELECT IdWarehouse FROM StockOpname_h_WarehouseID WHERE NoSO = @noso))
-        `;
-      originalDataQuery = `
-          SELECT COUNT(*) AS JumlahSak, SUM(Berat) AS Berat, MAX(IdLokasi) AS IdLokasi, MAX(IdWarehouse) AS IdWarehouse
-          FROM BahanBaku_d bb
-          JOIN BahanBakuPallet_h bbh ON bb.NoBahanBaku = bbh.NoBahanBaku AND bb.NoPallet = bbh.NoPallet
-          WHERE bb.NoBahanBaku = @NoBahanBaku AND bb.NoPallet = @NoPallet
-        `;
-
-    } else if (isWashing) {
-      labelType = 'Washing';
-      parsed = { NoWashing: label };
-      request.input('NoWashing', sql.VarChar, label);
-
-      checkQuery = `
-          SELECT COUNT(*) AS count FROM StockOpnameHasilWashing
-          WHERE NoSO = @noso AND NoWashing = @NoWashing AND Username = @username
-        `;
-      detailQuery = `
-          SELECT JmlhSak, Berat, IdLokasi
-          FROM StockOpnameWashing
-          WHERE NoSO = @noso AND NoWashing = @NoWashing
-        `;
-      warehouseQuery = `
-        SELECT mb.IdWarehouse
-        FROM [dbo].[Washing_h] wh
-        JOIN [dbo].[MstBlok]   mb
-          ON UPPER(LTRIM(RTRIM(mb.Blok))) = UPPER(LTRIM(RTRIM(wh.Blok)))
-        WHERE wh.NoWashing = @NoWashing;
-        `;
-      fallbackQuery = `
-          SELECT COUNT(*) AS JumlahSak, SUM(Berat) AS Berat, MAX(IdLokasi) AS IdLokasi, MAX(IdWarehouse) AS IdWarehouse
-          FROM Washing_d wd
-          JOIN Washing_h wh ON wd.NoWashing = wh.NoWashing
-          WHERE wd.NoWashing = @NoWashing 
-          AND (wd.DateUsage IS NULL OR wh.IdWarehouse NOT IN (SELECT IdWarehouse FROM StockOpname_h_WarehouseID WHERE NoSO = @noso))
-        `;
-      originalDataQuery = `
-          SELECT COUNT(*) AS JumlahSak, SUM(Berat) AS Berat, MAX(IdLokasi) AS IdLokasi, MAX(IdWarehouse) AS IdWarehouse
-          FROM Washing_d wd
-          JOIN Washing_h wh ON wd.NoWashing = wh.NoWashing
-          WHERE wd.NoWashing = @NoWashing
-        `;
-
-    } else if (isBroker) {
-      labelType = 'Broker';
-      parsed = { NoBroker: label };
-      request.input('NoBroker', sql.VarChar, label);
-
-      checkQuery = `
-          SELECT COUNT(*) AS count FROM StockOpnameHasilBroker
-          WHERE NoSO = @noso AND NoBroker = @NoBroker AND Username = @username
-        `;
-
-        detailQuery = `
-          SELECT 
-            MIN(d.IdLokasi) AS IdLokasi,
-            COUNT(*) AS JmlhSak,
-            SUM(
-                CASE 
-                    WHEN d.IsPartial = 1 
-                        THEN ISNULL(d.Berat,0) - ISNULL(p.TotalPartial,0)
-                    ELSE ISNULL(d.Berat,0)
-                END
-            ) AS Berat
-        FROM [dbo].[Broker_d] d
-        LEFT JOIN (
-            SELECT 
-                NoBroker,
-                NoSak,
-                SUM(Berat) AS TotalPartial
-            FROM [dbo].[BrokerPartial]
-            WHERE NoBroker = @NoBroker
-            GROUP BY NoBroker, NoSak
-        ) p 
-            ON d.NoBroker = p.NoBroker
-          AND d.NoSak    = p.NoSak
-        WHERE d.DateUsage IS NULL
-          AND d.NoBroker = @NoBroker;
-        `;
-
-      
-      warehouseQuery = `
-          SELECT IdWarehouse FROM Broker_h
-          WHERE NoBroker = @NoBroker
-        `;
-      fallbackQuery = `
-          SELECT COUNT(*) AS JumlahSak, SUM(Berat) AS Berat, MAX(IdLokasi) AS IdLokasi, MAX(IdWarehouse) AS IdWarehouse
-          FROM Broker_d bd
-          JOIN Broker_h bh ON bd.NoBroker = bh.NoBroker
-          WHERE bd.NoBroker = @NoBroker 
-          AND (bd.DateUsage IS NULL OR bh.IdWarehouse NOT IN (SELECT IdWarehouse FROM StockOpname_h_WarehouseID WHERE NoSO = @noso))
-        `;
-      originalDataQuery = `
-          SELECT COUNT(*) AS JumlahSak, SUM(Berat) AS Berat, MAX(IdLokasi) AS IdLokasi, MAX(IdWarehouse) AS IdWarehouse
-          FROM Broker_d bd
-          JOIN Broker_h bh ON bd.NoBroker = bh.NoBroker
-          WHERE bd.NoBroker = @NoBroker
-        `;
-
-    } else if (isCrusher) {
-      labelType = 'Crusher';
-      parsed = { NoCrusher: label };
-      request.input('NoCrusher', sql.VarChar, label);
-
-      checkQuery = `
-          SELECT COUNT(*) AS count FROM StockOpnameHasilCrusher
-          WHERE NoSO = @noso AND NoCrusher = @NoCrusher AND Username = @username
-        `;
-      detailQuery = `
-          SELECT Berat, IdLokasi
-          FROM StockOpnameCrusher
-          WHERE NoSO = @noso AND NoCrusher = @NoCrusher
-        `;
-      warehouseQuery = `
-          SELECT IdWarehouse FROM Crusher
-          WHERE NoCrusher = @NoCrusher
-        `;
-      fallbackQuery = `
-          SELECT SUM(Berat) AS Berat, MAX(IdLokasi) AS IdLokasi, MAX(IdWarehouse) AS IdWarehouse
-          FROM Crusher
-          WHERE NoCrusher = @NoCrusher 
-          AND (DateUsage IS NULL OR IdWarehouse NOT IN (SELECT IdWarehouse FROM StockOpname_h_WarehouseID WHERE NoSO = @noso))
-        `;
-      originalDataQuery = `
-          SELECT SUM(Berat) AS Berat, MAX(IdLokasi) AS IdLokasi, MAX(IdWarehouse) AS IdWarehouse
-          FROM Crusher
-          WHERE NoCrusher = @NoCrusher
-        `;
-
-    } else if (isBonggolan) {
-      labelType = 'Bonggolan';
-      parsed = { NoBonggolan: label };
-      request.input('NoBonggolan', sql.VarChar, label);
-
-      checkQuery = `
-          SELECT COUNT(*) AS count FROM StockOpnameHasilBonggolan
-          WHERE NoSO = @noso AND NoBonggolan = @NoBonggolan AND Username = @username
-        `;
-      detailQuery = `
-          SELECT Berat, IdLokasi
-          FROM StockOpnameBonggolan
-          WHERE NoSO = @noso AND NoBonggolan = @NoBonggolan
-        `;
-      warehouseQuery = `
-          SELECT IdWarehouse FROM Bonggolan
-          WHERE NoBonggolan = @NoBonggolan
-        `;
-      fallbackQuery = `
-          SELECT SUM(Berat) AS Berat, MAX(IdLokasi) AS IdLokasi, MAX(IdWarehouse) AS IdWarehouse
-          FROM Bonggolan
-          WHERE NoBonggolan = @NoBonggolan 
-          AND (DateUsage IS NULL OR IdWarehouse NOT IN (SELECT IdWarehouse FROM StockOpname_h_WarehouseID WHERE NoSO = @noso))
-        `;
-      originalDataQuery = `
-          SELECT SUM(Berat) AS Berat, MAX(IdLokasi) AS IdLokasi, MAX(IdWarehouse) AS IdWarehouse
-          FROM Bonggolan
-          WHERE NoBonggolan = @NoBonggolan
-        `;
-
-      // --- Query info mesin untuk bonggolan (UNION ALL multi sumber) ---
-      const mesinInfoQuery = `
-        SELECT 
-            iob.NoProduksi AS Nomor,
-            iph.IdMesin,
-            mm.NamaMesin,
-            iph.IdOperator,
-            mop.NamaOperator
-        FROM InjectProduksiOutputBonggolan iob
-        LEFT JOIN InjectProduksi_h iph ON iob.NoProduksi = iph.NoProduksi
-        LEFT JOIN MstMesin mm ON iph.IdMesin = mm.IdMesin
-        LEFT JOIN MstOperator mop ON iph.IdOperator = mop.IdOperator
-        WHERE iob.NoBonggolan = @NoBonggolan
-
-        UNION ALL
-
-        SELECT 
-            bpob.NoProduksi AS Nomor,
-            bph.IdMesin,
-            mm.NamaMesin,
-            bph.IdOperator,
-            mop.NamaOperator
-        FROM BrokerProduksiOutputBonggolan bpob
-        LEFT JOIN BrokerProduksi_h bph ON bpob.NoProduksi = bph.NoProduksi
-        LEFT JOIN MstMesin mm ON bph.IdMesin = mm.IdMesin
-        LEFT JOIN MstOperator mop ON bph.IdOperator = mop.IdOperator
-        WHERE bpob.NoBonggolan = @NoBonggolan
-
-        UNION ALL
-
-        SELECT 
-            bsob.NoBongkarSusun AS Nomor,
-            NULL AS IdMesin,
-            'Bongkar Susun' AS NamaMesin,
-            NULL AS IdOperator,
-            NULL AS NamaOperator
-        FROM BongkarSusunOutputBonggolan bsob
-        WHERE bsob.NoBonggolan = @NoBonggolan
-
-        UNION ALL
-
-        SELECT 
-            aob.NoAdjustment AS Nomor,
-            NULL AS IdMesin,
-            'Adjustment' AS NamaMesin,
-            NULL AS IdOperator,
-            NULL AS NamaOperator
-        FROM AdjustmentOutputBonggolan aob
-        WHERE aob.NoBonggolan = @NoBonggolan
-    `;      
-    
-    // Jalankan query di awal, simpan hasilnya
-    const mesinInfoResult = await request.query(mesinInfoQuery);
-    var mesinInfo = mesinInfoResult.recordset || [];
-
-    } else if (isGilingan) {
-      labelType = 'Gilingan';
-      parsed = { NoGilingan: label };
-      request.input('NoGilingan', sql.VarChar, label);
-
-      checkQuery = `
-          SELECT COUNT(*) AS count FROM StockOpnameHasilGilingan
-          WHERE NoSO = @noso AND NoGilingan = @NoGilingan AND Username = @username
-        `;
-      detailQuery = `
-        SELECT 
-          MIN(d.IdLokasi)   AS IdLokasi,
-          MIN(d.IdWarehouse) AS IdWarehouse,
+    checkQuery = `
+      SELECT COUNT(*) AS count FROM StockOpnameHasilBahanBaku
+      WHERE NoSO = @noso AND NoBahanBaku = @NoBahanBaku AND NoPallet = @NoPallet AND Username = @username
+    `;
+    detailQuery = `
+      SELECT 
+          bbh.Blok,
+          bbh.IdLokasi,
           COUNT(*) AS JmlhSak,
           SUM(
-              CASE 
-                  WHEN d.IsPartial = 1 
-                      THEN ISNULL(d.Berat,0) - ISNULL(p.TotalPartial,0)
-                  ELSE ISNULL(d.Berat,0)
-              END
+            CASE 
+              WHEN d.IsPartial = 1 
+                THEN ISNULL(d.Berat,0) - ISNULL(p.TotalPartial,0)
+              ELSE ISNULL(d.Berat,0)
+            END
           ) AS Berat
-      FROM [dbo].[Gilingan] d
+      FROM dbo.BahanBaku_d d
       LEFT JOIN (
           SELECT 
-              NoGilingan,
+              NoBahanBaku, 
+              NoPallet, 
+              NoSak, 
               SUM(Berat) AS TotalPartial
+          FROM dbo.BahanBakuPartial
+          WHERE NoBahanBaku = @NoBahanBaku 
+            AND NoPallet    = @NoPallet
+          GROUP BY NoBahanBaku, NoPallet, NoSak
+      ) p 
+          ON d.NoBahanBaku = p.NoBahanBaku 
+        AND d.NoPallet    = p.NoPallet
+        AND d.NoSak       = p.NoSak
+      INNER JOIN dbo.BahanBakuPallet_h bbh
+          ON bbh.NoBahanBaku = d.NoBahanBaku
+        AND bbh.NoPallet    = d.NoPallet
+      WHERE d.DateUsage IS NULL
+        AND d.NoBahanBaku = @NoBahanBaku
+        AND d.NoPallet    = @NoPallet
+      GROUP BY bbh.Blok, bbh.IdLokasi;
+    `;
+    warehouseQuery = `
+      SELECT mb.IdWarehouse
+      FROM [dbo].[BahanBakuPallet_h] bbh
+      JOIN [dbo].[MstBlok] mb
+        ON mb.Blok = bbh.Blok
+      WHERE bbh.NoBahanBaku = @NoBahanBaku
+        AND bbh.NoPallet    = @NoPallet;
+    `;
+    fallbackQuery = `
+      SELECT COUNT(*) AS JumlahSak, SUM(Berat) AS Berat, MAX(IdLokasi) AS IdLokasi, MAX(IdWarehouse) AS IdWarehouse
+      FROM BahanBaku_d bb
+      JOIN BahanBakuPallet_h bbh ON bb.NoBahanBaku = bbh.NoBahanBaku AND bb.NoPallet = bbh.NoPallet
+      WHERE bb.NoBahanBaku = @NoBahanBaku AND bb.NoPallet = @NoPallet 
+      AND (bb.DateUsage IS NULL OR bbh.IdWarehouse NOT IN (SELECT IdWarehouse FROM StockOpname_h_WarehouseID WHERE NoSO = @noso))
+    `;
+    originalDataQuery = `
+      SELECT COUNT(*) AS JumlahSak, SUM(Berat) AS Berat, MAX(IdLokasi) AS IdLokasi, MAX(IdWarehouse) AS IdWarehouse
+      FROM BahanBaku_d bb
+      JOIN BahanBakuPallet_h bbh ON bb.NoBahanBaku = bbh.NoBahanBaku AND bb.NoPallet = bbh.NoPallet
+      WHERE bb.NoBahanBaku = @NoBahanBaku AND bb.NoPallet = @NoPallet
+    `;
+
+  } else if (isWashing) {
+    labelType = 'Washing';
+    parsed = { NoWashing: label };
+    request.input('NoWashing', sql.VarChar, label);
+
+    checkQuery = `
+      SELECT COUNT(*) AS count FROM StockOpnameHasilWashing
+      WHERE NoSO = @noso AND NoWashing = @NoWashing AND Username = @username
+    `;
+    detailQuery = `
+      SELECT
+        ISNULL(dstats.JmlhSak, 0) AS JmlhSak,
+        ISNULL(dstats.Berat, 0.0) AS Berat,
+        h.Blok,
+        h.IdLokasi
+      FROM [dbo].[Washing_h] AS h
+      LEFT JOIN (
+        SELECT
+          NoWashing,
+          COUNT(1) AS JmlhSak,
+          SUM(ISNULL(Berat, 0.0)) AS Berat
+        FROM [dbo].[Washing_d]
+        WHERE NoWashing = @NoWashing
+          AND DateUsage IS NULL
+        GROUP BY NoWashing
+      ) AS dstats
+        ON dstats.NoWashing = h.NoWashing
+      WHERE h.NoWashing = @NoWashing;
+    `;
+    warehouseQuery = `
+      SELECT mb.IdWarehouse
+      FROM [dbo].[Washing_h] wh
+      JOIN [dbo].[MstBlok]   mb
+        ON UPPER(LTRIM(RTRIM(mb.Blok))) = UPPER(LTRIM(RTRIM(wh.Blok)))
+      WHERE wh.NoWashing = @NoWashing;
+    `;
+    fallbackQuery = `
+      SELECT COUNT(*) AS JumlahSak, SUM(Berat) AS Berat, MAX(IdLokasi) AS IdLokasi, MAX(IdWarehouse) AS IdWarehouse
+      FROM Washing_d wd
+      JOIN Washing_h wh ON wd.NoWashing = wh.NoWashing
+      WHERE wd.NoWashing = @NoWashing 
+      AND (wd.DateUsage IS NULL OR wh.IdWarehouse NOT IN (SELECT IdWarehouse FROM StockOpname_h_WarehouseID WHERE NoSO = @noso))
+    `;
+    originalDataQuery = `
+      SELECT COUNT(*) AS JumlahSak, SUM(Berat) AS Berat, MAX(IdLokasi) AS IdLokasi, MAX(IdWarehouse) AS IdWarehouse
+      FROM Washing_d wd
+      JOIN Washing_h wh ON wd.NoWashing = wh.NoWashing
+      WHERE wd.NoWashing = @NoWashing
+    `;
+
+  } else if (isBroker) {
+    labelType = 'Broker';
+    parsed = { NoBroker: label };
+    request.input('NoBroker', sql.VarChar, label);
+
+    checkQuery = `
+      SELECT COUNT(*) AS count FROM StockOpnameHasilBroker
+      WHERE NoSO = @noso AND NoBroker = @NoBroker AND Username = @username
+    `;
+    detailQuery = `
+      SELECT
+        ISNULL(agg.JmlhSak, 0) AS JmlhSak,
+        ISNULL(agg.Berat,   0) AS Berat,
+        h.Blok,
+        h.IdLokasi
+      FROM [dbo].[Broker_h] AS h
+      LEFT JOIN (
+        SELECT
+          d.NoBroker,
+          COUNT(*) AS JmlhSak,
+          SUM(
+            CASE 
+              WHEN d.IsPartial = 1 THEN 
+                CASE 
+                  WHEN ISNULL(d.Berat,0) - ISNULL(p.TotalPartial,0) < 0 
+                    THEN 0 
+                  ELSE ISNULL(d.Berat,0) - ISNULL(p.TotalPartial,0)
+                END
+              ELSE ISNULL(d.Berat,0)
+            END
+          ) AS Berat
+        FROM [dbo].[Broker_d] AS d
+        LEFT JOIN (
+          SELECT 
+            NoBroker,
+            NoSak,
+            SUM(ISNULL(Berat,0)) AS TotalPartial
+          FROM [dbo].[BrokerPartial]
+          WHERE NoBroker = @NoBroker
+          GROUP BY NoBroker, NoSak
+        ) AS p
+          ON p.NoBroker = d.NoBroker
+         AND p.NoSak    = d.NoSak
+        WHERE d.NoBroker = @NoBroker
+          AND d.DateUsage IS NULL
+        GROUP BY d.NoBroker
+      ) AS agg
+        ON agg.NoBroker = h.NoBroker
+      WHERE h.NoBroker = @NoBroker;
+    `;
+    warehouseQuery = `SELECT IdWarehouse FROM Broker_h WHERE NoBroker = @NoBroker`;
+    fallbackQuery = `
+      SELECT COUNT(*) AS JumlahSak, SUM(Berat) AS Berat, MAX(IdLokasi) AS IdLokasi, MAX(IdWarehouse) AS IdWarehouse
+      FROM Broker_d bd
+      JOIN Broker_h bh ON bd.NoBroker = bh.NoBroker
+      WHERE bd.NoBroker = @NoBroker 
+      AND (bd.DateUsage IS NULL OR bh.IdWarehouse NOT IN (SELECT IdWarehouse FROM StockOpname_h_WarehouseID WHERE NoSO = @noso))
+    `;
+    originalDataQuery = `
+      SELECT COUNT(*) AS JumlahSak, SUM(Berat) AS Berat, MAX(IdLokasi) AS IdLokasi, MAX(IdWarehouse) AS IdWarehouse
+      FROM Broker_d bd
+      JOIN Broker_h bh ON bd.NoBroker = bh.NoBroker
+      WHERE bd.NoBroker = @NoBroker
+    `;
+
+  } else if (isCrusher) {
+    labelType = 'Crusher';
+    parsed = { NoCrusher: label };
+    request.input('NoCrusher', sql.VarChar, label);
+
+    checkQuery = `
+      SELECT COUNT(*) AS count FROM StockOpnameHasilCrusher
+      WHERE NoSO = @noso AND NoCrusher = @NoCrusher AND Username = @username
+    `;
+    detailQuery = `
+      SELECT TOP (1)
+        ISNULL(c.Berat, 0) AS Berat,
+        c.Blok,
+        c.IdLokasi
+      FROM [dbo].[Crusher] AS c
+      WHERE c.NoCrusher = @NoCrusher
+      ORDER BY c.DateCreate DESC;
+    `;
+    warehouseQuery = `SELECT IdWarehouse FROM Crusher WHERE NoCrusher = @NoCrusher`;
+    fallbackQuery = `
+      SELECT SUM(Berat) AS Berat, MAX(IdLokasi) AS IdLokasi, MAX(IdWarehouse) AS IdWarehouse
+      FROM Crusher
+      WHERE NoCrusher = @NoCrusher 
+      AND (DateUsage IS NULL OR IdWarehouse NOT IN (SELECT IdWarehouse FROM StockOpname_h_WarehouseID WHERE NoSO = @noso))
+    `;
+    originalDataQuery = `
+      SELECT SUM(Berat) AS Berat, MAX(IdLokasi) AS IdLokasi, MAX(IdWarehouse) AS IdWarehouse
+      FROM Crusher
+      WHERE NoCrusher = @NoCrusher
+    `;
+
+  } else if (isBonggolan) {
+    labelType = 'Bonggolan';
+    parsed = { NoBonggolan: label };
+    request.input('NoBonggolan', sql.VarChar, label);
+
+    checkQuery = `
+      SELECT COUNT(*) AS count FROM StockOpnameHasilBonggolan
+      WHERE NoSO = @noso AND NoBonggolan = @NoBonggolan AND Username = @username
+    `;
+    detailQuery = `
+      SELECT TOP (1)
+        ISNULL(b.Berat, 0) AS Berat,
+        b.Blok,
+        b.IdLokasi
+      FROM [dbo].[Bonggolan] AS b
+      WHERE b.NoBonggolan = @NoBonggolan
+      ORDER BY b.DateCreate DESC;
+    `;
+    warehouseQuery = `SELECT IdWarehouse FROM Bonggolan WHERE NoBonggolan = @NoBonggolan`;
+    fallbackQuery = `
+      SELECT SUM(Berat) AS Berat, MAX(IdLokasi) AS IdLokasi, MAX(IdWarehouse) AS IdWarehouse
+      FROM Bonggolan
+      WHERE NoBonggolan = @NoBonggolan 
+      AND (DateUsage IS NULL OR IdWarehouse NOT IN (SELECT IdWarehouse FROM StockOpname_h_WarehouseID WHERE NoSO = @noso))
+    `;
+    originalDataQuery = `
+      SELECT SUM(Berat) AS Berat, MAX(IdLokasi) AS IdLokasi, MAX(IdWarehouse) AS IdWarehouse
+      FROM Bonggolan
+      WHERE NoBonggolan = @NoBonggolan
+    `;
+
+    // Info mesin bonggolan
+    const mesinInfoQuery = `
+      SELECT 
+          iob.NoProduksi AS Nomor,
+          iph.IdMesin,
+          mm.NamaMesin,
+          iph.IdOperator,
+          mop.NamaOperator
+      FROM InjectProduksiOutputBonggolan iob
+      LEFT JOIN InjectProduksi_h iph ON iob.NoProduksi = iph.NoProduksi
+      LEFT JOIN MstMesin mm ON iph.IdMesin = mm.IdMesin
+      LEFT JOIN MstOperator mop ON iph.IdOperator = mop.IdOperator
+      WHERE iob.NoBonggolan = @NoBonggolan
+
+      UNION ALL
+
+      SELECT 
+          bpob.NoProduksi AS Nomor,
+          bph.IdMesin,
+          mm.NamaMesin,
+          bph.IdOperator,
+          mop.NamaOperator
+      FROM BrokerProduksiOutputBonggolan bpob
+      LEFT JOIN BrokerProduksi_h bph ON bpob.NoProduksi = bph.NoProduksi
+      LEFT JOIN MstMesin mm ON bph.IdMesin = mm.IdMesin
+      LEFT JOIN MstOperator mop ON bph.IdOperator = mop.IdOperator
+      WHERE bpob.NoBonggolan = @NoBonggolan
+
+      UNION ALL
+
+      SELECT 
+          bsob.NoBongkarSusun AS Nomor,
+          NULL AS IdMesin,
+          'Bongkar Susun' AS NamaMesin,
+          NULL AS IdOperator,
+          NULL AS NamaOperator
+      FROM BongkarSusunOutputBonggolan bsob
+      WHERE bsob.NoBonggolan = @NoBonggolan
+
+      UNION ALL
+
+      SELECT 
+          aob.NoAdjustment AS Nomor,
+          NULL AS IdMesin,
+          'Adjustment' AS NamaMesin,
+          NULL AS IdOperator,
+          NULL AS NamaOperator
+      FROM AdjustmentOutputBonggolan aob
+      WHERE aob.NoBonggolan = @NoBonggolan
+    `;
+    const mesinInfoResult = await request.query(mesinInfoQuery);
+    mesinInfo = mesinInfoResult.recordset || [];
+
+  } else if (isGilingan) {
+    labelType = 'Gilingan';
+    parsed = { NoGilingan: label };
+    request.input('NoGilingan', sql.VarChar, label);
+
+    checkQuery = `
+      SELECT COUNT(*) AS count FROM StockOpnameHasilGilingan
+      WHERE NoSO = @noso AND NoGilingan = @NoGilingan AND Username = @username
+    `;
+    detailQuery = `
+      SELECT
+        agg.JmlhSak,
+        agg.Berat,
+        h.Blok,
+        h.IdLokasi
+      FROM (
+        SELECT
+          COUNT(*) AS JmlhSak,
+          SUM(
+            CASE 
+              WHEN d.IsPartial = 1 
+                THEN ISNULL(d.Berat,0) - ISNULL(p.TotalPartial,0)
+              ELSE ISNULL(d.Berat,0)
+            END
+          ) AS Berat
+        FROM [dbo].[Gilingan] AS d
+        LEFT JOIN (
+          SELECT 
+            NoGilingan,
+            SUM(ISNULL(Berat,0)) AS TotalPartial
           FROM [dbo].[GilinganPartial]
           WHERE NoGilingan = @NoGilingan
           GROUP BY NoGilingan
-      ) p 
-          ON d.NoGilingan = p.NoGilingan
-      WHERE d.DateUsage IS NULL
-        AND d.NoGilingan = @NoGilingan;
-        `;
-      warehouseQuery = `
-          SELECT IdWarehouse FROM Gilingan
-          WHERE NoGilingan = @NoGilingan
-        `;
-      fallbackQuery = `
-          SELECT SUM(Berat) AS Berat, MAX(IdLokasi) AS IdLokasi, MAX(IdWarehouse) AS IdWarehouse
-          FROM Gilingan
-          WHERE NoGilingan = @NoGilingan 
-          AND (DateUsage IS NULL OR IdWarehouse NOT IN (SELECT IdWarehouse FROM StockOpname_h_WarehouseID WHERE NoSO = @noso))
-        `;
-      originalDataQuery = `
-          SELECT SUM(Berat) AS Berat, MAX(IdLokasi) AS IdLokasi, MAX(IdWarehouse) AS IdWarehouse
-          FROM Gilingan
-          WHERE NoGilingan = @NoGilingan
-        `;
+        ) AS p
+          ON p.NoGilingan = d.NoGilingan
+        WHERE d.NoGilingan = @NoGilingan
+          AND d.DateUsage IS NULL
+      ) AS agg
+      CROSS APPLY (
+        SELECT TOP (1)
+          g.Blok,
+          g.IdLokasi
+        FROM [dbo].[Gilingan] AS g
+        WHERE g.NoGilingan = @NoGilingan
+        ORDER BY g.DateCreate DESC
+      ) AS h;
+    `;
+    warehouseQuery = `SELECT IdWarehouse FROM Gilingan WHERE NoGilingan = @NoGilingan`;
+    fallbackQuery = `
+      SELECT SUM(Berat) AS Berat, MAX(IdLokasi) AS IdLokasi, MAX(IdWarehouse) AS IdWarehouse
+      FROM Gilingan
+      WHERE NoGilingan = @NoGilingan 
+      AND (DateUsage IS NULL OR IdWarehouse NOT IN (SELECT IdWarehouse FROM StockOpname_h_WarehouseID WHERE NoSO = @noso))
+    `;
+    originalDataQuery = `
+      SELECT SUM(Berat) AS Berat, MAX(IdLokasi) AS IdLokasi, MAX(IdWarehouse) AS IdWarehouse
+      FROM Gilingan
+      WHERE NoGilingan = @NoGilingan
+    `;
 
-    } else if (isMixer) {
-      labelType = 'Mixer';
-      parsed = { NoMixer: label };
-      request.input('NoMixer', sql.VarChar, label);
+  } else if (isMixer) {
+    labelType = 'Mixer';
+    parsed = { NoMixer: label };
+    request.input('NoMixer', sql.VarChar, label);
 
-      checkQuery = `
-          SELECT COUNT(*) AS count FROM StockOpnameHasilMixer
-          WHERE NoSO = @noso AND NoMixer = @NoMixer AND Username = @username
-        `;
-      detailQuery = `
-        SELECT 
-          MIN(d.IdLokasi) AS IdLokasi,
+    checkQuery = `
+      SELECT COUNT(*) AS count FROM StockOpnameHasilMixer
+      WHERE NoSO = @noso AND NoMixer = @NoMixer AND Username = @username
+    `;
+    detailQuery = `
+      SELECT
+        agg.JmlhSak,
+        agg.Berat,
+        h.Blok,
+        h.IdLokasi
+      FROM [dbo].[Mixer_h] AS h
+      LEFT JOIN (
+        SELECT
+          d.NoMixer,
           COUNT(*) AS JmlhSak,
           SUM(
-              CASE 
-                  WHEN d.IsPartial = 1 
-                      THEN ISNULL(d.Berat,0) - ISNULL(p.TotalPartial,0)
-                  ELSE ISNULL(d.Berat,0)
-              END
+            CASE
+              WHEN d.IsPartial = 1 THEN
+                CASE
+                  WHEN ISNULL(d.Berat,0) - ISNULL(p.TotalPartial,0) < 0
+                    THEN 0
+                  ELSE ISNULL(d.Berat,0) - ISNULL(p.TotalPartial,0)
+                END
+              ELSE ISNULL(d.Berat,0)
+            END
           ) AS Berat
-      FROM [dbo].[Mixer_d] d
-      LEFT JOIN (
-          SELECT 
-              NoMixer,
-              NoSak,
-              SUM(Berat) AS TotalPartial
+        FROM [dbo].[Mixer_d] AS d
+        LEFT JOIN (
+          SELECT
+            NoMixer,
+            NoSak,
+            SUM(ISNULL(Berat,0)) AS TotalPartial
           FROM [dbo].[MixerPartial]
           WHERE NoMixer = @NoMixer
           GROUP BY NoMixer, NoSak
-      ) p 
-          ON d.NoMixer = p.NoMixer
-        AND d.NoSak   = p.NoSak
-      WHERE d.DateUsage IS NULL
-        AND d.NoMixer = @NoMixer;
-        `;
-      warehouseQuery = `
-          SELECT IdWarehouse FROM Mixer_h
-          WHERE NoMixer = @NoMixer
-        `;
-      fallbackQuery = `
-          SELECT COUNT(*) AS JumlahSak, SUM(Berat) AS Berat, MAX(IdLokasi) AS IdLokasi, MAX(IdWarehouse) AS IdWarehouse
-          FROM Mixer_d md
-          JOIN Mixer_h mh ON md.NoMixer = mh.NoMixer
-          WHERE md.NoMixer = @NoMixer 
-          AND (md.DateUsage IS NULL OR mh.IdWarehouse NOT IN (SELECT IdWarehouse FROM StockOpname_h_WarehouseID WHERE NoSO = @noso))
-        `;
-      originalDataQuery = `
-          SELECT COUNT(*) AS JumlahSak, SUM(Berat) AS Berat, MAX(IdLokasi) AS IdLokasi, MAX(IdWarehouse) AS IdWarehouse
-          FROM Mixer_d md
-          JOIN Mixer_h mh ON md.NoMixer = mh.NoMixer
-          WHERE md.NoMixer = @NoMixer
-        `;
+        ) AS p
+            ON p.NoMixer = d.NoMixer
+           AND p.NoSak   = d.NoSak
+        WHERE d.NoMixer = @NoMixer
+          AND d.DateUsage IS NULL
+        GROUP BY d.NoMixer
+      ) AS agg
+        ON agg.NoMixer = h.NoMixer
+      WHERE h.NoMixer = @NoMixer;
+    `;
+    warehouseQuery = `SELECT IdWarehouse FROM Mixer_h WHERE NoMixer = @NoMixer`;
+    fallbackQuery = `
+      SELECT COUNT(*) AS JumlahSak, SUM(Berat) AS Berat, MAX(IdLokasi) AS IdLokasi, MAX(IdWarehouse) AS IdWarehouse
+      FROM Mixer_d md
+      JOIN Mixer_h mh ON md.NoMixer = mh.NoMixer
+      WHERE md.NoMixer = @NoMixer 
+      AND (md.DateUsage IS NULL OR mh.IdWarehouse NOT IN (SELECT IdWarehouse FROM StockOpname_h_WarehouseID WHERE NoSO = @noso))
+    `;
+    originalDataQuery = `
+      SELECT COUNT(*) AS JumlahSak, SUM(Berat) AS Berat, MAX(IdLokasi) AS IdLokasi, MAX(IdWarehouse) AS IdWarehouse
+      FROM Mixer_d md
+      JOIN Mixer_h mh ON md.NoMixer = mh.NoMixer
+      WHERE md.NoMixer = @NoMixer
+    `;
 
-    } else if (isFurnitureWIP) {
-      labelType = 'Furniture WIP';
-      parsed = { NoFurnitureWIP: label };
-      request.input('NoFurnitureWIP', sql.VarChar, label);
+  } else if (isFurnitureWIP) {
+    labelType = 'Furniture WIP';
+    parsed = { NoFurnitureWIP: label };
+    request.input('NoFurnitureWIP', sql.VarChar, label);
 
-      checkQuery = `
-          SELECT COUNT(*) AS count FROM StockOpnameHasilFurnitureWIP
-          WHERE NoSO = @noso AND NoFurnitureWIP = @NoFurnitureWIP AND Username = @username
-        `;
-      detailQuery = `
-        SELECT 
-          MIN(d.IdLokasi)    AS IdLokasi,
-          SUM(
-              CASE 
-                  WHEN d.IsPartial = 1 
-                      THEN ISNULL(d.Pcs,0) - ISNULL(p.TotalPartialPcs,0)
-                  ELSE ISNULL(d.Pcs,0)
-              END
-          ) AS JmlhSak,
-          SUM(d.Berat) AS Berat
-      FROM [dbo].[FurnitureWIP] d
-      LEFT JOIN (
-          SELECT 
-              NoFurnitureWIP,
-              SUM(Pcs) AS TotalPartialPcs
-          FROM [dbo].[FurnitureWIPPartial]
-          WHERE NoFurnitureWIP = @NoFurnitureWIP
-          GROUP BY NoFurnitureWIP
-      ) p 
-          ON d.NoFurnitureWIP = p.NoFurnitureWIP
-      WHERE d.DateUsage IS NULL
-        AND d.NoFurnitureWIP = @NoFurnitureWIP;
-        `;
-      warehouseQuery = `
-          SELECT IdWarehouse FROM FurnitureWIP
-          WHERE NoFurnitureWIP = @NoFurnitureWIP
-        `;
-      fallbackQuery = `
-          SELECT COUNT(*) AS JumlahSak, SUM(Berat) AS Berat, MAX(IdLokasi) AS IdLokasi, MAX(IdWarehouse) AS IdWarehouse
-          FROM FurnitureWIP
-          WHERE NoFurnitureWIP = @NoFurnitureWIP 
-          AND (DateUsage IS NULL OR IdWarehouse NOT IN (SELECT IdWarehouse FROM StockOpname_h_WarehouseID WHERE NoSO = @noso))
-        `;
-      originalDataQuery = `
-          SELECT COUNT(*) AS JumlahSak, SUM(Berat) AS Berat, MAX(IdLokasi) AS IdLokasi, MAX(IdWarehouse) AS IdWarehouse
-          FROM FurnitureWIP
-          WHERE NoFurnitureWIP = @NoFurnitureWIP
-        `;
+    checkQuery = `
+      SELECT COUNT(*) AS count FROM StockOpnameHasilFurnitureWIP
+      WHERE NoSO = @noso AND NoFurnitureWIP = @NoFurnitureWIP AND Username = @username
+    `;
+    detailQuery = `
+      WITH base AS (
+        SELECT
+          d.NoFurnitureWIP,
+          SUM(CASE WHEN d.IsPartial = 1 THEN 0 ELSE ISNULL(d.Pcs,0) END) AS SumNonPartialPcs,
+          SUM(CASE WHEN d.IsPartial = 1 THEN ISNULL(d.Pcs,0) ELSE 0 END) AS SumPartialPcs,
+          SUM(ISNULL(d.Berat,0)) AS TotalBerat
+        FROM [dbo].[FurnitureWIP] d
+        WHERE d.NoFurnitureWIP = @NoFurnitureWIP
+          AND d.DateUsage IS NULL
+        GROUP BY d.NoFurnitureWIP
+      ),
+      p AS (
+        SELECT
+          fp.NoFurnitureWIP,
+          SUM(ISNULL(fp.Pcs,0)) AS TotalPartialPcs
+        FROM [dbo].[FurnitureWIPPartial] fp
+        WHERE fp.NoFurnitureWIP = @NoFurnitureWIP
+        GROUP BY fp.NoFurnitureWIP
+      ),
+      agg AS (
+        SELECT
+          b.NoFurnitureWIP,
+          b.SumNonPartialPcs +
+          CASE
+            WHEN ISNULL(b.SumPartialPcs,0) - ISNULL(p.TotalPartialPcs,0) < 0
+              THEN 0
+            ELSE ISNULL(b.SumPartialPcs,0) - ISNULL(p.TotalPartialPcs,0)
+          END AS JmlhSak,
+          b.TotalBerat AS Berat
+        FROM base b
+        LEFT JOIN p ON p.NoFurnitureWIP = b.NoFurnitureWIP
+      )
+      SELECT
+        a.JmlhSak,
+        a.Berat,
+        h.Blok,
+        h.IdLokasi
+      FROM agg a
+      CROSS APPLY (
+        SELECT TOP (1)
+          fh.Blok,
+          fh.IdLokasi
+        FROM [dbo].[FurnitureWIP] AS fh
+        WHERE fh.NoFurnitureWIP = a.NoFurnitureWIP
+        ORDER BY fh.DateCreate DESC, fh.DateTimeCreate DESC
+      ) AS h;
+    `;
+    warehouseQuery = `SELECT IdWarehouse FROM FurnitureWIP WHERE NoFurnitureWIP = @NoFurnitureWIP`;
+    fallbackQuery = `
+      SELECT COUNT(*) AS JumlahSak, SUM(Berat) AS Berat, MAX(IdLokasi) AS IdLokasi, MAX(IdWarehouse) AS IdWarehouse
+      FROM FurnitureWIP
+      WHERE NoFurnitureWIP = @NoFurnitureWIP 
+      AND (DateUsage IS NULL OR IdWarehouse NOT IN (SELECT IdWarehouse FROM StockOpname_h_WarehouseID WHERE NoSO = @noso))
+    `;
+    originalDataQuery = `
+      SELECT COUNT(*) AS JumlahSak, SUM(Berat) AS Berat, MAX(IdLokasi) AS IdLokasi, MAX(IdWarehouse) AS IdWarehouse
+      FROM FurnitureWIP
+      WHERE NoFurnitureWIP = @NoFurnitureWIP
+    `;
 
-    } else if (isBarangJadi) {
-      labelType = 'Barang Jadi';
-      parsed = { NoBJ: label };
-      request.input('NoBJ', sql.VarChar, label);
+  } else if (isBarangJadi) {
+    labelType = 'Barang Jadi';
+    parsed = { NoBJ: label };
+    request.input('NoBJ', sql.VarChar, label);
 
-      checkQuery = `
-          SELECT COUNT(*) AS count FROM StockOpnameHasilBarangJadi
-          WHERE NoSO = @noso AND NoBJ = @NoBJ AND Username = @username
-        `;
-      detailQuery = `
-        SELECT 
-          MIN(d.IdLokasi)    AS IdLokasi,
-          SUM(
-              CASE 
-                  WHEN d.IsPartial = 1 
-                      THEN ISNULL(d.Pcs,0) - ISNULL(p.TotalPartialPcs,0)
-                  ELSE ISNULL(d.Pcs,0)
-              END
-          ) AS JmlhSak,
-          SUM(d.Berat) AS Berat
-      FROM [dbo].[BarangJadi] d
-      LEFT JOIN (
-          SELECT 
-              NoBJ,
-              SUM(Pcs) AS TotalPartialPcs
-          FROM [dbo].[BarangJadiPartial]
-          WHERE NoBJ = @NoBJ
-          GROUP BY NoBJ
-      ) p 
-          ON d.NoBJ = p.NoBJ
-      WHERE d.DateUsage IS NULL
-        AND d.NoBJ = @NoBJ;
-        `;
-      warehouseQuery = `
-          SELECT IdWarehouse FROM BarangJadi
-          WHERE NoBJ = @NoBJ
-        `;
-      fallbackQuery = `
-          SELECT COUNT(*) AS JumlahSak, SUM(Berat) AS Berat, MAX(IdLokasi) AS IdLokasi, MAX(IdWarehouse) AS IdWarehouse
-          FROM BarangJadi
-          WHERE NoBJ = @NoBJ 
-          AND (DateUsage IS NULL OR IdWarehouse NOT IN (SELECT IdWarehouse FROM StockOpname_h_WarehouseID WHERE NoSO = @noso))
-        `;
-      originalDataQuery = `
-          SELECT COUNT(*) AS JumlahSak, SUM(Berat) AS Berat, MAX(IdLokasi) AS IdLokasi, MAX(IdWarehouse) AS IdWarehouse
-          FROM BarangJadi
-          WHERE NoBJ = @NoBJ
-        `;
-    } else if (isReject) {
-      labelType = 'Reject';
-      parsed = { NoReject: label };
-      request.input('NoReject', sql.VarChar, label);
+    checkQuery = `
+      SELECT COUNT(*) AS count FROM StockOpnameHasilBarangJadi
+      WHERE NoSO = @noso AND NoBJ = @NoBJ AND Username = @username
+    `;
+    detailQuery = `
+      ;WITH base AS (
+        SELECT
+          d.NoBJ,
+          SUM(CASE WHEN d.IsPartial = 1 THEN 0 ELSE ISNULL(d.Pcs,0) END) AS SumNonPartialPcs,
+          SUM(CASE WHEN d.IsPartial = 1 THEN ISNULL(d.Pcs,0) ELSE 0 END) AS SumPartialPcs,
+          SUM(ISNULL(d.Berat,0)) AS TotalBerat
+        FROM [dbo].[BarangJadi] d
+        WHERE d.NoBJ = @NoBJ
+          AND d.DateUsage IS NULL
+        GROUP BY d.NoBJ
+      ),
+      p AS (
+        SELECT
+          NoBJ,
+          SUM(ISNULL(Pcs,0)) AS TotalPartialPcs
+        FROM [dbo].[BarangJadiPartial]
+        WHERE NoBJ = @NoBJ
+        GROUP BY NoBJ
+      ),
+      agg AS (
+        SELECT
+          b.NoBJ,
+          b.SumNonPartialPcs +
+          CASE
+            WHEN ISNULL(b.SumPartialPcs,0) - ISNULL(p.TotalPartialPcs,0) < 0
+              THEN 0
+            ELSE ISNULL(b.SumPartialPcs,0) - ISNULL(p.TotalPartialPcs,0)
+          END AS JmlhSak,
+          b.TotalBerat AS Berat
+        FROM base b
+        LEFT JOIN p ON p.NoBJ = b.NoBJ
+      )
+      SELECT
+        a.JmlhSak,
+        a.Berat,
+        h.Blok,
+        h.IdLokasi
+      FROM agg a
+      CROSS APPLY (
+        SELECT TOP (1)
+          bh.Blok,
+          bh.IdLokasi
+        FROM [dbo].[BarangJadi] AS bh
+        WHERE bh.NoBJ = a.NoBJ
+        ORDER BY bh.DateCreate DESC, bh.DateTimeCreate DESC
+      ) AS h;
+    `;
+    warehouseQuery = `SELECT IdWarehouse FROM BarangJadi WHERE NoBJ = @NoBJ`;
+    fallbackQuery = `
+      SELECT COUNT(*) AS JumlahSak, SUM(Berat) AS Berat, MAX(IdLokasi) AS IdLokasi, MAX(IdWarehouse) AS IdWarehouse
+      FROM BarangJadi
+      WHERE NoBJ = @NoBJ 
+      AND (DateUsage IS NULL OR IdWarehouse NOT IN (SELECT IdWarehouse FROM StockOpname_h_WarehouseID WHERE NoSO = @noso))
+    `;
+    originalDataQuery = `
+      SELECT COUNT(*) AS JumlahSak, SUM(Berat) AS Berat, MAX(IdLokasi) AS IdLokasi, MAX(IdWarehouse) AS IdWarehouse
+      FROM BarangJadi
+      WHERE NoBJ = @NoBJ
+    `;
 
-      checkQuery = `
-          SELECT COUNT(*) AS count FROM StockOpnameHasilReject
-          WHERE NoSO = @noso AND NoReject = @NoReject AND Username = @username
-        `;
-      detailQuery = `
-          SELECT Berat, IdLokasi
-          FROM StockOpnameReject
-          WHERE NoSO = @noso AND NoReject = @NoReject
-        `;
-      warehouseQuery = `
-          SELECT IdWarehouse FROM RejectV2
-          WHERE NoReject = @NoReject
-        `;
-      fallbackQuery = `
-          SELECT SUM(Berat) AS Berat, MAX(IdLokasi) AS IdLokasi, MAX(IdWarehouse) AS IdWarehouse
-          FROM RejectV2
-          WHERE NoReject = @NoReject 
-          AND (DateUsage IS NULL OR IdWarehouse NOT IN (SELECT IdWarehouse FROM StockOpname_h_WarehouseID WHERE NoSO = @noso))
-        `;
-      originalDataQuery = `
-          SELECT SUM(Berat) AS Berat, MAX(IdLokasi) AS IdLokasi, MAX(IdWarehouse) AS IdWarehouse
-          FROM BarangJadi
-          WHERE NoReject = @NoReject
-        `;
-    }
+  } else if (isReject) {
+    labelType = 'Reject';
+    parsed = { NoReject: label };
+    request.input('NoReject', sql.VarChar, label);
 
-    // 3. CEK DUPLIKASI PERTAMA KALI (EARLY DUPLICATE CHECK)
-    const checkResult = await request.query(checkQuery);
-    const isDuplicate = checkResult.recordset[0].count > 0;
+    checkQuery = `
+      SELECT COUNT(*) AS count FROM StockOpnameHasilReject
+      WHERE NoSO = @noso AND NoReject = @NoReject AND Username = @username
+    `;
+    detailQuery = `
+      SELECT TOP (1)
+        r.Berat,
+        r.Blok,
+        r.IdLokasi
+      FROM [dbo].[RejectV2] AS r
+      WHERE r.NoReject = @NoReject
+      ORDER BY r.DateCreate DESC, r.DateTimeCreate DESC;
+    `;
+    warehouseQuery = `SELECT IdWarehouse FROM RejectV2 WHERE NoReject = @NoReject`;
+    fallbackQuery = `
+      SELECT SUM(Berat) AS Berat, MAX(IdLokasi) AS IdLokasi, MAX(IdWarehouse) AS IdWarehouse
+      FROM RejectV2
+      WHERE NoReject = @NoReject 
+      AND (DateUsage IS NULL OR IdWarehouse NOT IN (SELECT IdWarehouse FROM StockOpname_h_WarehouseID WHERE NoSO = @noso))
+    `;
+    // FIX: originalData dari RejectV2 (bukan BarangJadi)
+    originalDataQuery = `
+      SELECT SUM(Berat) AS Berat, MAX(IdLokasi) AS IdLokasi, MAX(IdWarehouse) AS IdWarehouse
+      FROM RejectV2
+      WHERE NoReject = @NoReject
+    `;
+  }
 
-    // Jika duplikat, langsung return tanpa validasi lainnya
-    if (isDuplicate) {
+  // 3) Early duplicate
+  const checkResult = await request.query(checkQuery);
+  const isDuplicate = checkResult.recordset[0].count > 0;
+  if (isDuplicate) {
+    return createResponse(false, {
+      isValidFormat: true,
+      isValidCategory: true,
+      isValidWarehouse: true,
+      isDuplicate: true,
+      foundInStockOpname: true,
+      canInsert: false,
+      labelType,
+      parsed,
+      idWarehouse,
+      mesinInfo: isBonggolan ? mesinInfo : []
+    }, 'Label sudah pernah discan sebelumnya.');
+  }
+
+  // 4) Kualifikasi NoSO
+  const nosoQualificationCheck = await request.query(`
+    SELECT IsBahanBaku, IsWashing, IsBroker, IsBonggolan, IsCrusher, IsGilingan, IsMixer, IsFurnitureWIP, IsBarangJadi, IsReject
+    FROM StockOpname_h
+    WHERE NoSO = @noso
+  `);
+  if (nosoQualificationCheck.recordset.length === 0) {
+    return createResponse(false, {
+      isValidFormat: true,
+      isDuplicate: false,
+      labelType,
+      parsed
+    }, 'NoSO tidak ditemukan dalam sistem.');
+  }
+  const qualifications = nosoQualificationCheck.recordset[0];
+
+  let isValidCategory = true;
+  let categoryMessage = '';
+  if (isBahanBaku && !qualifications.IsBahanBaku) { isValidCategory = false; categoryMessage = 'Kategori Bahan Baku tidak sesuai dengan NoSO ini.'; }
+  else if (isWashing && !qualifications.IsWashing) { isValidCategory = false; categoryMessage = 'Kategori Washing tidak sesuai dengan NoSO ini.'; }
+  else if (isBroker && !qualifications.IsBroker) { isValidCategory = false; categoryMessage = 'Kategori Broker tidak sesuai dengan NoSO ini.'; }
+  else if (isCrusher && !qualifications.IsCrusher) { isValidCategory = false; categoryMessage = 'Kategori Crusher tidak sesuai dengan NoSO ini.'; }
+  else if (isBonggolan && !qualifications.IsBonggolan) { isValidCategory = false; categoryMessage = 'Kategori Bonggolan tidak sesuai dengan NoSO ini.'; }
+  else if (isGilingan && !qualifications.IsGilingan) { isValidCategory = false; categoryMessage = 'Kategori Gilingan tidak sesuai dengan NoSO ini.'; }
+  else if (isMixer && !qualifications.IsMixer) { isValidCategory = false; categoryMessage = 'Kategori Mixer tidak sesuai dengan NoSO ini.'; }
+  else if (isFurnitureWIP && !qualifications.IsFurnitureWIP) { isValidCategory = false; categoryMessage = 'Kategori Furniture WIP tidak sesuai dengan NoSO ini.'; }
+  else if (isBarangJadi && !qualifications.IsBarangJadi) { isValidCategory = false; categoryMessage = 'Kategori Barang Jadi tidak sesuai dengan NoSO ini.'; }
+  else if (isReject && !qualifications.IsReject) { isValidCategory = false; categoryMessage = 'Kategori Reject tidak sesuai dengan NoSO ini.'; }
+
+  // 5) Ambil IdWarehouse
+  const whResult = await request.query(warehouseQuery);
+  idWarehouse = whResult.recordset[0]?.IdWarehouse ?? null;
+
+  // Jika kategori tidak valid → return dengan detail asli
+  if (!isValidCategory) {
+    const originalDataResult = await request.query(originalDataQuery);
+    const originalData = originalDataResult.recordset[0];
+
+    return createResponse(false, {
+      isValidFormat: true,
+      isValidCategory: false,
+      isValidWarehouse: false,
+      isDuplicate: false,
+      foundInStockOpname: false,
+      canInsert: false,
+      labelType,
+      parsed,
+      idWarehouse,
+      detail: originalData ? {
+        JmlhSak: originalData.JumlahSak ?? null,
+        Berat: originalData?.Berat != null ? Number(Number(originalData.Berat).toFixed(2)) : null,
+        Blok: originalData.Blok,
+        IdLokasi: originalData.IdLokasi
+      } : null,
+      mesinInfo: isBonggolan ? mesinInfo : []
+    }, categoryMessage);
+  }
+
+  // 6) Cek warehouse
+  if (!idWarehouse) {
+    const originalDataResult = await request.query(originalDataQuery);
+    const originalData = originalDataResult.recordset[0];
+
+    return createResponse(false, {
+      isValidFormat: true,
+      isValidCategory: true,
+      isValidWarehouse: false,
+      isDuplicate: false,
+      foundInStockOpname: false,
+      canInsert: false,
+      labelType,
+      parsed,
+      idWarehouse,
+      detail: originalData ? {
+        JmlhSak: originalData.JumlahSak ?? null,
+        Berat: originalData?.Berat != null ? Number(Number(originalData.Berat).toFixed(2)) : null,
+        Blok: originalData.Blok,
+        IdLokasi: originalData.IdLokasi
+      } : null,
+      mesinInfo: isBonggolan ? mesinInfo : []
+    }, 'Label tidak valid atau warehouse tidak ditemukan di sumber.');
+  }
+
+  // 7) Validasi warehouse terhadap NoSO
+  const soWarehouseCheck = await request.query(`
+    SELECT COUNT(*) AS count
+    FROM StockOpname_h_WarehouseID
+    WHERE NoSO = @noso AND IdWarehouse = ${idWarehouse}
+  `);
+  const isValidWarehouse = soWarehouseCheck.recordset[0].count > 0;
+
+  // 8) Ambil detail utama
+  const detailResult = await request.query(detailQuery);
+  const detailData = detailResult.recordset[0];
+
+  // Ditemukan pada sumber utama
+  if (detailData) {
+    // Cek mismatch Blok/IdLokasi
+    if (isBlokLokasiMismatch(detailData)) {
       return createResponse(false, {
         isValidFormat: true,
         isValidCategory: true,
-        isValidWarehouse: true,
-        isDuplicate: true,
+        isValidWarehouse: isValidWarehouse,
+        isDuplicate: false,
         foundInStockOpname: true,
         canInsert: false,
-        labelType,
-        parsed,
-        idWarehouse: null,
-        mesinInfo: isBonggolan ? mesinInfo : []
-        
-      }, 'Label sudah pernah discan sebelumnya.');
-    }
-
-    // 4. VALIDASI KUALIFIKASI NOSO
-    const nosoQualificationCheck = await request.query(`
-        SELECT IsBahanBaku, IsWashing, IsBroker, IsBonggolan, IsCrusher, IsGilingan, IsMixer, IsFurnitureWIP, IsBarangJadi, IsReject
-        FROM StockOpname_h
-        WHERE NoSO = @noso
-      `);
-
-    if (nosoQualificationCheck.recordset.length === 0) {
-      return createResponse(false, {
-        isValidFormat: true,
-        isDuplicate: false,
-        labelType,
-        parsed
-      }, 'NoSO tidak ditemukan dalam sistem.');
-    }
-
-    const qualifications = nosoQualificationCheck.recordset[0];
-
-    // Validasi kategori
-    let isValidCategory = true;
-    let categoryMessage = '';
-
-    if (isBahanBaku && !qualifications.IsBahanBaku) {
-      isValidCategory = false;
-      categoryMessage = 'Kategori Bahan Baku tidak sesuai dengan NoSO ini.';
-    } else if (isWashing && !qualifications.IsWashing) {
-      isValidCategory = false;
-      categoryMessage = 'Kategori Washing tidak sesuai dengan NoSO ini.';
-    } else if (isBroker && !qualifications.IsBroker) {
-      isValidCategory = false;
-      categoryMessage = 'Kategori Broker tidak sesuai dengan NoSO ini.';
-    } else if (isCrusher && !qualifications.IsCrusher) {
-      isValidCategory = false;
-      categoryMessage = 'Kategori Crusher tidak sesuai dengan NoSO ini.';
-    } else if (isBonggolan && !qualifications.IsBonggolan) {
-      isValidCategory = false;
-      categoryMessage = 'Kategori Bonggolan tidak sesuai dengan NoSO ini.';
-    } else if (isGilingan && !qualifications.IsGilingan) {
-      isValidCategory = false;
-      categoryMessage = 'Kategori Gilingan tidak sesuai dengan NoSO ini.';
-    } else if (isMixer && !qualifications.IsMixer) {
-      isValidCategory = false;
-      categoryMessage = 'Kategori Mixer tidak sesuai dengan NoSO ini.';
-    } else if (isFurnitureWIP && !qualifications.IsFurnitureWIP) {
-      isValidCategory = false;
-      categoryMessage = 'Kategori Furniture WIP tidak sesuai dengan NoSO ini.';
-    } else if (isBarangJadi && !qualifications.IsBarangJadi) {
-      isValidCategory = false;
-      categoryMessage = 'Kategori Barang Jadi tidak sesuai dengan NoSO ini.';
-    } else if (isReject && !qualifications.IsReject) {
-      isValidCategory = false;
-      categoryMessage = 'Kategori Reject tidak sesuai dengan NoSO ini.';
-    }
-
-    // 5. AMBIL ID WAREHOUSE
-    const whResult = await request.query(warehouseQuery);
-    idWarehouse = whResult.recordset[0]?.IdWarehouse ?? null;
-
-    // Jika kategori tidak valid, cek data asli untuk detail
-    if (!isValidCategory) {
-      const originalDataResult = await request.query(originalDataQuery);
-      const originalData = originalDataResult.recordset[0];
-      
-      return createResponse(false, {
-        isValidFormat: true,
-        isValidCategory: false,
-        isValidWarehouse: false,
-        isDuplicate: false,
-        foundInStockOpname: false,
-        canInsert: false,
-        labelType,
-        parsed,
-        idWarehouse,
-        detail: originalData ? {
-          JmlhSak: originalData.JumlahSak || null,
-          Berat: originalData?.Berat != null ? Number(originalData.Berat.toFixed(2)) : null,
-          Blok: originalData.Blok,
-          IdLokasi: originalData.IdLokasi
-        } : null,
-        mesinInfo: isBonggolan ? mesinInfo : []
-      }, categoryMessage);
-    }
-
-    // 6. CEK WAREHOUSE
-    if (!idWarehouse) {
-      const originalDataResult = await request.query(originalDataQuery);
-      const originalData = originalDataResult.recordset[0];
-      
-      return createResponse(false, {
-        isValidFormat: true,
-        isValidCategory: true,
-        isValidWarehouse: false,
-        isDuplicate: false,
-        foundInStockOpname: false,
-        canInsert: false,
-        labelType,
-        parsed,
-        idWarehouse,
-        detail: originalData ? {
-          JmlhSak: originalData.JumlahSak || null,
-          Berat: originalData?.Berat != null ? Number(originalData.Berat.toFixed(2)) : null,
-          Blok: originalData.Blok,
-          IdLokasi: originalData.IdLokasi
-        } : null,
-        mesinInfo: isBonggolan ? mesinInfo : []
-
-      }, 'Label tidak valid atau warehouse tidak ditemukan di sumber.');
-    }
-
-    // 7. VALIDASI WAREHOUSE TERHADAP NoSO
-    const soWarehouseCheck = await request.query(`
-        SELECT COUNT(*) AS count
-        FROM StockOpname_h_WarehouseID
-        WHERE NoSO = @noso AND IdWarehouse = ${idWarehouse}
-      `);
-    const isValidWarehouse = soWarehouseCheck.recordset[0].count > 0;
-
-    // 8. CEK DI STOCKOPNAME
-    const detailResult = await request.query(detailQuery);
-    const detailData = detailResult.recordset[0];
-
-    // DITEMUKAN DALAM STOCK OPNAME
-    if (detailData) {
-      if (!isValidWarehouse) {
-        return createResponse(false, {
-          isValidFormat: true,
-          isValidCategory: true,
-          isValidWarehouse: false,
-          isDuplicate: false,
-          foundInStockOpname: true,
-          canInsert: false,
-          labelType,
-          parsed,
-          idWarehouse,
-          detail: {
-            ...detailData,
-            Berat: detailData?.Berat != null ? Number(detailData.Berat.toFixed(2)) : null
-          },
-          mesinInfo: isBonggolan ? mesinInfo : []
-        }, `Label ini tidak tersedia pada warehouse NoSO ini (IdWarehouse: ${idWarehouse}).`);
-      }
-
-      return createResponse(true, {
-        isValidFormat: true,
-        isValidCategory: true,
-        isValidWarehouse: true,
-        isDuplicate: false,
-        foundInStockOpname: true,
-        canInsert: true,
         labelType,
         parsed,
         idWarehouse,
         detail: {
           ...detailData,
-          Berat: detailData?.Berat != null ? Number(detailData.Berat.toFixed(2)) : null
+          // jaga-jaga format angka
+          Berat: detailData?.Berat != null ? Number(Number(detailData.Berat).toFixed(2)) : null
         },
         mesinInfo: isBonggolan ? mesinInfo : []
-
-      }, 'Label valid dan siap disimpan.');
+      }, `Lokasi sebelumnya berada di ${detailData.Blok}${detailData.IdLokasi}`);
     }
 
-    // 9. TIDAK DITEMUKAN DI STOCKOPNAME → CEK FALLBACK DATA
-    const fallbackResult = await request.query(fallbackQuery);
-    const fallbackData = fallbackResult.recordset[0];
+    if (!isValidWarehouse) {
+      return createResponse(false, {
+        isValidFormat: true,
+        isValidCategory: true,
+        isValidWarehouse: false,
+        isDuplicate: false,
+        foundInStockOpname: true,
+        canInsert: false,
+        labelType,
+        parsed,
+        idWarehouse,
+        detail: {
+          ...detailData,
+          Berat: detailData?.Berat != null ? Number(Number(detailData.Berat).toFixed(2)) : null
+        },
+        mesinInfo: isBonggolan ? mesinInfo : []
+      }, `Label ini tidak tersedia pada warehouse NoSO ini (IdWarehouse: ${idWarehouse}).`);
+    }
 
-    if (fallbackData && (fallbackData.JumlahSak > 0 || fallbackData.Berat > 0)) {
+    return createResponse(true, {
+      isValidFormat: true,
+      isValidCategory: true,
+      isValidWarehouse: true,
+      isDuplicate: false,
+      foundInStockOpname: true,
+      canInsert: true,
+      labelType,
+      parsed,
+      idWarehouse,
+      detail: {
+        ...detailData,
+        Berat: detailData?.Berat != null ? Number(Number(detailData.Berat).toFixed(2)) : null
+      },
+      mesinInfo: isBonggolan ? mesinInfo : []
+    }, 'Label valid dan siap disimpan.');
+  }
+
+  // 9) Fallback (tidak ditemukan di query utama)
+  const fallbackResult = await request.query(fallbackQuery);
+  const fallbackData = fallbackResult.recordset[0];
+
+  if (fallbackData && (fallbackData.JumlahSak > 0 || fallbackData.Berat > 0)) {
+    // Cek mismatch jika ada blok/idlokasi di fallback
+    if (isBlokLokasiMismatch({
+      Blok: fallbackData.Blok,
+      IdLokasi: fallbackData.IdLokasi
+    })) {
       return createResponse(false, {
         isValidFormat: true,
         isValidCategory: true,
@@ -1584,39 +1681,13 @@ async function validateStockOpnameLabel({ noso, label, username }) {
         parsed,
         idWarehouse: fallbackData.IdWarehouse || idWarehouse,
         detail: {
-          JmlhSak: fallbackData.JumlahSak || null,
-          Berat: fallbackData?.Berat != null ? Number(fallbackData.Berat.toFixed(2)) : null,
+          JmlhSak: fallbackData.JumlahSak ?? null,
+          Berat: fallbackData?.Berat != null ? Number(Number(fallbackData.Berat).toFixed(2)) : null,
           Blok: fallbackData.Blok,
           IdLokasi: fallbackData.IdLokasi
         },
         mesinInfo: isBonggolan ? mesinInfo : []
-
-      }, 'Item tidak masuk dalam daftar Stock Opname atau belum diproses.');
-    }
-
-    // 10. TIDAK DITEMUKAN SAMA SEKALI ATAU SEMUA SUDAH DIPROSES
-    const originalDataResult = await request.query(originalDataQuery);
-    const originalData = originalDataResult.recordset[0];
-
-    if (originalData && (originalData.JumlahSak > 0 || originalData.Berat > 0)) {
-      return createResponse(false, {
-        isValidFormat: true,
-        isValidCategory: true,
-        isValidWarehouse,
-        isDuplicate: false,
-        foundInStockOpname: false,
-        canInsert: false,
-        labelType,
-        parsed,
-        idWarehouse: originalData.IdWarehouse || idWarehouse,
-        detail: {
-          JmlhSak: originalData.JumlahSak || null,
-          Berat: originalData?.Berat != null ? Number(originalData.Berat.toFixed(2)) : null,
-          Blok: originalData.Blok,
-          IdLokasi: originalData.IdLokasi
-        },
-        mesinInfo: isBonggolan ? mesinInfo : []
-      }, 'Item telah diproses sebelumnya.');
+      }, `Lokasi sebelumnya berada di ${detailData.Blok}${detailData.IdLokasi}`);
     }
 
     return createResponse(false, {
@@ -1628,9 +1699,80 @@ async function validateStockOpnameLabel({ noso, label, username }) {
       canInsert: false,
       labelType,
       parsed,
-      idWarehouse
-    }, 'Item tidak ditemukan dalam sistem.');
+      idWarehouse: fallbackData.IdWarehouse || idWarehouse,
+      detail: {
+        JmlhSak: fallbackData.JumlahSak ?? null,
+        Berat: fallbackData?.Berat != null ? Number(Number(fallbackData.Berat).toFixed(2)) : null,
+        Blok: fallbackData.Blok,
+        IdLokasi: fallbackData.IdLokasi
+      },
+      mesinInfo: isBonggolan ? mesinInfo : []
+    }, 'Item tidak masuk dalam daftar Stock Opname atau belum diproses.');
+  }
+
+  // 10) Original (semua sudah diproses / truly not found)
+  const originalDataResult = await request.query(originalDataQuery);
+  const originalData = originalDataResult.recordset[0];
+
+  if (originalData && (originalData.JumlahSak > 0 || originalData.Berat > 0)) {
+    // Cek mismatch untuk originalData jika punya Blok/IdLokasi
+    if (isBlokLokasiMismatch({
+      Blok: originalData.Blok,
+      IdLokasi: originalData.IdLokasi
+    })) {
+      return createResponse(false, {
+        isValidFormat: true,
+        isValidCategory: true,
+        isValidWarehouse,
+        isDuplicate: false,
+        foundInStockOpname: false,
+        canInsert: false,
+        labelType,
+        parsed,
+        idWarehouse: originalData.IdWarehouse || idWarehouse,
+        detail: {
+          JmlhSak: originalData.JumlahSak ?? null,
+          Berat: originalData?.Berat != null ? Number(Number(originalData.Berat).toFixed(2)) : null,
+          Blok: originalData.Blok,
+          IdLokasi: originalData.IdLokasi
+        },
+        mesinInfo: isBonggolan ? mesinInfo : []
+      }, `Lokasi  ${blok}${idlokasi} > ${detailData.Blok}${detailData.IdLokasi}`);
+    }
+
+    return createResponse(false, {
+      isValidFormat: true,
+      isValidCategory: true,
+      isValidWarehouse,
+      isDuplicate: false,
+      foundInStockOpname: false,
+      canInsert: false,
+      labelType,
+      parsed,
+      idWarehouse: originalData.IdWarehouse || idWarehouse,
+      detail: {
+        JmlhSak: originalData.JumlahSak ?? null,
+        Berat: originalData?.Berat != null ? Number(Number(originalData.Berat).toFixed(2)) : null,
+        Blok: originalData.Blok,
+        IdLokasi: originalData.IdLokasi
+      },
+      mesinInfo: isBonggolan ? mesinInfo : []
+    }, 'Item telah diproses sebelumnya.');
+  }
+
+  return createResponse(false, {
+    isValidFormat: true,
+    isValidCategory: true,
+    isValidWarehouse,
+    isDuplicate: false,
+    foundInStockOpname: false,
+    canInsert: false,
+    labelType,
+    parsed,
+    idWarehouse
+  }, 'Item tidak ditemukan dalam sistem.');
 }
+
 
 
 /**
@@ -2213,7 +2355,6 @@ async function getStockOpnameAscendData({ noSO, familyID, keyword }) {
     throw new Error(`Stock Opname Ascend Service Error: ${err.message}`);
   }
 }
-
 
 
 async function saveStockOpnameAscendHasil(noSO, dataList) {

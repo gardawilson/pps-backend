@@ -52,7 +52,7 @@ exports.getAll = async (req, res) => {
  *     "IdWarehouse": 2,              // required
  *     "DateCreate": "2025-10-15",    // optional (default GETDATE())
  *     "IdStatus": 1,                 // optional (default 1=PASS)
- *     "CreateBy": "ganda",           // required (we can take from token)
+ *     "CreateBy": "x",           // required (we can take from token)
  *     "Density": 0.91, "Moisture": 0.3, "MaxMeltTemp": null, ...
  *     "Blok": "A", "IdLokasi": "A1"  // optional
  *   },

@@ -18,6 +18,18 @@ const maxSak = require('./modules/master-max-sak/max-sak-routes');
 const labelBrokerRoutes = require('./modules/label/broker/broker-routes');
 const productionBrokerRoutes = require('./modules/production/broker/broker-production-routes');
 
+const labelBonggolanRoutes = require('./modules/label/bonggolan/bonggolan-routes');
+
+const productionInjectRoutes = require('./modules/production/inject/inject-production-routes');
+
+const bonggolanTypeRoutes = require('./modules/jenis-bonggolan/jenis-bonggolan-routes');
+
+
+const labelCrusherRoutes = require('./modules/label/crusher/crusher-routes');
+
+
+
+
 
 
 
@@ -52,6 +64,13 @@ app.use('/api/bongkar-susun', bongkarSusunRoutes);
 app.use('/api/max-sak', maxSak);
 app.use('/api/', labelBrokerRoutes);
 app.use('/api/production', productionBrokerRoutes);
+app.use('/api/', labelBonggolanRoutes);
+app.use('/api/production', productionInjectRoutes);
+app.use('/api/bonggolan-type', bonggolanTypeRoutes);
+app.use('/api/', labelCrusherRoutes);
+
+
+
 
 
 

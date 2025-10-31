@@ -15,4 +15,29 @@ router.get(
   ctrl.getAll
 );
 
+
+// CREATE Crusher
+router.post(
+  '/labels/crusher',
+  requirePermission('label_crusher:create'),
+  ctrl.create
+);
+
+
+router.put(
+  '/labels/crusher/:noCrusher',
+  requirePermission('label_crusher:update'),
+  ctrl.update
+);
+
+
+// DELETE Crusher
+router.delete(
+  '/labels/crusher/:noCrusher',
+  requirePermission('label_crusher:delete'),
+  ctrl.delete
+);
+
+
+
 module.exports = router;

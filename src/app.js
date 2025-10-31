@@ -28,6 +28,13 @@ const bonggolanTypeRoutes = require('./modules/jenis-bonggolan/jenis-bonggolan-r
 const labelCrusherRoutes = require('./modules/label/crusher/crusher-routes');
 
 
+const productionCrusherRoutes = require('./modules/production/crusher/crusher-production-routes');
+
+
+const crusherTypeRoutes = require('./modules/master-crusher/master-crusher-routes');
+
+
+
 
 
 
@@ -68,6 +75,9 @@ app.use('/api/', labelBonggolanRoutes);
 app.use('/api/production', productionInjectRoutes);
 app.use('/api/bonggolan-type', bonggolanTypeRoutes);
 app.use('/api/', labelCrusherRoutes);
+app.use('/api/production', productionCrusherRoutes);
+app.use('/api/crusher-type', crusherTypeRoutes);
+
 
 
 

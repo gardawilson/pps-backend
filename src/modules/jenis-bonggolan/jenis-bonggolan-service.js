@@ -10,7 +10,7 @@ async function getAllActive() {
       IdBonggolan,
       NamaBonggolan,
       Enable
-    FROM [PPS_TEST2].[dbo].[MstBonggolan]
+    FROM [dbo].[MstBonggolan]
     WHERE Enable = 1
     ORDER BY NamaBonggolan ASC;
   `;

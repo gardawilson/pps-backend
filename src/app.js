@@ -36,6 +36,14 @@ const crusherTypeRoutes = require('./modules/master-crusher/master-crusher-route
 
 
 
+const mstMesinRoutes = require('./modules/master-mesin/master-mesin-routes');
+const mstOperatorRoutes = require('./modules/master-operator/master-operator-routes');
+
+
+const checkOverlapRoutes = require('./modules/production/overlap/production-overlap-routes');
+
+
+
 
 
 
@@ -78,10 +86,11 @@ app.use('/api/', labelCrusherRoutes);
 app.use('/api/production', productionCrusherRoutes);
 app.use('/api/crusher-type', crusherTypeRoutes);
 
+app.use('/api/mst-mesin', mstMesinRoutes);
 
+app.use('/api/mst-operator', mstOperatorRoutes);
 
-
-
+app.use('/api/production', checkOverlapRoutes);
 
 
 

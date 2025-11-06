@@ -145,7 +145,7 @@ async function stockOpnameHasilHandler(req, res) {
   
   async function insertStockOpnameLabelHandler(req, res) {
     const { noso } = req.params;
-    const { label, jmlhSak = 0, berat = 0, idlokasi, blok } = req.body;
+    const { label, jmlhSak = 0, berat = 0, idlokasi, blok, idDiscrepancy } = req.body;
     const { idUsername, username } = req;
   
     try {
@@ -185,7 +185,8 @@ async function stockOpnameHasilHandler(req, res) {
         idlokasi: idlokasiNum,
         blok: blokNorm,
         username,
-        idUsername
+        idUsername,
+        idDiscrepancy
       });
   
       return res.json(result);

@@ -825,8 +825,9 @@ async function validateStockOpnameLabel({ noso, label, username, blok, idlokasi 
       isValidWarehouse: data.isValidWarehouse || false,
       isDuplicate: data.isDuplicate || false,
       foundInStockOpname: data.foundInStockOpname || false,
-      canInsert: data.canInsert || false,
+      idDiscrepancy: data.idDiscrepancy || null,
       idWarehouse: data.idWarehouse || null,
+
       // flatten detail
       jmlhSak: data.detail?.JmlhSak ?? null,
       berat: data.detail?.Berat ?? null,
@@ -900,7 +901,7 @@ async function validateStockOpnameLabel({ noso, label, username, blok, idlokasi 
 
     checkQuery = `
       SELECT COUNT(*) AS count FROM StockOpnameHasilBahanBaku
-      WHERE NoSO = @noso AND NoBahanBaku = @NoBahanBaku AND NoPallet = @NoPallet AND Username = @username
+      WHERE NoSO = @noso AND NoBahanBaku = @NoBahanBaku AND NoPallet = @NoPallet
     `;
     detailQuery = `
       SELECT 
@@ -908,34 +909,43 @@ async function validateStockOpnameLabel({ noso, label, username, blok, idlokasi 
           bbh.IdLokasi,
           COUNT(*) AS JmlhSak,
           SUM(
-            CASE 
-              WHEN d.IsPartial = 1 
-                THEN ISNULL(d.Berat,0) - ISNULL(p.TotalPartial,0)
-              ELSE ISNULL(d.Berat,0)
-            END
+              CASE 
+                  WHEN d.IsPartial = 1 
+                      THEN ISNULL(d.Berat,0) - ISNULL(p.TotalPartial,0)
+                  ELSE ISNULL(d.Berat,0)
+              END
           ) AS Berat
-      FROM dbo.BahanBaku_d d
+      FROM dbo.BahanBaku_d AS d
       LEFT JOIN (
           SELECT 
               NoBahanBaku, 
               NoPallet, 
               NoSak, 
-              SUM(Berat) AS TotalPartial
+              SUM(ISNULL(Berat,0)) AS TotalPartial
           FROM dbo.BahanBakuPartial
-          WHERE NoBahanBaku = @NoBahanBaku 
+          WHERE NoBahanBaku = @NoBahanBaku
             AND NoPallet    = @NoPallet
           GROUP BY NoBahanBaku, NoPallet, NoSak
-      ) p 
+      ) AS p 
           ON d.NoBahanBaku = p.NoBahanBaku 
         AND d.NoPallet    = p.NoPallet
         AND d.NoSak       = p.NoSak
-      INNER JOIN dbo.BahanBakuPallet_h bbh
+      INNER JOIN dbo.BahanBakuPallet_h AS bbh
           ON bbh.NoBahanBaku = d.NoBahanBaku
         AND bbh.NoPallet    = d.NoPallet
-      WHERE d.DateUsage IS NULL
-        AND d.NoBahanBaku = @NoBahanBaku
-        AND d.NoPallet    = @NoPallet
-      GROUP BY bbh.Blok, bbh.IdLokasi;
+      WHERE d.DateUsage    IS NULL
+        AND d.NoBahanBaku  = @NoBahanBaku
+        AND d.NoPallet     = @NoPallet
+        AND EXISTS (
+              SELECT 1
+              FROM dbo.StockOpnameBahanBaku AS sobb
+              WHERE sobb.NoSO        = @NoSO
+                AND sobb.NoBahanBaku = d.NoBahanBaku
+                AND sobb.NoPallet    = d.NoPallet
+        )
+      GROUP BY 
+          bbh.Blok, 
+          bbh.IdLokasi;
     `;
     warehouseQuery = `
       SELECT mb.IdWarehouse
@@ -946,17 +956,59 @@ async function validateStockOpnameLabel({ noso, label, username, blok, idlokasi 
         AND bbh.NoPallet    = @NoPallet;
     `;
     fallbackQuery = `
-      SELECT COUNT(*) AS JumlahSak, SUM(Berat) AS Berat, MAX(IdLokasi) AS IdLokasi, MAX(IdWarehouse) AS IdWarehouse
-      FROM BahanBaku_d bb
-      JOIN BahanBakuPallet_h bbh ON bb.NoBahanBaku = bbh.NoBahanBaku AND bb.NoPallet = bbh.NoPallet
-      WHERE bb.NoBahanBaku = @NoBahanBaku AND bb.NoPallet = @NoPallet 
-      AND (bb.DateUsage IS NULL OR bbh.IdWarehouse NOT IN (SELECT IdWarehouse FROM StockOpname_h_WarehouseID WHERE NoSO = @noso))
+      SELECT 
+          bbh.Blok,
+          bbh.IdLokasi,
+          bbh.IdWarehouse,
+          COUNT(*) AS JumlahSak,
+          SUM(
+              CASE 
+                  WHEN d.IsPartial = 1 
+                      THEN ISNULL(d.Berat, 0) - ISNULL(p.TotalPartial, 0)
+                  ELSE ISNULL(d.Berat, 0)
+              END
+          ) AS Berat
+      FROM dbo.BahanBaku_d AS d
+      LEFT JOIN (
+          SELECT 
+              NoBahanBaku, 
+              NoPallet, 
+              NoSak, 
+              SUM(Berat) AS TotalPartial
+          FROM dbo.BahanBakuPartial
+          WHERE NoBahanBaku = @NoBahanBaku
+            AND NoPallet    = @NoPallet
+          GROUP BY NoBahanBaku, NoPallet, NoSak
+      ) AS p
+          ON d.NoBahanBaku = p.NoBahanBaku 
+        AND d.NoPallet    = p.NoPallet
+        AND d.NoSak       = p.NoSak
+      INNER JOIN dbo.BahanBakuPallet_h AS bbh
+          ON bbh.NoBahanBaku = d.NoBahanBaku
+        AND bbh.NoPallet    = d.NoPallet
+      WHERE d.NoBahanBaku = @NoBahanBaku
+        AND d.NoPallet    = @NoPallet
+        -- logic lama kamu: boleh yang belum dipakai ATAU warehouse-nya tidak ada di SO itu
+        AND (
+              d.DateUsage IS NULL
+            )
+      GROUP BY 
+          bbh.Blok,
+          bbh.IdLokasi,
+          bbh.IdWarehouse;
     `;
     originalDataQuery = `
-      SELECT COUNT(*) AS JumlahSak, SUM(Berat) AS Berat, MAX(IdLokasi) AS IdLokasi, MAX(IdWarehouse) AS IdWarehouse
-      FROM BahanBaku_d bb
-      JOIN BahanBakuPallet_h bbh ON bb.NoBahanBaku = bbh.NoBahanBaku AND bb.NoPallet = bbh.NoPallet
-      WHERE bb.NoBahanBaku = @NoBahanBaku AND bb.NoPallet = @NoPallet
+      SELECT 
+          COUNT(*) AS JumlahSak,
+          SUM(bb.Berat) AS Berat,          -- berat dari detail
+          MAX(bb.IdLokasi) AS IdLokasi,    -- atau MAX(bbh.IdLokasi) pilih yang benar
+          MAX(bbh.IdWarehouse) AS IdWarehouse
+      FROM BahanBaku_d AS bb
+      JOIN BahanBakuPallet_h AS bbh
+        ON bb.NoBahanBaku = bbh.NoBahanBaku
+      AND bb.NoPallet    = bbh.NoPallet
+      WHERE bb.NoBahanBaku = @NoBahanBaku
+        AND bb.NoPallet    = @NoPallet;
     `;
 
   } else if (isWashing) {
@@ -966,9 +1018,42 @@ async function validateStockOpnameLabel({ noso, label, username, blok, idlokasi 
 
     checkQuery = `
       SELECT COUNT(*) AS count FROM StockOpnameHasilWashing
-      WHERE NoSO = @noso AND NoWashing = @NoWashing AND Username = @username
+      WHERE NoSO = @noso AND NoWashing = @NoWashing
     `;
     detailQuery = `
+      SELECT
+          ISNULL(dstats.JmlhSak, 0) AS JmlhSak,
+          ISNULL(dstats.Berat, 0.0) AS Berat,
+          h.Blok,
+          h.IdLokasi
+      FROM dbo.Washing_h AS h
+      LEFT JOIN (
+          SELECT
+              NoWashing,
+              COUNT(1) AS JmlhSak,
+              SUM(ISNULL(Berat, 0.0)) AS Berat
+          FROM dbo.Washing_d
+          WHERE NoWashing = @NoWashing
+            AND DateUsage IS NULL
+          GROUP BY NoWashing
+      ) AS dstats
+          ON dstats.NoWashing = h.NoWashing
+      WHERE h.NoWashing = @NoWashing
+        AND EXISTS (
+              SELECT 1
+              FROM dbo.StockOpnameWashing AS sow
+              WHERE sow.NoSO      = @NoSO
+                AND sow.NoWashing = h.NoWashing
+        );
+    `;
+    warehouseQuery = `
+      SELECT mb.IdWarehouse
+      FROM [dbo].[Washing_h] wh
+      JOIN [dbo].[MstBlok]   mb
+        ON UPPER(LTRIM(RTRIM(mb.Blok))) = UPPER(LTRIM(RTRIM(wh.Blok)))
+      WHERE wh.NoWashing = @NoWashing;
+    `;
+    fallbackQuery = `
       SELECT
         ISNULL(dstats.JmlhSak, 0) AS JmlhSak,
         ISNULL(dstats.Berat, 0.0) AS Berat,
@@ -988,25 +1073,16 @@ async function validateStockOpnameLabel({ noso, label, username, blok, idlokasi 
         ON dstats.NoWashing = h.NoWashing
       WHERE h.NoWashing = @NoWashing;
     `;
-    warehouseQuery = `
-      SELECT mb.IdWarehouse
-      FROM [dbo].[Washing_h] wh
-      JOIN [dbo].[MstBlok]   mb
-        ON UPPER(LTRIM(RTRIM(mb.Blok))) = UPPER(LTRIM(RTRIM(wh.Blok)))
-      WHERE wh.NoWashing = @NoWashing;
-    `;
-    fallbackQuery = `
-      SELECT COUNT(*) AS JumlahSak, SUM(Berat) AS Berat, MAX(IdLokasi) AS IdLokasi, MAX(IdWarehouse) AS IdWarehouse
-      FROM Washing_d wd
-      JOIN Washing_h wh ON wd.NoWashing = wh.NoWashing
-      WHERE wd.NoWashing = @NoWashing 
-      AND (wd.DateUsage IS NULL OR wh.IdWarehouse NOT IN (SELECT IdWarehouse FROM StockOpname_h_WarehouseID WHERE NoSO = @noso))
-    `;
     originalDataQuery = `
-      SELECT COUNT(*) AS JumlahSak, SUM(Berat) AS Berat, MAX(IdLokasi) AS IdLokasi, MAX(IdWarehouse) AS IdWarehouse
-      FROM Washing_d wd
-      JOIN Washing_h wh ON wd.NoWashing = wh.NoWashing
-      WHERE wd.NoWashing = @NoWashing
+      SELECT 
+          COUNT(*) AS JumlahSak,
+          SUM(wd.Berat) AS Berat,
+          MAX(wd.IdLokasi) AS IdLokasi,      -- kalau IdLokasi adanya di detail
+          MAX(wh.IdWarehouse) AS IdWarehouse -- ambil dari header
+      FROM Washing_d AS wd
+      JOIN Washing_h AS wh 
+        ON wd.NoWashing = wh.NoWashing
+      WHERE wd.NoWashing = @NoWashing;
     `;
 
   } else if (isBroker) {
@@ -1016,9 +1092,63 @@ async function validateStockOpnameLabel({ noso, label, username, blok, idlokasi 
 
     checkQuery = `
       SELECT COUNT(*) AS count FROM StockOpnameHasilBroker
-      WHERE NoSO = @noso AND NoBroker = @NoBroker AND Username = @username
+      WHERE NoSO = @noso AND NoBroker = @NoBroker
     `;
     detailQuery = `
+      SELECT
+          ISNULL(agg.JmlhSak, 0) AS JmlhSak,
+          ISNULL(agg.Berat,   0) AS Berat,
+          h.Blok,
+          h.IdLokasi
+      FROM dbo.Broker_h AS h
+      LEFT JOIN (
+          SELECT
+              d.NoBroker,
+              COUNT(*) AS JmlhSak,
+              SUM(
+                  CASE 
+                      WHEN d.IsPartial = 1 THEN 
+                          CASE 
+                              WHEN ISNULL(d.Berat,0) - ISNULL(p.TotalPartial,0) < 0 
+                                  THEN 0 
+                              ELSE ISNULL(d.Berat,0) - ISNULL(p.TotalPartial,0)
+                          END
+                      ELSE ISNULL(d.Berat,0)
+                  END
+              ) AS Berat
+          FROM dbo.Broker_d AS d
+          LEFT JOIN (
+              SELECT 
+                  NoBroker,
+                  NoSak,
+                  SUM(ISNULL(Berat,0)) AS TotalPartial
+              FROM dbo.BrokerPartial
+              WHERE NoBroker = @NoBroker
+              GROUP BY NoBroker, NoSak
+          ) AS p
+              ON p.NoBroker = d.NoBroker
+            AND p.NoSak    = d.NoSak
+          WHERE d.NoBroker = @NoBroker
+            AND d.DateUsage IS NULL
+          GROUP BY d.NoBroker
+      ) AS agg
+          ON agg.NoBroker = h.NoBroker
+      WHERE h.NoBroker = @NoBroker
+        AND EXISTS (
+              SELECT 1
+              FROM dbo.StockOpnameBroker AS sob
+              WHERE sob.NoSO     = @noso      -- pastikan sesuai SO yang sedang discan
+                AND sob.NoBroker = h.NoBroker -- pastikan broker itu memang dicatat di SO tsb
+        );
+    `;
+    warehouseQuery = `
+      SELECT mb.IdWarehouse
+      FROM [dbo].[Broker_h] bh
+      JOIN [dbo].[MstBlok]   mb
+        ON UPPER(LTRIM(RTRIM(mb.Blok))) = UPPER(LTRIM(RTRIM(bh.Blok)))
+      WHERE bh.NoBroker = @NoBroker;
+    `;
+    fallbackQuery = `
       SELECT
         ISNULL(agg.JmlhSak, 0) AS JmlhSak,
         ISNULL(agg.Berat,   0) AS Berat,
@@ -1059,19 +1189,16 @@ async function validateStockOpnameLabel({ noso, label, username, blok, idlokasi 
         ON agg.NoBroker = h.NoBroker
       WHERE h.NoBroker = @NoBroker;
     `;
-    warehouseQuery = `SELECT IdWarehouse FROM Broker_h WHERE NoBroker = @NoBroker`;
-    fallbackQuery = `
-      SELECT COUNT(*) AS JumlahSak, SUM(Berat) AS Berat, MAX(IdLokasi) AS IdLokasi, MAX(IdWarehouse) AS IdWarehouse
-      FROM Broker_d bd
-      JOIN Broker_h bh ON bd.NoBroker = bh.NoBroker
-      WHERE bd.NoBroker = @NoBroker 
-      AND (bd.DateUsage IS NULL OR bh.IdWarehouse NOT IN (SELECT IdWarehouse FROM StockOpname_h_WarehouseID WHERE NoSO = @noso))
-    `;
     originalDataQuery = `
-      SELECT COUNT(*) AS JumlahSak, SUM(Berat) AS Berat, MAX(IdLokasi) AS IdLokasi, MAX(IdWarehouse) AS IdWarehouse
-      FROM Broker_d bd
-      JOIN Broker_h bh ON bd.NoBroker = bh.NoBroker
-      WHERE bd.NoBroker = @NoBroker
+      SELECT 
+          COUNT(*) AS JumlahSak,
+          SUM(bd.Berat) AS Berat,
+          MAX(bd.IdLokasi) AS IdLokasi,      -- ganti ke MAX(bh.IdLokasi) kalau lokasinya di header
+          MAX(bh.IdWarehouse) AS IdWarehouse
+      FROM Broker_d AS bd
+      JOIN Broker_h AS bh 
+        ON bd.NoBroker = bh.NoBroker
+      WHERE bd.NoBroker = @NoBroker;
     `;
 
   } else if (isCrusher) {
@@ -1081,23 +1208,39 @@ async function validateStockOpnameLabel({ noso, label, username, blok, idlokasi 
 
     checkQuery = `
       SELECT COUNT(*) AS count FROM StockOpnameHasilCrusher
-      WHERE NoSO = @noso AND NoCrusher = @NoCrusher AND Username = @username
+      WHERE NoSO = @noso AND NoCrusher = @NoCrusher
     `;
     detailQuery = `
+      SELECT TOP (1)
+          ISNULL(c.Berat, 0) AS Berat,
+          c.Blok,
+          c.IdLokasi
+      FROM dbo.Crusher AS c
+      WHERE c.NoCrusher = @NoCrusher
+        AND c.DateUsage IS NULL
+        AND EXISTS (
+              SELECT 1
+              FROM dbo.StockOpnameCrusher AS s
+              WHERE s.NoSO = @noso
+                AND s.NoCrusher = c.NoCrusher
+          )
+      ORDER BY c.DateCreate DESC;
+    `;
+    warehouseQuery = `
+      SELECT mb.IdWarehouse
+      FROM [dbo].[Crusher] ch
+      JOIN [dbo].[MstBlok]   mb
+        ON UPPER(LTRIM(RTRIM(mb.Blok))) = UPPER(LTRIM(RTRIM(ch.Blok)))
+      WHERE ch.NoCrusher = @NoCrusher;
+    `;
+    fallbackQuery = `
       SELECT TOP (1)
         ISNULL(c.Berat, 0) AS Berat,
         c.Blok,
         c.IdLokasi
       FROM [dbo].[Crusher] AS c
-      WHERE c.NoCrusher = @NoCrusher
+      WHERE c.NoCrusher = @NoCrusher AND DateUsage IS NULL
       ORDER BY c.DateCreate DESC;
-    `;
-    warehouseQuery = `SELECT IdWarehouse FROM Crusher WHERE NoCrusher = @NoCrusher`;
-    fallbackQuery = `
-      SELECT SUM(Berat) AS Berat, MAX(IdLokasi) AS IdLokasi, MAX(IdWarehouse) AS IdWarehouse
-      FROM Crusher
-      WHERE NoCrusher = @NoCrusher 
-      AND (DateUsage IS NULL OR IdWarehouse NOT IN (SELECT IdWarehouse FROM StockOpname_h_WarehouseID WHERE NoSO = @noso))
     `;
     originalDataQuery = `
       SELECT SUM(Berat) AS Berat, MAX(IdLokasi) AS IdLokasi, MAX(IdWarehouse) AS IdWarehouse
@@ -1112,23 +1255,44 @@ async function validateStockOpnameLabel({ noso, label, username, blok, idlokasi 
 
     checkQuery = `
       SELECT COUNT(*) AS count FROM StockOpnameHasilBonggolan
-      WHERE NoSO = @noso AND NoBonggolan = @NoBonggolan AND Username = @username
+      WHERE NoSO = @noso AND NoBonggolan = @NoBonggolan
     `;
     detailQuery = `
       SELECT TOP (1)
-        ISNULL(b.Berat, 0) AS Berat,
-        b.Blok,
-        b.IdLokasi
+          CASE 
+              WHEN b.DateUsage IS NOT NULL THEN 0
+              ELSE ISNULL(b.Berat, 0)
+          END AS Berat,
+          b.Blok,
+          b.IdLokasi
+      FROM dbo.Bonggolan AS b
+      WHERE b.NoBonggolan = @NoBonggolan
+        AND EXISTS (
+              SELECT 1
+              FROM dbo.StockOpnameBonggolan AS sob
+              WHERE sob.NoSO        = @NoSO
+                AND sob.NoBonggolan = b.NoBonggolan
+          )
+      ORDER BY b.DateCreate DESC;
+    `;
+    warehouseQuery = `
+      SELECT mb.IdWarehouse
+      FROM [dbo].[Bonggolan] bh
+      JOIN [dbo].[MstBlok]   mb
+        ON UPPER(LTRIM(RTRIM(mb.Blok))) = UPPER(LTRIM(RTRIM(bh.Blok)))
+      WHERE bh.NoBonggolan = @NoBonggolan;
+    `;
+    fallbackQuery = `
+      SELECT TOP (1)
+          CASE 
+              WHEN b.DateUsage IS NOT NULL THEN 0
+              ELSE ISNULL(b.Berat, 0)
+          END AS Berat,
+          b.Blok,
+          b.IdLokasi
       FROM [dbo].[Bonggolan] AS b
       WHERE b.NoBonggolan = @NoBonggolan
       ORDER BY b.DateCreate DESC;
-    `;
-    warehouseQuery = `SELECT IdWarehouse FROM Bonggolan WHERE NoBonggolan = @NoBonggolan`;
-    fallbackQuery = `
-      SELECT SUM(Berat) AS Berat, MAX(IdLokasi) AS IdLokasi, MAX(IdWarehouse) AS IdWarehouse
-      FROM Bonggolan
-      WHERE NoBonggolan = @NoBonggolan 
-      AND (DateUsage IS NULL OR IdWarehouse NOT IN (SELECT IdWarehouse FROM StockOpname_h_WarehouseID WHERE NoSO = @noso))
     `;
     originalDataQuery = `
       SELECT SUM(Berat) AS Berat, MAX(IdLokasi) AS IdLokasi, MAX(IdWarehouse) AS IdWarehouse
@@ -1196,9 +1360,60 @@ async function validateStockOpnameLabel({ noso, label, username, blok, idlokasi 
 
     checkQuery = `
       SELECT COUNT(*) AS count FROM StockOpnameHasilGilingan
-      WHERE NoSO = @noso AND NoGilingan = @NoGilingan AND Username = @username
+      WHERE NoSO = @noso AND NoGilingan = @NoGilingan
     `;
     detailQuery = `
+      SELECT
+          agg.JmlhSak,
+          agg.Berat,
+          h.Blok,
+          h.IdLokasi
+      FROM (
+          SELECT
+              COUNT(*) AS JmlhSak,
+              SUM(
+                  CASE 
+                      WHEN d.IsPartial = 1 
+                          THEN ISNULL(d.Berat,0) - ISNULL(p.TotalPartial,0)
+                      ELSE ISNULL(d.Berat,0)
+                  END
+              ) AS Berat
+          FROM dbo.Gilingan AS d
+          LEFT JOIN (
+              SELECT 
+                  NoGilingan,
+                  SUM(ISNULL(Berat,0)) AS TotalPartial
+              FROM dbo.GilinganPartial
+              WHERE NoGilingan = @NoGilingan
+              GROUP BY NoGilingan
+          ) AS p
+              ON p.NoGilingan = d.NoGilingan
+          WHERE d.NoGilingan = @NoGilingan
+            AND d.DateUsage IS NULL
+      ) AS agg
+      CROSS APPLY (
+          SELECT TOP (1)
+              g.Blok,
+              g.IdLokasi
+          FROM dbo.Gilingan AS g
+          WHERE g.NoGilingan = @NoGilingan
+          ORDER BY g.DateCreate DESC
+      ) AS h
+      WHERE EXISTS (
+          SELECT 1
+          FROM dbo.StockOpnameGilingan AS sog
+          WHERE sog.NoSO       = @NoSO
+            AND sog.NoGilingan = @NoGilingan
+      );
+    `;
+    warehouseQuery = `
+      SELECT mb.IdWarehouse
+      FROM [dbo].[Gilingan] gh
+      JOIN [dbo].[MstBlok]   mb
+        ON UPPER(LTRIM(RTRIM(mb.Blok))) = UPPER(LTRIM(RTRIM(gh.Blok)))
+      WHERE gh.NoGilingan = @NoGilingan;
+    `;
+    fallbackQuery = `
       SELECT
         agg.JmlhSak,
         agg.Berat,
@@ -1236,13 +1451,6 @@ async function validateStockOpnameLabel({ noso, label, username, blok, idlokasi 
         ORDER BY g.DateCreate DESC
       ) AS h;
     `;
-    warehouseQuery = `SELECT IdWarehouse FROM Gilingan WHERE NoGilingan = @NoGilingan`;
-    fallbackQuery = `
-      SELECT SUM(Berat) AS Berat, MAX(IdLokasi) AS IdLokasi, MAX(IdWarehouse) AS IdWarehouse
-      FROM Gilingan
-      WHERE NoGilingan = @NoGilingan 
-      AND (DateUsage IS NULL OR IdWarehouse NOT IN (SELECT IdWarehouse FROM StockOpname_h_WarehouseID WHERE NoSO = @noso))
-    `;
     originalDataQuery = `
       SELECT SUM(Berat) AS Berat, MAX(IdLokasi) AS IdLokasi, MAX(IdWarehouse) AS IdWarehouse
       FROM Gilingan
@@ -1256,9 +1464,63 @@ async function validateStockOpnameLabel({ noso, label, username, blok, idlokasi 
 
     checkQuery = `
       SELECT COUNT(*) AS count FROM StockOpnameHasilMixer
-      WHERE NoSO = @noso AND NoMixer = @NoMixer AND Username = @username
+      WHERE NoSO = @noso AND NoMixer = @NoMixer
     `;
     detailQuery = `
+      SELECT
+        agg.JmlhSak,
+        agg.Berat,
+        h.Blok,
+        h.IdLokasi
+    FROM dbo.Mixer_h AS h
+    LEFT JOIN (
+        SELECT
+            d.NoMixer,
+            COUNT(*) AS JmlhSak,
+            SUM(
+                CASE
+                    WHEN d.IsPartial = 1 THEN
+                        CASE
+                            WHEN ISNULL(d.Berat,0) - ISNULL(p.TotalPartial,0) < 0
+                                THEN 0
+                            ELSE ISNULL(d.Berat,0) - ISNULL(p.TotalPartial,0)
+                        END
+                    ELSE ISNULL(d.Berat,0)
+                END
+            ) AS Berat
+        FROM dbo.Mixer_d AS d
+        LEFT JOIN (
+            SELECT
+                mp.NoMixer,
+                mp.NoSak,
+                SUM(ISNULL(mp.Berat,0)) AS TotalPartial
+            FROM dbo.MixerPartial AS mp
+            WHERE mp.NoMixer = @NoMixer
+            GROUP BY mp.NoMixer, mp.NoSak
+        ) AS p
+            ON p.NoMixer = d.NoMixer
+          AND p.NoSak   = d.NoSak
+        WHERE d.NoMixer = @NoMixer
+          AND d.DateUsage IS NULL
+        GROUP BY d.NoMixer
+    ) AS agg
+        ON agg.NoMixer = h.NoMixer
+    WHERE h.NoMixer = @NoMixer
+      AND EXISTS (
+            SELECT 1
+            FROM dbo.StockOpnameMixer AS som
+            WHERE som.NoSO    = @NoSO
+              AND som.NoMixer = h.NoMixer
+      );
+    `;
+    warehouseQuery = `
+      SELECT mb.IdWarehouse
+      FROM [dbo].[Mixer_h] mh
+      JOIN [dbo].[MstBlok]   mb
+        ON UPPER(LTRIM(RTRIM(mb.Blok))) = UPPER(LTRIM(RTRIM(mh.Blok)))
+      WHERE mh.NoMixer = @NoMixer;
+    `;
+    fallbackQuery = `
       SELECT
         agg.JmlhSak,
         agg.Berat,
@@ -1299,19 +1561,16 @@ async function validateStockOpnameLabel({ noso, label, username, blok, idlokasi 
         ON agg.NoMixer = h.NoMixer
       WHERE h.NoMixer = @NoMixer;
     `;
-    warehouseQuery = `SELECT IdWarehouse FROM Mixer_h WHERE NoMixer = @NoMixer`;
-    fallbackQuery = `
-      SELECT COUNT(*) AS JumlahSak, SUM(Berat) AS Berat, MAX(IdLokasi) AS IdLokasi, MAX(IdWarehouse) AS IdWarehouse
-      FROM Mixer_d md
-      JOIN Mixer_h mh ON md.NoMixer = mh.NoMixer
-      WHERE md.NoMixer = @NoMixer 
-      AND (md.DateUsage IS NULL OR mh.IdWarehouse NOT IN (SELECT IdWarehouse FROM StockOpname_h_WarehouseID WHERE NoSO = @noso))
-    `;
     originalDataQuery = `
-      SELECT COUNT(*) AS JumlahSak, SUM(Berat) AS Berat, MAX(IdLokasi) AS IdLokasi, MAX(IdWarehouse) AS IdWarehouse
-      FROM Mixer_d md
-      JOIN Mixer_h mh ON md.NoMixer = mh.NoMixer
-      WHERE md.NoMixer = @NoMixer
+      SELECT 
+          COUNT(*) AS JumlahSak,
+          SUM(md.Berat) AS Berat,          -- berat biasanya di detail
+          MAX(md.IdLokasi) AS IdLokasi,    -- atau MAX(mh.IdLokasi) kalau lokasinya di header
+          MAX(mh.IdWarehouse) AS IdWarehouse
+      FROM dbo.Mixer_d AS md
+      JOIN dbo.Mixer_h AS mh 
+        ON md.NoMixer = mh.NoMixer
+      WHERE md.NoMixer = @NoMixer;
     `;
 
   } else if (isFurnitureWIP) {
@@ -1321,62 +1580,117 @@ async function validateStockOpnameLabel({ noso, label, username, blok, idlokasi 
 
     checkQuery = `
       SELECT COUNT(*) AS count FROM StockOpnameHasilFurnitureWIP
-      WHERE NoSO = @noso AND NoFurnitureWIP = @NoFurnitureWIP AND Username = @username
+      WHERE NoSO = @noso AND NoFurnitureWIP = @NoFurnitureWIP
     `;
     detailQuery = `
       WITH base AS (
         SELECT
-          d.NoFurnitureWIP,
-          SUM(CASE WHEN d.IsPartial = 1 THEN 0 ELSE ISNULL(d.Pcs,0) END) AS SumNonPartialPcs,
-          SUM(CASE WHEN d.IsPartial = 1 THEN ISNULL(d.Pcs,0) ELSE 0 END) AS SumPartialPcs,
-          SUM(ISNULL(d.Berat,0)) AS TotalBerat
-        FROM [dbo].[FurnitureWIP] d
+            d.NoFurnitureWIP, 
+            SUM(CASE WHEN d.IsPartial = 1 THEN 0 ELSE ISNULL(d.Pcs,0) END) AS SumNonPartialPcs,
+            SUM(CASE WHEN d.IsPartial = 1 THEN ISNULL(d.Pcs,0) ELSE 0 END) AS SumPartialPcs,
+            SUM(ISNULL(d.Berat,0)) AS TotalBerat
+        FROM dbo.FurnitureWIP AS d
         WHERE d.NoFurnitureWIP = @NoFurnitureWIP
           AND d.DateUsage IS NULL
         GROUP BY d.NoFurnitureWIP
-      ),
-      p AS (
+    ),
+    p AS (
         SELECT
-          fp.NoFurnitureWIP,
-          SUM(ISNULL(fp.Pcs,0)) AS TotalPartialPcs
-        FROM [dbo].[FurnitureWIPPartial] fp
+            fp.NoFurnitureWIP,
+            SUM(ISNULL(fp.Pcs,0)) AS TotalPartialPcs
+        FROM dbo.FurnitureWIPPartial AS fp
         WHERE fp.NoFurnitureWIP = @NoFurnitureWIP
         GROUP BY fp.NoFurnitureWIP
-      ),
-      agg AS (
+    ),
+    agg AS (
         SELECT
-          b.NoFurnitureWIP,
-          b.SumNonPartialPcs +
-          CASE
-            WHEN ISNULL(b.SumPartialPcs,0) - ISNULL(p.TotalPartialPcs,0) < 0
-              THEN 0
-            ELSE ISNULL(b.SumPartialPcs,0) - ISNULL(p.TotalPartialPcs,0)
-          END AS JmlhSak,
-          b.TotalBerat AS Berat
-        FROM base b
-        LEFT JOIN p ON p.NoFurnitureWIP = b.NoFurnitureWIP
-      )
-      SELECT
+            b.NoFurnitureWIP,
+            b.SumNonPartialPcs +
+            CASE
+                WHEN ISNULL(b.SumPartialPcs,0) - ISNULL(p.TotalPartialPcs,0) < 0
+                    THEN 0
+                ELSE ISNULL(b.SumPartialPcs,0) - ISNULL(p.TotalPartialPcs,0)
+            END AS JmlhSak,
+            b.TotalBerat AS Berat
+        FROM base AS b
+        LEFT JOIN p
+          ON p.NoFurnitureWIP = b.NoFurnitureWIP
+    )
+    SELECT
         a.JmlhSak,
         a.Berat,
         h.Blok,
         h.IdLokasi
-      FROM agg a
-      CROSS APPLY (
+    FROM agg AS a
+    CROSS APPLY (
         SELECT TOP (1)
-          fh.Blok,
-          fh.IdLokasi
-        FROM [dbo].[FurnitureWIP] AS fh
+            fh.Blok,
+            fh.IdLokasi
+        FROM dbo.FurnitureWIP AS fh
         WHERE fh.NoFurnitureWIP = a.NoFurnitureWIP
         ORDER BY fh.DateCreate DESC, fh.DateTimeCreate DESC
-      ) AS h;
+    ) AS h
+    WHERE EXISTS (
+        SELECT 1
+        FROM dbo.StockOpnameFurnitureWIP AS sof
+        WHERE sof.NoSO          = @NoSO
+          AND sof.NoFurnitureWIP = a.NoFurnitureWIP
+    );
     `;
-    warehouseQuery = `SELECT IdWarehouse FROM FurnitureWIP WHERE NoFurnitureWIP = @NoFurnitureWIP`;
+    warehouseQuery = `
+      SELECT mb.IdWarehouse
+      FROM [dbo].[FurnitureWIP] fh
+      JOIN [dbo].[MstBlok]   mb
+        ON UPPER(LTRIM(RTRIM(mb.Blok))) = UPPER(LTRIM(RTRIM(fh.Blok)))
+      WHERE fh.NoFurnitureWIP = @NoFurnitureWIP;
+    `;
     fallbackQuery = `
-      SELECT COUNT(*) AS JumlahSak, SUM(Berat) AS Berat, MAX(IdLokasi) AS IdLokasi, MAX(IdWarehouse) AS IdWarehouse
-      FROM FurnitureWIP
-      WHERE NoFurnitureWIP = @NoFurnitureWIP 
-      AND (DateUsage IS NULL OR IdWarehouse NOT IN (SELECT IdWarehouse FROM StockOpname_h_WarehouseID WHERE NoSO = @noso))
+          WITH base AS (
+            SELECT
+              d.NoFurnitureWIP,
+              SUM(CASE WHEN d.IsPartial = 1 THEN 0 ELSE ISNULL(d.Pcs,0) END) AS SumNonPartialPcs,
+              SUM(CASE WHEN d.IsPartial = 1 THEN ISNULL(d.Pcs,0) ELSE 0 END) AS SumPartialPcs,
+              SUM(ISNULL(d.Berat,0)) AS TotalBerat
+            FROM [dbo].[FurnitureWIP] d
+            WHERE d.NoFurnitureWIP = @NoFurnitureWIP
+              AND d.DateUsage IS NULL
+            GROUP BY d.NoFurnitureWIP
+          ),
+          p AS (
+            SELECT
+              fp.NoFurnitureWIP,
+              SUM(ISNULL(fp.Pcs,0)) AS TotalPartialPcs
+            FROM [dbo].[FurnitureWIPPartial] fp
+            WHERE fp.NoFurnitureWIP = @NoFurnitureWIP
+            GROUP BY fp.NoFurnitureWIP
+          ),
+          agg AS (
+            SELECT
+              b.NoFurnitureWIP,
+              b.SumNonPartialPcs +
+              CASE
+                WHEN ISNULL(b.SumPartialPcs,0) - ISNULL(p.TotalPartialPcs,0) < 0
+                  THEN 0
+                ELSE ISNULL(b.SumPartialPcs,0) - ISNULL(p.TotalPartialPcs,0)
+              END AS JmlhSak,
+              b.TotalBerat AS Berat
+            FROM base b
+            LEFT JOIN p ON p.NoFurnitureWIP = b.NoFurnitureWIP
+          )
+          SELECT
+            a.JmlhSak,
+            a.Berat,
+            h.Blok,
+            h.IdLokasi
+          FROM agg a
+          CROSS APPLY (
+            SELECT TOP (1)
+              fh.Blok,
+              fh.IdLokasi
+            FROM [dbo].[FurnitureWIP] AS fh
+            WHERE fh.NoFurnitureWIP = a.NoFurnitureWIP
+            ORDER BY fh.DateCreate DESC, fh.DateTimeCreate DESC
+          ) AS h;
     `;
     originalDataQuery = `
       SELECT COUNT(*) AS JumlahSak, SUM(Berat) AS Berat, MAX(IdLokasi) AS IdLokasi, MAX(IdWarehouse) AS IdWarehouse
@@ -1391,10 +1705,72 @@ async function validateStockOpnameLabel({ noso, label, username, blok, idlokasi 
 
     checkQuery = `
       SELECT COUNT(*) AS count FROM StockOpnameHasilBarangJadi
-      WHERE NoSO = @noso AND NoBJ = @NoBJ AND Username = @username
+      WHERE NoSO = @noso AND NoBJ = @NoBJ
     `;
     detailQuery = `
       ;WITH base AS (
+          SELECT
+              d.NoBJ,
+              SUM(CASE WHEN d.IsPartial = 1 THEN 0 ELSE ISNULL(d.Pcs,0) END) AS SumNonPartialPcs,
+              SUM(CASE WHEN d.IsPartial = 1 THEN ISNULL(d.Pcs,0) ELSE 0 END) AS SumPartialPcs,
+              SUM(ISNULL(d.Berat,0)) AS TotalBerat
+          FROM dbo.BarangJadi AS d
+          WHERE d.NoBJ = @NoBJ
+            AND d.DateUsage IS NULL
+          GROUP BY d.NoBJ
+      ),
+      p AS (
+          SELECT
+              bp.NoBJ,
+              SUM(ISNULL(bp.Pcs,0)) AS TotalPartialPcs
+          FROM dbo.BarangJadiPartial AS bp
+          WHERE bp.NoBJ = @NoBJ
+          GROUP BY bp.NoBJ
+      ),
+      agg AS (
+          SELECT
+              b.NoBJ,
+              b.SumNonPartialPcs +
+              CASE
+                  WHEN ISNULL(b.SumPartialPcs,0) - ISNULL(p.TotalPartialPcs,0) < 0
+                      THEN 0
+                  ELSE ISNULL(b.SumPartialPcs,0) - ISNULL(p.TotalPartialPcs,0)
+              END AS JmlhSak,
+              b.TotalBerat AS Berat
+          FROM base AS b
+          LEFT JOIN p
+            ON p.NoBJ = b.NoBJ
+      )
+      SELECT
+          a.JmlhSak,
+          a.Berat,
+          h.Blok,
+          h.IdLokasi
+      FROM agg AS a
+      CROSS APPLY (
+          SELECT TOP (1)
+              bh.Blok,
+              bh.IdLokasi
+          FROM dbo.BarangJadi AS bh
+          WHERE bh.NoBJ = a.NoBJ
+          ORDER BY bh.DateCreate DESC, bh.DateTimeCreate DESC
+      ) AS h
+      WHERE EXISTS (
+          SELECT 1
+          FROM dbo.StockOpnameBarangJadi AS sobj
+          WHERE sobj.NoSO = @NoSO
+            AND sobj.NoBJ = a.NoBJ
+      );
+    `;
+    warehouseQuery = `
+      SELECT mb.IdWarehouse
+      FROM [dbo].[BarangJadi] bh
+      JOIN [dbo].[MstBlok]   mb
+        ON UPPER(LTRIM(RTRIM(mb.Blok))) = UPPER(LTRIM(RTRIM(bh.Blok)))
+      WHERE bh.NoBJ = @NoBJ;
+    `;
+    fallbackQuery = `
+       ;WITH base AS (
         SELECT
           d.NoBJ,
           SUM(CASE WHEN d.IsPartial = 1 THEN 0 ELSE ISNULL(d.Pcs,0) END) AS SumNonPartialPcs,
@@ -1441,13 +1817,6 @@ async function validateStockOpnameLabel({ noso, label, username, blok, idlokasi 
         ORDER BY bh.DateCreate DESC, bh.DateTimeCreate DESC
       ) AS h;
     `;
-    warehouseQuery = `SELECT IdWarehouse FROM BarangJadi WHERE NoBJ = @NoBJ`;
-    fallbackQuery = `
-      SELECT COUNT(*) AS JumlahSak, SUM(Berat) AS Berat, MAX(IdLokasi) AS IdLokasi, MAX(IdWarehouse) AS IdWarehouse
-      FROM BarangJadi
-      WHERE NoBJ = @NoBJ 
-      AND (DateUsage IS NULL OR IdWarehouse NOT IN (SELECT IdWarehouse FROM StockOpname_h_WarehouseID WHERE NoSO = @noso))
-    `;
     originalDataQuery = `
       SELECT COUNT(*) AS JumlahSak, SUM(Berat) AS Berat, MAX(IdLokasi) AS IdLokasi, MAX(IdWarehouse) AS IdWarehouse
       FROM BarangJadi
@@ -1461,25 +1830,40 @@ async function validateStockOpnameLabel({ noso, label, username, blok, idlokasi 
 
     checkQuery = `
       SELECT COUNT(*) AS count FROM StockOpnameHasilReject
-      WHERE NoSO = @noso AND NoReject = @NoReject AND Username = @username
+      WHERE NoSO = @noso AND NoReject = @NoReject
     `;
     detailQuery = `
+      SELECT TOP (1)
+          r.Berat,
+          r.Blok,
+          r.IdLokasi
+      FROM dbo.RejectV2 AS r
+      WHERE r.NoReject = @NoReject
+        AND EXISTS (
+              SELECT 1
+              FROM dbo.StockOpnameReject AS sor
+              WHERE sor.NoSO    = @NoSO
+                AND sor.NoReject = r.NoReject
+        )
+      ORDER BY r.DateCreate DESC, r.DateTimeCreate DESC;
+    `;
+    warehouseQuery = `
+      SELECT mb.IdWarehouse
+      FROM [dbo].[RejectV2] rh
+      JOIN [dbo].[MstBlok]   mb
+        ON UPPER(LTRIM(RTRIM(mb.Blok))) = UPPER(LTRIM(RTRIM(rh.Blok)))
+      WHERE rh.NoReject = @NoReject;
+    `;
+    fallbackQuery = `
       SELECT TOP (1)
         r.Berat,
         r.Blok,
         r.IdLokasi
       FROM [dbo].[RejectV2] AS r
-      WHERE r.NoReject = @NoReject
+      WHERE r.NoReject = @NoReject AND DateUsage IS NULL
       ORDER BY r.DateCreate DESC, r.DateTimeCreate DESC;
     `;
-    warehouseQuery = `SELECT IdWarehouse FROM RejectV2 WHERE NoReject = @NoReject`;
-    fallbackQuery = `
-      SELECT SUM(Berat) AS Berat, MAX(IdLokasi) AS IdLokasi, MAX(IdWarehouse) AS IdWarehouse
-      FROM RejectV2
-      WHERE NoReject = @NoReject 
-      AND (DateUsage IS NULL OR IdWarehouse NOT IN (SELECT IdWarehouse FROM StockOpname_h_WarehouseID WHERE NoSO = @noso))
-    `;
-    // FIX: originalData dari RejectV2 (bukan BarangJadi)
+    // FIX: originalData dari RejectV2 
     originalDataQuery = `
       SELECT SUM(Berat) AS Berat, MAX(IdLokasi) AS IdLokasi, MAX(IdWarehouse) AS IdWarehouse
       FROM RejectV2
@@ -1497,12 +1881,12 @@ async function validateStockOpnameLabel({ noso, label, username, blok, idlokasi 
       isValidWarehouse: true,
       isDuplicate: true,
       foundInStockOpname: true,
-      canInsert: false,
+      idDiscrepancy: null,
       labelType,
       parsed,
       idWarehouse,
       mesinInfo: isBonggolan ? mesinInfo : []
-    }, 'Label sudah pernah discan sebelumnya.');
+    }, 'Label telah discan!');
   }
 
   // 4) Kualifikasi NoSO
@@ -1523,16 +1907,16 @@ async function validateStockOpnameLabel({ noso, label, username, blok, idlokasi 
 
   let isValidCategory = true;
   let categoryMessage = '';
-  if (isBahanBaku && !qualifications.IsBahanBaku) { isValidCategory = false; categoryMessage = 'Kategori Bahan Baku tidak sesuai dengan NoSO ini.'; }
-  else if (isWashing && !qualifications.IsWashing) { isValidCategory = false; categoryMessage = 'Kategori Washing tidak sesuai dengan NoSO ini.'; }
-  else if (isBroker && !qualifications.IsBroker) { isValidCategory = false; categoryMessage = 'Kategori Broker tidak sesuai dengan NoSO ini.'; }
-  else if (isCrusher && !qualifications.IsCrusher) { isValidCategory = false; categoryMessage = 'Kategori Crusher tidak sesuai dengan NoSO ini.'; }
-  else if (isBonggolan && !qualifications.IsBonggolan) { isValidCategory = false; categoryMessage = 'Kategori Bonggolan tidak sesuai dengan NoSO ini.'; }
-  else if (isGilingan && !qualifications.IsGilingan) { isValidCategory = false; categoryMessage = 'Kategori Gilingan tidak sesuai dengan NoSO ini.'; }
-  else if (isMixer && !qualifications.IsMixer) { isValidCategory = false; categoryMessage = 'Kategori Mixer tidak sesuai dengan NoSO ini.'; }
-  else if (isFurnitureWIP && !qualifications.IsFurnitureWIP) { isValidCategory = false; categoryMessage = 'Kategori Furniture WIP tidak sesuai dengan NoSO ini.'; }
-  else if (isBarangJadi && !qualifications.IsBarangJadi) { isValidCategory = false; categoryMessage = 'Kategori Barang Jadi tidak sesuai dengan NoSO ini.'; }
-  else if (isReject && !qualifications.IsReject) { isValidCategory = false; categoryMessage = 'Kategori Reject tidak sesuai dengan NoSO ini.'; }
+  if (isBahanBaku && !qualifications.IsBahanBaku) { isValidCategory = false; categoryMessage = 'Kategori Bahan Baku tidak sesuai dengan SO ini.'; }
+  else if (isWashing && !qualifications.IsWashing) { isValidCategory = false; categoryMessage = 'Kategori Washing tidak sesuai dengan SO ini.'; }
+  else if (isBroker && !qualifications.IsBroker) { isValidCategory = false; categoryMessage = 'Kategori Broker tidak sesuai dengan SO ini.'; }
+  else if (isCrusher && !qualifications.IsCrusher) { isValidCategory = false; categoryMessage = 'Kategori Crusher tidak sesuai dengan SO ini.'; }
+  else if (isBonggolan && !qualifications.IsBonggolan) { isValidCategory = false; categoryMessage = 'Kategori Bonggolan tidak sesuai dengan SO ini.'; }
+  else if (isGilingan && !qualifications.IsGilingan) { isValidCategory = false; categoryMessage = 'Kategori Gilingan tidak sesuai dengan SO ini.'; }
+  else if (isMixer && !qualifications.IsMixer) { isValidCategory = false; categoryMessage = 'Kategori Mixer tidak sesuai dengan SO ini.'; }
+  else if (isFurnitureWIP && !qualifications.IsFurnitureWIP) { isValidCategory = false; categoryMessage = 'Kategori Furniture WIP tidak sesuai dengan SO ini.'; }
+  else if (isBarangJadi && !qualifications.IsBarangJadi) { isValidCategory = false; categoryMessage = 'Kategori Barang Jadi tidak sesuai dengan SO ini.'; }
+  else if (isReject && !qualifications.IsReject) { isValidCategory = false; categoryMessage = 'Kategori Reject tidak sesuai dengan SO ini.'; }
 
   // 5) Ambil IdWarehouse
   const whResult = await request.query(warehouseQuery);
@@ -1549,7 +1933,7 @@ async function validateStockOpnameLabel({ noso, label, username, blok, idlokasi 
       isValidWarehouse: false,
       isDuplicate: false,
       foundInStockOpname: false,
-      canInsert: false,
+      idDiscrepancy: null,
       labelType,
       parsed,
       idWarehouse,
@@ -1562,32 +1946,7 @@ async function validateStockOpnameLabel({ noso, label, username, blok, idlokasi 
       mesinInfo: isBonggolan ? mesinInfo : []
     }, categoryMessage);
   }
-
-  // 6) Cek warehouse
-  if (!idWarehouse) {
-    const originalDataResult = await request.query(originalDataQuery);
-    const originalData = originalDataResult.recordset[0];
-
-    return createResponse(false, {
-      isValidFormat: true,
-      isValidCategory: true,
-      isValidWarehouse: false,
-      isDuplicate: false,
-      foundInStockOpname: false,
-      canInsert: false,
-      labelType,
-      parsed,
-      idWarehouse,
-      detail: originalData ? {
-        JmlhSak: originalData.JumlahSak ?? null,
-        Berat: originalData?.Berat != null ? Number(Number(originalData.Berat).toFixed(2)) : null,
-        Blok: originalData.Blok,
-        IdLokasi: originalData.IdLokasi
-      } : null,
-      mesinInfo: isBonggolan ? mesinInfo : []
-    }, 'Label tidak valid atau warehouse tidak ditemukan di sumber.');
-  }
-
+  
   // 7) Validasi warehouse terhadap NoSO
   const soWarehouseCheck = await request.query(`
     SELECT COUNT(*) AS count
@@ -1602,6 +1961,26 @@ async function validateStockOpnameLabel({ noso, label, username, blok, idlokasi 
 
   // Ditemukan pada sumber utama
   if (detailData) {
+
+    if (!isValidWarehouse) {
+      return createResponse(false, {
+        isValidFormat: true,
+        isValidCategory: true,
+        isValidWarehouse: false,
+        isDuplicate: false,
+        foundInStockOpname: true,
+        idDiscrepancy: 2,
+        labelType,
+        parsed,
+        idWarehouse,
+        detail: {
+          ...detailData,
+          Berat: detailData?.Berat != null ? Number(Number(detailData.Berat).toFixed(2)) : null
+        },
+        mesinInfo: isBonggolan ? mesinInfo : []
+      }, `Warehouse tidak sesuai!`);
+    }
+
     // Cek mismatch Blok/IdLokasi
     if (isBlokLokasiMismatch(detailData)) {
       return createResponse(false, {
@@ -1610,7 +1989,7 @@ async function validateStockOpnameLabel({ noso, label, username, blok, idlokasi 
         isValidWarehouse: isValidWarehouse,
         isDuplicate: false,
         foundInStockOpname: true,
-        canInsert: false,
+        idDiscrepancy: null,
         labelType,
         parsed,
         idWarehouse,
@@ -1620,26 +1999,7 @@ async function validateStockOpnameLabel({ noso, label, username, blok, idlokasi 
           Berat: detailData?.Berat != null ? Number(Number(detailData.Berat).toFixed(2)) : null
         },
         mesinInfo: isBonggolan ? mesinInfo : []
-      }, `Lokasi sebelumnya berada di ${detailData.Blok}${detailData.IdLokasi}`);
-    }
-
-    if (!isValidWarehouse) {
-      return createResponse(false, {
-        isValidFormat: true,
-        isValidCategory: true,
-        isValidWarehouse: false,
-        isDuplicate: false,
-        foundInStockOpname: true,
-        canInsert: false,
-        labelType,
-        parsed,
-        idWarehouse,
-        detail: {
-          ...detailData,
-          Berat: detailData?.Berat != null ? Number(Number(detailData.Berat).toFixed(2)) : null
-        },
-        mesinInfo: isBonggolan ? mesinInfo : []
-      }, `Label ini tidak tersedia pada warehouse NoSO ini (IdWarehouse: ${idWarehouse}).`);
+      }, `Lokasi label saat ini berada di ${detailData.Blok}${detailData.IdLokasi}`);
     }
 
     return createResponse(true, {
@@ -1648,7 +2008,7 @@ async function validateStockOpnameLabel({ noso, label, username, blok, idlokasi 
       isValidWarehouse: true,
       isDuplicate: false,
       foundInStockOpname: true,
-      canInsert: true,
+      idDiscrepancy: null,
       labelType,
       parsed,
       idWarehouse,
@@ -1657,46 +2017,23 @@ async function validateStockOpnameLabel({ noso, label, username, blok, idlokasi 
         Berat: detailData?.Berat != null ? Number(Number(detailData.Berat).toFixed(2)) : null
       },
       mesinInfo: isBonggolan ? mesinInfo : []
-    }, 'Label valid dan siap disimpan.');
+    }, 'Label Valid');
   }
+
+
 
   // 9) Fallback (tidak ditemukan di query utama)
   const fallbackResult = await request.query(fallbackQuery);
   const fallbackData = fallbackResult.recordset[0];
 
-  if (fallbackData && (fallbackData.JumlahSak > 0 || fallbackData.Berat > 0)) {
-    // Cek mismatch jika ada blok/idlokasi di fallback
-    if (isBlokLokasiMismatch({
-      Blok: fallbackData.Blok,
-      IdLokasi: fallbackData.IdLokasi
-    })) {
-      return createResponse(false, {
-        isValidFormat: true,
-        isValidCategory: true,
-        isValidWarehouse,
-        isDuplicate: false,
-        foundInStockOpname: false,
-        canInsert: false,
-        labelType,
-        parsed,
-        idWarehouse: fallbackData.IdWarehouse || idWarehouse,
-        detail: {
-          JmlhSak: fallbackData.JumlahSak ?? null,
-          Berat: fallbackData?.Berat != null ? Number(Number(fallbackData.Berat).toFixed(2)) : null,
-          Blok: fallbackData.Blok,
-          IdLokasi: fallbackData.IdLokasi
-        },
-        mesinInfo: isBonggolan ? mesinInfo : []
-      }, `Lokasi sebelumnya berada di ${detailData.Blok}${detailData.IdLokasi}`);
-    }
-
+  if (fallbackData && (fallbackData.JmlhSak > 0 || fallbackData.Berat > 0)) {
     return createResponse(false, {
       isValidFormat: true,
       isValidCategory: true,
       isValidWarehouse,
       isDuplicate: false,
       foundInStockOpname: false,
-      canInsert: false,
+      idDiscrepancy: 3,
       labelType,
       parsed,
       idWarehouse: fallbackData.IdWarehouse || idWarehouse,
@@ -1707,7 +2044,7 @@ async function validateStockOpnameLabel({ noso, label, username, blok, idlokasi 
         IdLokasi: fallbackData.IdLokasi
       },
       mesinInfo: isBonggolan ? mesinInfo : []
-    }, 'Item tidak masuk dalam daftar Stock Opname atau belum diproses.');
+    }, 'Label tidak masuk dalam daftar Stock Opname');
   }
 
   // 10) Original (semua sudah diproses / truly not found)
@@ -1715,49 +2052,24 @@ async function validateStockOpnameLabel({ noso, label, username, blok, idlokasi 
   const originalData = originalDataResult.recordset[0];
 
   if (originalData && (originalData.JumlahSak > 0 || originalData.Berat > 0)) {
-    // Cek mismatch untuk originalData jika punya Blok/IdLokasi
-    if (isBlokLokasiMismatch({
-      Blok: originalData.Blok,
-      IdLokasi: originalData.IdLokasi
-    })) {
-      return createResponse(false, {
-        isValidFormat: true,
-        isValidCategory: true,
-        isValidWarehouse,
-        isDuplicate: false,
-        foundInStockOpname: false,
-        canInsert: false,
-        labelType,
-        parsed,
-        idWarehouse: originalData.IdWarehouse || idWarehouse,
-        detail: {
-          JmlhSak: originalData.JumlahSak ?? null,
-          Berat: originalData?.Berat != null ? Number(Number(originalData.Berat).toFixed(2)) : null,
-          Blok: originalData.Blok,
-          IdLokasi: originalData.IdLokasi
-        },
-        mesinInfo: isBonggolan ? mesinInfo : []
-      }, `Lokasi  ${blok}${idlokasi} > ${detailData.Blok}${detailData.IdLokasi}`);
-    }
-
     return createResponse(false, {
       isValidFormat: true,
       isValidCategory: true,
       isValidWarehouse,
       isDuplicate: false,
       foundInStockOpname: false,
-      canInsert: false,
+      idDiscrepancy: 1,
       labelType,
       parsed,
       idWarehouse: originalData.IdWarehouse || idWarehouse,
       detail: {
-        JmlhSak: originalData.JumlahSak ?? null,
-        Berat: originalData?.Berat != null ? Number(Number(originalData.Berat).toFixed(2)) : null,
-        Blok: originalData.Blok,
-        IdLokasi: originalData.IdLokasi
+        JmlhSak: 0,
+        Berat: 0,
+        Blok: '-',
+        IdLokasi: '-'
       },
       mesinInfo: isBonggolan ? mesinInfo : []
-    }, 'Item telah diproses sebelumnya.');
+    }, 'Item telah diproses!');
   }
 
   return createResponse(false, {
@@ -1766,7 +2078,7 @@ async function validateStockOpnameLabel({ noso, label, username, blok, idlokasi 
     isValidWarehouse,
     isDuplicate: false,
     foundInStockOpname: false,
-    canInsert: false,
+    idDiscrepancy: 1,
     labelType,
     parsed,
     idWarehouse
@@ -1790,7 +2102,7 @@ async function validateStockOpnameLabel({ noso, label, username, blok, idlokasi 
  * @param {number} p.idUsername           // INT, untuk log (wajib jika ingin log berisi user id)
  */
 async function insertStockOpnameLabel({
-  noso, label, jmlhSak = 0, berat = 0, idlokasi, blok, username, idUsername
+  noso, label, jmlhSak = 0, berat = 0, idlokasi, blok, username, idUsername, idDiscrepancy
 }) {
   if (!label) throw new Error('Label wajib diisi');
 
@@ -1821,6 +2133,7 @@ async function insertStockOpnameLabel({
     request.input('DateTimeScan', sql.DateTime, new Date());
     request.input('idlokasi',     sql.Int,     idlokasi);  // INT
     request.input('blok',         sql.VarChar(3), blok);   // char(3)
+    request.input('IdDiscrepancy',         sql.Int, idDiscrepancy);   // INT
 
     let insertedData = null;
 
@@ -1844,8 +2157,8 @@ async function insertStockOpnameLabel({
       // INSERT hasil
       await request.query(`
         INSERT INTO StockOpnameHasilBahanBaku
-          (NoSO, NoBahanBaku, NoPallet, JmlhSak, Berat, Username, DateTimeScan)
-        VALUES (@noso, @NoBahanBaku, @NoPallet, @jmlhSak, @berat, @username, @DateTimeScan)
+          (NoSO, NoBahanBaku, NoPallet, JmlhSak, Berat, Username, DateTimeScan, IdDiscrepancy)
+        VALUES (@noso, @NoBahanBaku, @NoPallet, @jmlhSak, @berat, @username, @DateTimeScan, @idDiscrepancy)
       `);
 
       // UPDATE header
@@ -1884,8 +2197,8 @@ async function insertStockOpnameLabel({
 
       await request.query(`
         INSERT INTO StockOpnameHasilWashing
-          (NoSO, NoWashing, JmlhSak, Berat, Username, DateTimeScan)
-        VALUES (@noso, @NoWashing, @jmlhSak, @berat, @username, @DateTimeScan)
+          (NoSO, NoWashing, JmlhSak, Berat, Username, DateTimeScan, IdDiscrepancy)
+        VALUES (@noso, @NoWashing, @jmlhSak, @berat, @username, @DateTimeScan, @idDiscrepancy)
       `);
 
       const upd = await request.query(`
@@ -1922,8 +2235,8 @@ async function insertStockOpnameLabel({
 
       await request.query(`
         INSERT INTO StockOpnameHasilBroker
-          (NoSO, NoBroker, JmlhSak, Berat, Username, DateTimeScan)
-        VALUES (@noso, @NoBroker, @jmlhSak, @berat, @username, @DateTimeScan)
+          (NoSO, NoBroker, JmlhSak, Berat, Username, DateTimeScan, IdDiscrepancy)
+        VALUES (@noso, @NoBroker, @jmlhSak, @berat, @username, @DateTimeScan, @idDiscrepancy)
       `);
 
       const upd = await request.query(`
@@ -1960,8 +2273,8 @@ async function insertStockOpnameLabel({
 
       await request.query(`
         INSERT INTO StockOpnameHasilCrusher
-          (NoSO, NoCrusher, Berat, Username, DateTimeScan)
-        VALUES (@noso, @NoCrusher, @berat, @username, @DateTimeScan)
+          (NoSO, NoCrusher, Berat, Username, DateTimeScan, IdDiscrepancy)
+        VALUES (@noso, @NoCrusher, @berat, @username, @DateTimeScan, @idDiscrepancy)
       `);
 
       const upd = await request.query(`
@@ -1998,8 +2311,8 @@ async function insertStockOpnameLabel({
 
       await request.query(`
         INSERT INTO StockOpnameHasilBonggolan
-          (NoSO, NoBonggolan, Berat, Username, DateTimeScan)
-        VALUES (@noso, @NoBonggolan, @berat, @username, @DateTimeScan)
+          (NoSO, NoBonggolan, Berat, Username, DateTimeScan, IdDiscrepancy)
+        VALUES (@noso, @NoBonggolan, @berat, @username, @DateTimeScan, @idDiscrepancy)
       `);
 
       const upd = await request.query(`
@@ -2036,8 +2349,8 @@ async function insertStockOpnameLabel({
 
       await request.query(`
         INSERT INTO StockOpnameHasilGilingan
-          (NoSO, NoGilingan, Berat, Username, DateTimeScan)
-        VALUES (@noso, @NoGilingan, @berat, @username, @DateTimeScan)
+          (NoSO, NoGilingan, Berat, Username, DateTimeScan, IdDiscrepancy)
+        VALUES (@noso, @NoGilingan, @berat, @username, @DateTimeScan, @idDiscrepancy)
       `);
 
       const upd = await request.query(`
@@ -2074,8 +2387,8 @@ async function insertStockOpnameLabel({
 
       await request.query(`
         INSERT INTO StockOpnameHasilMixer
-          (NoSO, NoMixer, JmlhSak, Berat, Username, DateTimeScan)
-        VALUES (@noso, @NoMixer, @jmlhSak, @berat, @username, @DateTimeScan)
+          (NoSO, NoMixer, JmlhSak, Berat, Username, DateTimeScan, IdDiscrepancy)
+        VALUES (@noso, @NoMixer, @jmlhSak, @berat, @username, @DateTimeScan, @idDiscrepancy)
       `);
 
       const upd = await request.query(`
@@ -2112,8 +2425,8 @@ async function insertStockOpnameLabel({
 
       await request.query(`
         INSERT INTO StockOpnameHasilFurnitureWIP
-          (NoSO, NoFurnitureWIP, Pcs, Berat, Username, DateTimeScan)
-        VALUES (@noso, @NoFurnitureWIP, @jmlhSak, @berat, @username, @DateTimeScan)
+          (NoSO, NoFurnitureWIP, Pcs, Berat, Username, DateTimeScan, IdDiscrepancy)
+        VALUES (@noso, @NoFurnitureWIP, @jmlhSak, @berat, @username, @DateTimeScan, @idDiscrepancy)
       `);
 
       const upd = await request.query(`
@@ -2150,8 +2463,8 @@ async function insertStockOpnameLabel({
 
       await request.query(`
         INSERT INTO StockOpnameHasilBarangJadi
-          (NoSO, NoBJ, Pcs, Berat, Username, DateTimeScan)
-        VALUES (@noso, @NoBJ, @jmlhSak, @berat, @username, @DateTimeScan)
+          (NoSO, NoBJ, Pcs, Berat, Username, DateTimeScan, IdDiscrepancy)
+        VALUES (@noso, @NoBJ, @jmlhSak, @berat, @username, @DateTimeScan, @idDiscrepancy)
       `);
 
       const upd = await request.query(`
@@ -2188,8 +2501,8 @@ async function insertStockOpnameLabel({
 
       await request.query(`
         INSERT INTO StockOpnameHasilReject
-          (NoSO, NoReject, Berat, Username, DateTimeScan)
-        VALUES (@noso, @NoReject, @berat, @username, @DateTimeScan)
+          (NoSO, NoReject, Berat, Username, DateTimeScan, IdDiscrepancy)
+        VALUES (@noso, @NoReject, @berat, @username, @DateTimeScan, @idDiscrepancy)
       `);
 
       const upd = await request.query(`

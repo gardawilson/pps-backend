@@ -23,6 +23,8 @@ router.delete('/no-stock-opname/:noso/hasil', verifyToken, deleteStockOpnameHasi
 router.post('/no-stock-opname/:noso/validate-label', verifyToken, validateStockOpnameLabelHandler); 
 router.post('/no-stock-opname/:noso/insert-label', verifyToken, insertStockOpnameLabelHandler);
 router.get('/no-stock-opname/:noso/families', verifyToken, stockOpnameFamiliesHandler);
+
+
 // Ambil data Ascend berdasarkan FamilyID
 router.get(
   '/no-stock-opname/:noso/families/:familyid/ascend',

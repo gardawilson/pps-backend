@@ -9,7 +9,7 @@ async function getAllActive() {
       IdCrusher,
       NamaCrusher,
       Enable
-    FROM [PPS_TEST2].[dbo].[MstCrusher]
+    FROM [dbo].[MstCrusher]
     WHERE ISNULL(Enable, 1) = 1
     ORDER BY NamaCrusher ASC;
   `;

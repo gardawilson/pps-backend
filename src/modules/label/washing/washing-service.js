@@ -40,7 +40,7 @@ exports.getAll = async ({ page, limit, search }) => {
     LEFT JOIN BongkarSusunOutputWashing bso ON bso.NoWashing = h.NoWashing
     WHERE 1=1
       ${search ? `AND (h.NoWashing LIKE @search OR jp.Jenis LIKE @search OR w.NamaWarehouse LIKE @search)` : ''}
-      AND NOT EXISTS (SELECT 1 FROM Washing_d d2 WHERE d2.NoWashing = h.NoWashing AND d2.DateUsage IS NOT NULL)
+      AND EXISTS (SELECT 1 FROM Washing_d d2 WHERE d2.NoWashing = h.NoWashing AND d2.DateUsage IS NULL)
     GROUP BY 
       h.NoWashing, h.DateCreate, h.IdJenisPlastik, jp.Jenis, 
       h.IdWarehouse, w.NamaWarehouse, h.IdStatus, 

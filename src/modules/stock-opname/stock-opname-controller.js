@@ -11,6 +11,9 @@ const {
     fetchQtyUsage,
     deleteStockOpnameHasilAscend
   } = require('./stock-opname-service');
+
+  const { toApiDate } = require('../../core/utils/date-helper'); // sesuaikan path
+
   
 async function noStockOpnameHandler(req, res) {
   console.log(`[${new Date().toISOString()}] 🔵 GET /no-stock-opname endpoint hit by user: ${req.user?.username || 'unknown'}`);
@@ -250,15 +253,37 @@ async function stockOpnameHasilHandler(req, res) {
 
   async function fetchQtyUsageHandler(req, res) {
     const { itemId } = req.params;
-    const { tglSO } = req.query;  // ambil dari query string
+    const { tglSO } = req.query;  // dari query string, contoh: "13 Nov 2025"
   
     if (!itemId || !tglSO) {
       return res.status(400).json({ message: 'itemId dan tglSO harus disertakan' });
     }
   
+    // 🔹 convert ke format raw untuk DB/API
+    const tglSoRaw = toApiDate(tglSO);
+  
+    if (!tglSoRaw) {
+      console.error('[fetchQtyUsageHandler] tglSO tidak valid:', tglSO);
+      return res.status(400).json({ message: 'Format tglSO tidak valid' });
+    }
+  
+    // LOG buat memastikan
+    console.log('--- fetchQtyUsageHandler ---');
+    console.log('[fetchQtyUsageHandler] itemId            :', itemId);
+    console.log('[fetchQtyUsageHandler] tglSO (raw query) :', tglSO);
+    console.log('[fetchQtyUsageHandler] tglSO (API/raw)   :', tglSoRaw);
+  
     try {
-      const qtyUsage = await fetchQtyUsage(itemId, tglSO);
-      res.json({ itemId, tglSO, qtyUsage });
+      // 👉 panggil service pakai tglSoRaw (YYYY-MM-DD)
+      const qtyUsage = await fetchQtyUsage(itemId, tglSoRaw);
+  
+      // kalau mau kirim balik dua-duanya juga boleh
+      res.json({
+        itemId,
+        tglSO: tglSoRaw,      // yang dipakai untuk hit DB
+        tglSOOriginal: tglSO, // asal dari Flutter
+        qtyUsage,
+      });
     } catch (err) {
       console.error('❌ Error fetchQtyUsage:', err.message);
       res.status(500).json({ message: 'Internal Server Error', error: err.message });

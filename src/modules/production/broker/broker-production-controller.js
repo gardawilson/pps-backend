@@ -236,4 +236,120 @@ async function deleteProduksi(req, res) {
   }
 }
 
-module.exports = { getProduksiByDate, getInputsByNoProduksi, getAllProduksi, createProduksi, updateProduksi, deleteProduksi };
+async function validateLabel(req, res) {
+  const { labelCode } = req.params;
+
+  // Validate input
+  if (!labelCode || typeof labelCode !== 'string') {
+    return res.status(400).json({
+      success: false,
+      message: 'Label number is required and must be a string',
+    });
+  }
+
+  try {
+    const result = await brokerProduksiService.validateLabel(labelCode);
+
+    if (!result.found) {
+      return res.status(404).json({
+        success: false,
+        message: `Label ${labelCode} not found or already used`,
+        prefix: result.prefix,
+        tableName: result.tableName,
+      });
+    }
+
+    return res.status(200).json({
+      success: true,
+      message: 'Label validated successfully',
+      prefix: result.prefix,
+      tableName: result.tableName,
+      totalRecords: result.count,
+      data: result.data, // Now returns array of all matching records
+    });
+  } catch (error) {
+    console.error('Error validating label:', error);
+    return res.status(500).json({
+      success: false,
+      message: 'Internal Server Error',
+      error: error.message,
+    });
+  }
+}
+
+
+
+// broker-production-controller.js
+// broker-production-controller.js
+async function upsertInputsAndPartials(req, res) {
+  const noProduksi = String(req.params.noProduksi || '').trim();
+  
+  if (!noProduksi) {
+    return res.status(400).json({ 
+      success: false, 
+      message: 'noProduksi is required',
+      error: {
+        field: 'noProduksi',
+        message: 'Parameter noProduksi tidak boleh kosong'
+      }
+    });
+  }
+
+  const payload = req.body || {};
+
+  // Validate that at least one input is provided
+  const hasInput = ['broker', 'bb', 'washing', 'crusher', 'gilingan', 'mixer', 'reject', 
+                    'bbPartialNew', 'gilinganPartialNew', 'mixerPartialNew', 'rejectPartialNew']
+    .some(key => payload[key] && Array.isArray(payload[key]) && payload[key].length > 0);
+
+  if (!hasInput) {
+    return res.status(400).json({
+      success: false,
+      message: 'Tidak ada data input yang diberikan',
+      error: {
+        message: 'Request body harus berisi minimal satu array input (broker, bb, washing, dll) yang tidak kosong'
+      }
+    });
+  }
+
+  try {
+    const result = await brokerProduksiService.upsertInputsAndPartials(noProduksi, payload);
+
+    const { success, hasWarnings, data } = result;
+
+    // Determine appropriate HTTP status code
+    let statusCode = 200;
+    let message = 'Inputs & partials processed successfully';
+
+    if (!success) {
+      if (data.summary.totalInvalid > 0) {
+        statusCode = 422; // Unprocessable Entity - some data is invalid
+        message = 'Beberapa data tidak valid';
+      } else if (data.summary.totalInserted === 0 && data.summary.totalPartialsCreated === 0) {
+        statusCode = 400; // Bad Request - nothing was processed
+        message = 'Tidak ada data yang berhasil diproses';
+      }
+    } else if (hasWarnings) {
+      message = 'Inputs & partials processed with warnings';
+    }
+
+    return res.status(statusCode).json({
+      success,
+      message,
+      data,
+    });
+  } catch (e) {
+    console.error('[upsertInputsAndPartials]', e);
+    return res.status(500).json({
+      success: false,
+      message: 'Internal Server Error',
+      error: {
+        message: e.message,
+        details: process.env.NODE_ENV === 'development' ? e.stack : undefined
+      }
+    });
+  }
+}
+
+
+module.exports = { getProduksiByDate, getInputsByNoProduksi, getAllProduksi, createProduksi, updateProduksi, deleteProduksi, validateLabel, upsertInputsAndPartials };

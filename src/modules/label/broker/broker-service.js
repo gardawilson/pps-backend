@@ -113,11 +113,11 @@ exports.getAll = async ({ page, limit, search }) => {
              )`
           : ''
       }
-      AND NOT EXISTS (
+      AND EXISTS (
         SELECT 1 
         FROM Broker_d d2 
         WHERE d2.NoBroker = h.NoBroker 
-          AND d2.DateUsage IS NOT NULL
+          AND d2.DateUsage IS NULL
       )
   `;
 

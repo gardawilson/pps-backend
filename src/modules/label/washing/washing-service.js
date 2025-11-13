@@ -56,7 +56,7 @@ exports.getAll = async ({ page, limit, search }) => {
     INNER JOIN MstWarehouse w ON w.IdWarehouse = h.IdWarehouse
     WHERE 1=1
       ${search ? `AND (h.NoWashing LIKE @search OR jp.Jenis LIKE @search OR w.NamaWarehouse LIKE @search)` : ''}
-      AND NOT EXISTS (SELECT 1 FROM Washing_d d2 WHERE d2.NoWashing = h.NoWashing AND d2.DateUsage IS NOT NULL)
+      AND EXISTS (SELECT 1 FROM Washing_d d2 WHERE d2.NoWashing = h.NoWashing AND d2.DateUsage IS NULL)
   `;
 
   request.input('offset', sql.Int, offset).input('limit', sql.Int, limit);

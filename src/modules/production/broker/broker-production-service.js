@@ -2252,7 +2252,7 @@ async function _insertInputsWithTx(tx, noProduksi, lists) {
 
 
 
-
+//DELETE INPUT AND PARTIAL SERVICE
 async function deleteInputsAndPartials(noProduksi, payload) {
   const pool = await poolPromise;
   const tx = new sql.Transaction(pool);

@@ -89,7 +89,6 @@ async function fetchInputs(noProduksi) {
       br.Berat AS Berat,
       CAST(NULL AS decimal(18,3)) AS BeratAct,
       br.IsPartial AS IsPartial,
-      -- ✔ jenis PLASTIK → tampilkan sebagai IdJenis/NamaJenis (seragam)
       bh.IdJenisPlastik AS IdJenis,
       jp.Jenis          AS NamaJenis
     FROM dbo.BrokerProduksiInputBroker ib WITH (NOLOCK)
@@ -108,7 +107,6 @@ async function fetchInputs(noProduksi) {
       bb.Berat AS Berat,
       bb.BeratAct AS BeratAct,
       bb.IsPartial AS IsPartial,
-      -- ✔ jenis PLASTIK (dari header pallet)
       bbh.IdJenisPlastik AS IdJenis,
       jpb.Jenis          AS NamaJenis
     FROM dbo.BrokerProduksiInputBB ibb WITH (NOLOCK)
@@ -130,7 +128,6 @@ async function fetchInputs(noProduksi) {
       wd.Berat AS Berat,
       CAST(NULL AS decimal(18,3)) AS BeratAct,
       CAST(NULL AS bit) AS IsPartial,
-      -- ✔ jenis PLASTIK (dari Washing_h)
       wh.IdJenisPlastik AS IdJenis,
       jpw.Jenis          AS NamaJenis
     FROM dbo.BrokerProduksiInputWashing iw WITH (NOLOCK)
@@ -149,7 +146,6 @@ async function fetchInputs(noProduksi) {
       c.Berat AS Berat,
       CAST(NULL AS decimal(18,3)) AS BeratAct,
       CAST(NULL AS bit) AS IsPartial,
-      -- ✔ jenis CRUSHER → map ke IdJenis/NamaJenis
       c.IdCrusher    AS IdJenis,
       mc.NamaCrusher AS NamaJenis
     FROM dbo.BrokerProduksiInputCrusher ic WITH (NOLOCK)
@@ -167,7 +163,6 @@ async function fetchInputs(noProduksi) {
       g.Berat AS Berat,
       CAST(NULL AS decimal(18,3)) AS BeratAct,
       g.IsPartial AS IsPartial,
-      -- ✔ jenis GILINGAN → map ke IdJenis/NamaJenis
       g.IdGilingan    AS IdJenis,
       mg.NamaGilingan AS NamaJenis
     FROM dbo.BrokerProduksiInputGilingan ig WITH (NOLOCK)
@@ -185,7 +180,6 @@ async function fetchInputs(noProduksi) {
       md.Berat AS Berat,
       CAST(NULL AS decimal(18,3)) AS BeratAct,
       md.IsPartial AS IsPartial,
-      -- ✔ jenis MIXER → map ke IdJenis/NamaJenis
       mh.IdMixer  AS IdJenis,
       mm.Jenis    AS NamaJenis
     FROM dbo.BrokerProduksiInputMixer im WITH (NOLOCK)
@@ -207,13 +201,14 @@ async function fetchInputs(noProduksi) {
       rj.Berat AS Berat,
       CAST(NULL AS decimal(18,3)) AS BeratAct,
       CAST(NULL AS bit) AS IsPartial,
-      -- ✔ jenis REJECT → map ke IdJenis/NamaJenis
       rj.IdReject     AS IdJenis,
       mr.NamaReject   AS NamaJenis
     FROM dbo.BrokerProduksiInputReject ir WITH (NOLOCK)
     LEFT JOIN dbo.RejectV2 rj  WITH (NOLOCK) ON rj.NoReject = ir.NoReject
     LEFT JOIN dbo.MstReject mr WITH (NOLOCK) ON mr.IdReject = rj.IdReject
-    WHERE ir.NoProduksi=@no;
+    WHERE ir.NoProduksi=@no
+    ORDER BY Ref1 DESC, Ref2 ASC;
+
 
     /* =========== [2] PARTIALS (pakai IdJenis/NamaJenis juga) =========== */
 
@@ -233,7 +228,8 @@ async function fetchInputs(noProduksi) {
       ON bbh.NoBahanBaku = pdet.NoBahanBaku AND bbh.NoPallet = pdet.NoPallet
     LEFT JOIN dbo.MstJenisPlastik jpp WITH (NOLOCK)
       ON jpp.IdJenisPlastik = bbh.IdJenisPlastik
-    WHERE pmap.NoProduksi = @no;
+    WHERE pmap.NoProduksi = @no
+    ORDER BY pmap.NoBBPartial DESC;
 
     /* Gilingan partial → jenis gilingan */
     SELECT
@@ -247,7 +243,8 @@ async function fetchInputs(noProduksi) {
       ON gdet.NoGilinganPartial = gmap.NoGilinganPartial
     LEFT JOIN dbo.Gilingan gh      WITH (NOLOCK) ON gh.NoGilingan = gdet.NoGilingan
     LEFT JOIN dbo.MstGilingan mg   WITH (NOLOCK) ON mg.IdGilingan = gh.IdGilingan
-    WHERE gmap.NoProduksi = @no;
+    WHERE gmap.NoProduksi = @no
+    ORDER BY gmap.NoGilinganPartial DESC;
 
     /* Mixer partial → jenis mixer */
     SELECT
@@ -264,7 +261,8 @@ async function fetchInputs(noProduksi) {
       ON mh.NoMixer = mdet.NoMixer
     LEFT JOIN dbo.MstMixer mm WITH (NOLOCK)
       ON mm.IdMixer = mh.IdMixer
-    WHERE mmap.NoProduksi = @no;
+    WHERE mmap.NoProduksi = @no
+    ORDER BY NoMixerPartial DESC;
 
     /* Reject partial → jenis reject */
     SELECT
@@ -280,7 +278,26 @@ async function fetchInputs(noProduksi) {
       ON rj.NoReject = rdet.NoReject
     LEFT JOIN dbo.MstReject mr WITH (NOLOCK)
       ON mr.IdReject = rj.IdReject
-    WHERE rmap.NoProduksi = @no;
+    WHERE rmap.NoProduksi = @no
+    ORDER BY NoRejectPartial DESC;
+
+    /* Broker partial → jenis plastik dari header broker */
+    SELECT
+      bmap.NoBrokerPartial,
+      bdet.NoBroker,
+      bdet.NoSak,
+      bdet.Berat,
+      bh.IdJenisPlastik AS IdJenis,
+      jp.Jenis          AS NamaJenis
+    FROM dbo.BrokerProduksiInputBrokerPartial bmap WITH (NOLOCK)
+    LEFT JOIN dbo.BrokerPartial bdet WITH (NOLOCK)
+      ON bdet.NoBrokerPartial = bmap.NoBrokerPartial
+    LEFT JOIN dbo.Broker_h bh WITH (NOLOCK)
+      ON bh.NoBroker = bdet.NoBroker
+    LEFT JOIN dbo.MstJenisPlastik jp WITH (NOLOCK)
+      ON jp.IdJenisPlastik = bh.IdJenisPlastik
+    WHERE bmap.NoProduksi = @no
+    ORDER BY NoBrokerPartial DESC; 
   `;
 
   const rs = await req.query(q);
@@ -290,13 +307,14 @@ async function fetchInputs(noProduksi) {
   const gilPart  = rs.recordsets?.[2] || [];
   const mixPart  = rs.recordsets?.[3] || [];
   const rejPart  = rs.recordsets?.[4] || [];
+  const brkPart  = rs.recordsets?.[5] || []; // ⬅️ TAMBAHKAN
 
   const out = {
     broker: [], bb: [], washing: [], crusher: [], gilingan: [], mixer: [], reject: [],
     summary: { broker:0, bb:0, washing:0, crusher:0, gilingan:0, mixer:0, reject:0 },
   };
 
-  // MAIN rows (pakai idJenis/namaJenis yang seragam)
+  // MAIN rows
   for (const r of mainRows) {
     const base = {
       berat: r.Berat ?? null,
@@ -331,7 +349,7 @@ async function fetchInputs(noProduksi) {
     }
   }
 
-  // PARTIAL rows (semua pakai idJenis/namaJenis)
+  // PARTIAL rows
   for (const p of bbPart) {
     out.bb.push({
       noBBPartial: p.NoBBPartial,
@@ -375,12 +393,23 @@ async function fetchInputs(noProduksi) {
     });
   }
 
+  // ⬇️ TAMBAHKAN - Broker Partial
+  for (const p of brkPart) {
+    out.broker.push({
+      noBrokerPartial: p.NoBrokerPartial,
+      noBroker:        p.NoBroker ?? null,
+      noSak:           p.NoSak ?? null,
+      berat:           p.Berat ?? null,
+      idJenis:         p.IdJenis ?? null,
+      namaJenis:       p.NamaJenis ?? null,
+    });
+  }
+
   // Summary
   for (const k of Object.keys(out.summary)) out.summary[k] = out[k].length;
 
   return out;
 }
-
 
 
 
@@ -789,18 +818,16 @@ async function validateLabel(labelCode) {
           d.NoBahanBaku,
           d.NoPallet,
           d.NoSak,
-          d.Berat,
-          d.BeratAct,
-          d.DateUsage,
-          d.IsPartial,
-          ph.IdJenisPlastik      AS idJenis,
-          jp.Jenis               AS namaJenis,
-          ISNULL(pa.PartialBerat, 0) AS PartialBerat,
-          SisaBerat = CASE
+                    Berat = CASE
                         WHEN ISNULL(NULLIF(d.BeratAct, 0), d.Berat) - ISNULL(pa.PartialBerat, 0) < 0
                           THEN 0
                         ELSE ISNULL(NULLIF(d.BeratAct, 0), d.Berat) - ISNULL(pa.PartialBerat, 0)
-                      END
+                      END,
+          d.DateUsage,
+          d.IsPartial,
+          ph.IdJenisPlastik      AS idJenis,
+          jp.Jenis               AS namaJenis
+
         FROM dbo.BahanBaku_d AS d WITH (NOLOCK)
         LEFT JOIN PartialAgg AS pa
           ON pa.NoBahanBaku = d.NoBahanBaku
@@ -863,24 +890,38 @@ async function validateLabel(labelCode) {
     case 'D.':
       tableName = 'Broker_d';
       query = `
+      ;WITH PartialSum AS (
         SELECT
-          d.NoBroker, d.NoSak,
-          berat     = CASE WHEN ISNULL(d.Berat,0) - ISNULL(pa.TotalPartial,0) < 0 THEN 0
-                              ELSE ISNULL(d.Berat,0) - ISNULL(pa.TotalPartial,0) END,
-          d.DateUsage, d.IsPartial,
-          h.IdJenisPlastik AS idJenis, jp.Jenis AS namaJenis
-        FROM dbo.Broker_d AS d WITH (NOLOCK)
-        OUTER APPLY (
-          SELECT SUM(ISNULL(bp.Berat,0)) AS TotalPartial
-          FROM dbo.BrokerPartial AS bp WITH (NOLOCK)
-          WHERE bp.NoBroker = d.NoBroker AND bp.NoSak = d.NoSak
-            AND bp.NoBroker = @labelCode
-        ) pa
-        LEFT JOIN dbo.Broker_h AS h WITH (NOLOCK)  ON h.NoBroker = d.NoBroker
-        LEFT JOIN dbo.MstJenisPlastik AS jp WITH (NOLOCK) ON jp.IdJenisPlastik = h.IdJenisPlastik
-        WHERE d.NoBroker = @labelCode
-          AND d.DateUsage IS NULL
-        ORDER BY d.NoBroker, d.NoSak;
+            bp.NoBroker,
+            bp.NoSak,
+            SUM(ISNULL(bp.Berat, 0)) AS BeratPartial
+        FROM dbo.BrokerPartial AS bp WITH (NOLOCK)
+        GROUP BY bp.NoBroker, bp.NoSak
+      )
+      SELECT
+          d.NoBroker                    AS noBroker,
+          d.NoSak                       AS noSak,
+          CAST(d.Berat - ISNULL(ps.BeratPartial, 0) AS DECIMAL(18,2)) AS berat,
+          d.DateUsage                   AS dateUsage,
+          CASE 
+            WHEN ISNULL(ps.BeratPartial, 0) > 0 
+              THEN CAST(1 AS bit) 
+            ELSE CAST(0 AS bit) 
+          END                           AS isPartial,
+          h.IdJenisPlastik              AS idJenis,
+          jp.Jenis                      AS namaJenis
+      FROM dbo.Broker_d AS d WITH (NOLOCK)
+      LEFT JOIN PartialSum AS ps
+        ON ps.NoBroker = d.NoBroker
+       AND ps.NoSak    = d.NoSak
+      LEFT JOIN dbo.Broker_h AS h WITH (NOLOCK)
+        ON h.NoBroker = d.NoBroker
+      LEFT JOIN dbo.MstJenisPlastik AS jp WITH (NOLOCK)
+        ON jp.IdJenisPlastik = h.IdJenisPlastik
+      WHERE d.NoBroker = @labelCode
+        AND d.DateUsage IS NULL
+        AND (d.Berat - ISNULL(ps.BeratPartial, 0)) > 0
+      ORDER BY d.NoBroker, d.NoSak;
       `;
       return await run(raw);
 
@@ -959,18 +1000,12 @@ async function validateLabel(labelCode) {
           g.IdGilingan      AS idJenis,
           mg.NamaGilingan   AS namaJenis,
           g.DateUsage,
-          g.Berat,
-          g.IsPartial,
-          g.IdWarehouse,
-          g.IdStatus,
-          g.Blok,
-          g.IdLokasi,
-          BeratBase       = g.Berat,
-          PartialTerpakai = ISNULL(pa.PartialBerat, 0),
-          SisaBerat       = CASE
+          Berat       = CASE
                               WHEN g.Berat - ISNULL(pa.PartialBerat, 0) < 0 THEN 0
                               ELSE g.Berat - ISNULL(pa.PartialBerat, 0)
-                            END
+                            END,
+          g.IsPartial
+
         FROM dbo.Gilingan AS g WITH (NOLOCK)
         LEFT JOIN PartialAgg AS pa
           ON pa.NoGilingan = g.NoGilingan
@@ -988,23 +1023,35 @@ async function validateLabel(labelCode) {
     case 'H.':
       tableName = 'Mixer_d';
       query = `
+      ;WITH PartialSum AS (
         SELECT
-          d.NoMixer,
-          d.NoSak,
-          d.Berat,
-          d.DateUsage,
-          d.IsPartial,
-          d.IdLokasi,
-          h.IdMixer     AS idJenis,
-          mm.Jenis      AS namaJenis
-        FROM dbo.Mixer_d AS d WITH (NOLOCK)
-        LEFT JOIN dbo.Mixer_h AS h WITH (NOLOCK)
-          ON h.NoMixer = d.NoMixer
-        LEFT JOIN dbo.MstMixer AS mm WITH (NOLOCK)
-          ON mm.IdMixer = h.IdMixer
-        WHERE d.NoMixer = @labelCode
-          AND d.DateUsage IS NULL
-        ORDER BY d.NoMixer, d.NoSak;
+            mp.NoMixer,
+            mp.NoSak,
+            SUM(ISNULL(mp.Berat, 0)) AS BeratPartial
+        FROM dbo.MixerPartial AS mp WITH (NOLOCK)
+        GROUP BY mp.NoMixer, mp.NoSak
+      )
+      SELECT
+          d.NoMixer                       AS noMixer,
+          d.NoSak                         AS noSak,
+          CAST(d.Berat - ISNULL(ps.BeratPartial, 0) AS DECIMAL(18,2)) AS berat,
+          d.DateUsage                     AS dateUsage,
+          CASE WHEN ISNULL(ps.BeratPartial, 0) > 0 THEN CAST(1 AS bit) ELSE CAST(0 AS bit) END AS isPartial,
+          d.IdLokasi                      AS idLokasi,
+          h.IdMixer                       AS idJenis,
+          mm.Jenis                        AS namaJenis
+      FROM dbo.Mixer_d AS d WITH (NOLOCK)
+      LEFT JOIN PartialSum AS ps
+        ON ps.NoMixer = d.NoMixer
+      AND ps.NoSak   = d.NoSak
+      LEFT JOIN dbo.Mixer_h AS h WITH (NOLOCK)
+        ON h.NoMixer = d.NoMixer
+      LEFT JOIN dbo.MstMixer AS mm WITH (NOLOCK)
+        ON mm.IdMixer = h.IdMixer
+      WHERE d.NoMixer = @labelCode
+        AND d.DateUsage IS NULL
+        AND (d.Berat - ISNULL(ps.BeratPartial, 0)) > 0
+      ORDER BY d.NoMixer, d.NoSak;
       `;
       return await run(raw);
 
@@ -1014,27 +1061,44 @@ async function validateLabel(labelCode) {
     case 'BF.':
       tableName = 'RejectV2';
       query = `
+      ;WITH PartialSum AS (
         SELECT
+            rp.NoReject,
+            SUM(ISNULL(rp.Berat, 0)) AS BeratPartial
+        FROM dbo.RejectV2Partial AS rp WITH (NOLOCK)
+        WHERE rp.NoReject = @labelCode
+        GROUP BY rp.NoReject
+      )
+      SELECT
           r.NoReject,
-          r.IdReject     AS idJenis,
-          mr.NamaReject  AS namaJenis,
+          r.IdReject       AS idJenis,
+          mr.NamaReject    AS namaJenis,
           r.DateCreate,
           r.DateUsage,
           r.IdWarehouse,
-          r.Berat,
+          CAST(r.Berat - ISNULL(ps.BeratPartial, 0) AS DECIMAL(18,2)) AS berat,
           r.Jam,
           r.CreateBy,
           r.DateTimeCreate,
           r.Blok,
-          r.IdLokasi
-        FROM dbo.RejectV2 AS r WITH (NOLOCK)
-        LEFT JOIN dbo.MstReject AS mr WITH (NOLOCK)
-          ON mr.IdReject = r.IdReject
-        WHERE r.NoReject = @labelCode
-          AND r.DateUsage IS NULL
-        ORDER BY r.NoReject;
+          r.IdLokasi,
+          CASE 
+            WHEN ISNULL(ps.BeratPartial, 0) > 0 
+              THEN CAST(1 AS bit) 
+            ELSE CAST(0 AS bit) 
+          END              AS isPartial
+      FROM dbo.RejectV2 AS r WITH (NOLOCK)
+      LEFT JOIN PartialSum AS ps
+        ON ps.NoReject = r.NoReject
+      LEFT JOIN dbo.MstReject AS mr WITH (NOLOCK)
+        ON mr.IdReject = r.IdReject
+      WHERE r.NoReject = @labelCode
+        AND r.DateUsage IS NULL
+        AND (r.Berat - ISNULL(ps.BeratPartial, 0)) > 0   -- hanya yang masih ada sisa berat
+      ORDER BY r.NoReject;
       `;
       return await run(raw);
+
 
     default:
       throw new Error(`Invalid prefix: ${prefix}. Valid prefixes: A., B., D., M., F., V., H., BF.`);
@@ -1146,6 +1210,7 @@ async function upsertInputsAndPartials(noProduksi, payload) {
  *   rejectPartialNew:   [{ noReject, berat }]
  * }
  */
+
 async function upsertInputsAndPartials(noProduksi, payload) {
   const pool = await poolPromise;
   const tx = new sql.Transaction(pool);
@@ -1162,6 +1227,7 @@ async function upsertInputsAndPartials(noProduksi, payload) {
     reject: norm(payload.reject),
 
     bbPartialNew: norm(payload.bbPartialNew),
+    brokerPartialNew: norm(payload.brokerPartialNew),
     gilinganPartialNew: norm(payload.gilinganPartialNew),
     mixerPartialNew: norm(payload.mixerPartialNew),
     rejectPartialNew: norm(payload.rejectPartialNew),
@@ -1173,6 +1239,7 @@ async function upsertInputsAndPartials(noProduksi, payload) {
     // 1) Create partials + map them to produksi
     const partials = await _insertPartialsWithTx(tx, noProduksi, {
       bbPartialNew: body.bbPartialNew,
+      brokerPartialNew: body.brokerPartialNew,
       gilinganPartialNew: body.gilinganPartialNew,
       mixerPartialNew: body.mixerPartialNew,
       rejectPartialNew: body.rejectPartialNew,
@@ -1208,9 +1275,7 @@ async function upsertInputsAndPartials(noProduksi, payload) {
         totalInserted,
         totalSkipped,
         totalInvalid,
-        totalPartialsCreated,
-        hasErrors: hasInvalid,
-        hasWarnings: totalSkipped > 0,
+        totalPartialsCreated
       },
       details: {
         inputs: _buildInputDetails(attachments, body),
@@ -1273,6 +1338,7 @@ function _buildPartialDetails(partials, requestBody) {
 
   const sections = [
     { key: 'bbPartialNew', label: 'Bahan Baku Partial' },
+    { key: 'brokerPartialNew', label: 'Broker Partial' },
     { key: 'gilinganPartialNew', label: 'Gilingan Partial' },
     { key: 'mixerPartialNew', label: 'Mixer Partial' },
     { key: 'rejectPartialNew', label: 'Reject Partial' },
@@ -1355,258 +1421,410 @@ async function _insertPartialsWithTx(tx, noProduksi, lists) {
   DECLARE @gilNew TABLE(NoGilinganPartial varchar(50));
   DECLARE @mixNew TABLE(NoMixerPartial varchar(50));
   DECLARE @rejNew TABLE(NoRejectPartial varchar(50));
+  DECLARE @broNew TABLE(NoBrokerPartial    varchar(50));  -- <<< baru
 
-  /* =========================
-     BB PARTIAL (P.##########)
-     ========================= */
-  IF EXISTS (SELECT 1 FROM OPENJSON(@jsPartials, '$.bbPartialNew'))
-  BEGIN
-    DECLARE @nextBB int = ISNULL((
-      SELECT MAX(TRY_CAST(RIGHT(NoBBPartial,10) AS int))
-      FROM dbo.BahanBakuPartial WITH (UPDLOCK, HOLDLOCK)
-      WHERE NoBBPartial LIKE 'P.%'
-    ), 0);
 
-    ;WITH src AS (
-      SELECT
-        noBahanBaku,
-        noPallet,
-        noSak,
-        berat,
-        ROW_NUMBER() OVER (ORDER BY (SELECT 1)) AS rn
-      FROM OPENJSON(@jsPartials, '$.bbPartialNew')
-      WITH (
-        noBahanBaku varchar(50) '$.noBahanBaku',
-        noPallet    int         '$.noPallet',
-        noSak       int         '$.noSak',
-        berat       decimal(18,3) '$.berat'
-      )
-    ),
-    numbered AS (
-      SELECT
-        NewNo = CONCAT('P.', RIGHT(REPLICATE('0',10) + CAST(@nextBB + rn AS varchar(10)), 10)),
-        noBahanBaku, noPallet, noSak, berat
-      FROM src
+ /* =========================
+   BB PARTIAL (P.##########)
+   ========================= */
+IF EXISTS (SELECT 1 FROM OPENJSON(@jsPartials, '$.bbPartialNew'))
+BEGIN
+  DECLARE @nextBB int = ISNULL((
+    SELECT MAX(TRY_CAST(RIGHT(NoBBPartial,10) AS int))
+    FROM dbo.BahanBakuPartial WITH (UPDLOCK, HOLDLOCK)
+    WHERE NoBBPartial LIKE 'P.%'
+  ), 0);
+
+  ;WITH src AS (
+    SELECT
+      noBahanBaku,
+      noPallet,
+      noSak,
+      berat,
+      ROW_NUMBER() OVER (ORDER BY (SELECT 1)) AS rn
+    FROM OPENJSON(@jsPartials, '$.bbPartialNew')
+    WITH (
+      noBahanBaku varchar(50) '$.noBahanBaku',
+      noPallet    int         '$.noPallet',
+      noSak       int         '$.noSak',
+      berat       decimal(18,3) '$.berat'
     )
-    INSERT INTO dbo.BahanBakuPartial (NoBBPartial, NoBahanBaku, NoPallet, NoSak, Berat)
-    OUTPUT INSERTED.NoBBPartial INTO @bbNew(NoBBPartial)
-    SELECT NewNo, noBahanBaku, noPallet, noSak, berat
-    FROM numbered;
+  ),
+  numbered AS (
+    SELECT
+      NewNo = CONCAT('P.', RIGHT(REPLICATE('0',10) + CAST(@nextBB + rn AS varchar(10)), 10)),
+      noBahanBaku, noPallet, noSak, berat
+    FROM src
+  )
+  INSERT INTO dbo.BahanBakuPartial (NoBBPartial, NoBahanBaku, NoPallet, NoSak, Berat)
+  OUTPUT INSERTED.NoBBPartial INTO @bbNew(NoBBPartial)
+  SELECT NewNo, noBahanBaku, noPallet, noSak, berat
+  FROM numbered;
 
-    -- Map to produksi
-    INSERT INTO dbo.BrokerProduksiInputBBPartial (NoProduksi, NoBBPartial)
-    SELECT @no, n.NoBBPartial
-    FROM @bbNew n;
+  -- Map to produksi
+  INSERT INTO dbo.BrokerProduksiInputBBPartial (NoProduksi, NoBBPartial)
+  SELECT @no, n.NoBBPartial
+  FROM @bbNew n;
 
-    -- Update BahanBaku_d: Set IsPartial=1, reduce BeratAct, set DateUsage if remaining=0
-    UPDATE bb
-    SET 
-      bb.IsPartial = 1,
-      bb.DateUsage = CASE 
-        WHEN (bb.BeratAct - src.berat) <= 0 THEN @tglProduksi 
-        ELSE bb.DateUsage 
-      END
-    FROM dbo.BahanBaku_d bb
-    INNER JOIN (
-      SELECT noBahanBaku, noPallet, noSak, berat
-      FROM OPENJSON(@jsPartials, '$.bbPartialNew')
-      WITH (
-        noBahanBaku varchar(50) '$.noBahanBaku',
-        noPallet    int         '$.noPallet',
-        noSak       int         '$.noSak',
-        berat       decimal(18,3) '$.berat'
-      )
-    ) src ON bb.NoBahanBaku = src.noBahanBaku 
-         AND bb.NoPallet = src.noPallet 
-         AND bb.NoSak = src.noSak;
-  END;
-
-  /* ==============================
-     GILINGAN PARTIAL (Y.##########)
-     ============================== */
-  IF EXISTS (SELECT 1 FROM OPENJSON(@jsPartials, '$.gilinganPartialNew'))
-  BEGIN
-    DECLARE @nextG int = ISNULL((
-      SELECT MAX(TRY_CAST(RIGHT(NoGilinganPartial,10) AS int))
-      FROM dbo.GilinganPartial WITH (UPDLOCK, HOLDLOCK)
-      WHERE NoGilinganPartial LIKE 'Y.%'
-    ), 0);
-
-    ;WITH src AS (
-      SELECT
-        noGilingan,
-        berat,
-        ROW_NUMBER() OVER (ORDER BY (SELECT 1)) AS rn
-      FROM OPENJSON(@jsPartials, '$.gilinganPartialNew')
-      WITH (
-        noGilingan varchar(50) '$.noGilingan',
-        berat      decimal(18,3) '$.berat'
-      )
-    ),
-    numbered AS (
-      SELECT
-        NewNo = CONCAT('Y.', RIGHT(REPLICATE('0',10) + CAST(@nextG + rn AS varchar(10)), 10)),
-        noGilingan, berat
-      FROM src
+  -- ⬇️ PERBAIKAN: Hitung total partial (existing + new) vs berat awal
+  ;WITH existingPartials AS (
+    SELECT 
+      bp.NoBahanBaku,
+      bp.NoPallet,
+      bp.NoSak,
+      SUM(ISNULL(bp.Berat, 0)) AS TotalBeratPartialExisting
+    FROM dbo.BahanBakuPartial bp WITH (NOLOCK)
+    WHERE bp.NoBBPartial NOT IN (SELECT NoBBPartial FROM @bbNew) -- exclude yang baru saja diinsert
+    GROUP BY bp.NoBahanBaku, bp.NoPallet, bp.NoSak
+  ),
+  newPartials AS (
+    SELECT 
+      noBahanBaku,
+      noPallet,
+      noSak,
+      SUM(berat) AS TotalBeratPartialNew
+    FROM OPENJSON(@jsPartials, '$.bbPartialNew')
+    WITH (
+      noBahanBaku varchar(50) '$.noBahanBaku',
+      noPallet    int         '$.noPallet',
+      noSak       int         '$.noSak',
+      berat       decimal(18,3) '$.berat'
     )
-    INSERT INTO dbo.GilinganPartial (NoGilinganPartial, NoGilingan, Berat)
-    OUTPUT INSERTED.NoGilinganPartial INTO @gilNew(NoGilinganPartial)
-    SELECT NewNo, noGilingan, berat
-    FROM numbered;
+    GROUP BY noBahanBaku, noPallet, noSak
+  )
+  UPDATE bb
+  SET 
+    bb.IsPartial = 1,
+    bb.DateUsage = CASE 
+      -- Jika (BeratAct - total existing partial - total new partial) <= 0, maka habis
+      WHEN (bb.BeratAct - ISNULL(ep.TotalBeratPartialExisting, 0) - ISNULL(np.TotalBeratPartialNew, 0)) <= 0 
+      THEN @tglProduksi 
+      ELSE bb.DateUsage 
+    END
+  FROM dbo.BahanBaku_d bb
+  LEFT JOIN existingPartials ep 
+    ON ep.NoBahanBaku = bb.NoBahanBaku 
+    AND ep.NoPallet = bb.NoPallet 
+    AND ep.NoSak = bb.NoSak
+  INNER JOIN newPartials np 
+    ON np.noBahanBaku = bb.NoBahanBaku 
+    AND np.noPallet = bb.NoPallet 
+    AND np.noSak = bb.NoSak;
+END;
 
-    INSERT INTO dbo.BrokerProduksiInputGilinganPartial (NoProduksi, NoGilinganPartial)
-    SELECT @no, n.NoGilinganPartial
-    FROM @gilNew n;
 
-    -- Update Gilingan: Set IsPartial=1, reduce Berat, set DateUsage if remaining=0
-    UPDATE g
-    SET 
-      g.IsPartial = 1,
-      g.DateUsage = CASE 
-        WHEN (g.Berat - src.berat) <= 0 THEN @tglProduksi 
-        ELSE g.DateUsage 
-      END
-    FROM dbo.Gilingan g
-    INNER JOIN (
-      SELECT noGilingan, berat
-      FROM OPENJSON(@jsPartials, '$.gilinganPartialNew')
-      WITH (
-        noGilingan varchar(50) '$.noGilingan',
-        berat      decimal(18,3) '$.berat'
-      )
-    ) src ON g.NoGilingan = src.noGilingan;
-  END;
+ /* ===========================
+   BROKER PARTIAL (Q.##########)
+   ============================ */
+IF EXISTS (SELECT 1 FROM OPENJSON(@jsPartials, '$.brokerPartialNew'))
+BEGIN
+  -- NOTE:
+  -- Ganti 'Q.' & 'Q.%' di bawah ini dengan prefix yang kamu inginkan
+  -- untuk NoBrokerPartial (misal 'V.' atau yang lain).
+  DECLARE @nextBr int = ISNULL((
+    SELECT MAX(TRY_CAST(RIGHT(NoBrokerPartial,10) AS int))
+    FROM dbo.BrokerPartial WITH (UPDLOCK, HOLDLOCK)
+    WHERE NoBrokerPartial LIKE 'Q.%'   -- <<< ganti prefix di sini kalau perlu
+  ), 0);
 
-  /* ==========================
-     MIXER PARTIAL (R.##########)
-     ========================== */
-  IF EXISTS (SELECT 1 FROM OPENJSON(@jsPartials, '$.mixerPartialNew'))
-  BEGIN
-    DECLARE @nextM int = ISNULL((
-      SELECT MAX(TRY_CAST(RIGHT(NoMixerPartial,10) AS int))
-      FROM dbo.MixerPartial WITH (UPDLOCK, HOLDLOCK)
-      WHERE NoMixerPartial LIKE 'R.%'
-    ), 0);
-
-    ;WITH src AS (
-      SELECT
-        noMixer,
-        noSak,
-        berat,
-        ROW_NUMBER() OVER (ORDER BY (SELECT 1)) AS rn
-      FROM OPENJSON(@jsPartials, '$.mixerPartialNew')
-      WITH (
-        noMixer varchar(50) '$.noMixer',
-        noSak   int         '$.noSak',
-        berat   decimal(18,3) '$.berat'
-      )
-    ),
-    numbered AS (
-      SELECT
-        NewNo = CONCAT('R.', RIGHT(REPLICATE('0',10) + CAST(@nextM + rn AS varchar(10)), 10)),
-        noMixer, noSak, berat
-      FROM src
+  ;WITH src AS (
+    SELECT
+      noBroker,
+      noSak,
+      berat,
+      ROW_NUMBER() OVER (ORDER BY (SELECT 1)) AS rn
+    FROM OPENJSON(@jsPartials, '$.brokerPartialNew')
+    WITH (
+      noBroker varchar(50) '$.noBroker',
+      noSak    int         '$.noSak',
+      berat    decimal(18,3) '$.berat'
     )
-    INSERT INTO dbo.MixerPartial (NoMixerPartial, NoMixer, NoSak, Berat)
-    OUTPUT INSERTED.NoMixerPartial INTO @mixNew(NoMixerPartial)
-    SELECT NewNo, noMixer, noSak, berat
-    FROM numbered;
+  ),
+  numbered AS (
+    SELECT
+      NewNo = CONCAT('Q.', RIGHT(REPLICATE('0',10) + CAST(@nextBr + rn AS varchar(10)), 10)), -- <<< prefix di sini juga
+      noBroker, noSak, berat
+    FROM src
+  )
+  INSERT INTO dbo.BrokerPartial (NoBrokerPartial, NoBroker, NoSak, Berat)
+  OUTPUT INSERTED.NoBrokerPartial INTO @broNew(NoBrokerPartial)
+  SELECT NewNo, noBroker, noSak, berat
+  FROM numbered;
 
-    -- Per spec: link produksi goes to BrokerProduksiInputMixer (not a *_Partial table)
-    INSERT INTO dbo.BrokerProduksiInputMixer (NoProduksi, NoMixer, NoSak)
-    SELECT @no, s.noMixer, s.noSak
+  -- Map ke produksi
+  INSERT INTO dbo.BrokerProduksiInputBrokerPartial (NoProduksi, NoBrokerPartial)
+  SELECT @no, n.NoBrokerPartial
+  FROM @broNew n;
+
+  -- Hitung total partial (existing + new) vs berat awal di Broker_d
+  ;WITH existingPartials AS (
+    SELECT 
+      bp.NoBroker,
+      bp.NoSak,
+      SUM(ISNULL(bp.Berat, 0)) AS TotalBeratPartialExisting
+    FROM dbo.BrokerPartial bp WITH (NOLOCK)
+    WHERE bp.NoBrokerPartial NOT IN (SELECT NoBrokerPartial FROM @broNew) -- exclude yang baru dibuat
+    GROUP BY bp.NoBroker, bp.NoSak
+  ),
+  newPartials AS (
+    SELECT 
+      noBroker,
+      noSak,
+      SUM(berat) AS TotalBeratPartialNew
+    FROM OPENJSON(@jsPartials, '$.brokerPartialNew')
+    WITH (
+      noBroker varchar(50) '$.noBroker',
+      noSak    int         '$.noSak',
+      berat    decimal(18,3) '$.berat'
+    )
+    GROUP BY noBroker, noSak
+  )
+  UPDATE d
+  SET
+    d.IsPartial = 1,
+    d.DateUsage = CASE 
+      -- Jika (Berat - total existing partial - total new partial) <= 0, maka dianggap habis
+      WHEN (d.Berat - ISNULL(ep.TotalBeratPartialExisting, 0) - ISNULL(np.TotalBeratPartialNew, 0)) <= 0 
+      THEN @tglProduksi 
+      ELSE d.DateUsage 
+    END
+  FROM dbo.Broker_d d
+  LEFT JOIN existingPartials ep 
+    ON ep.NoBroker = d.NoBroker AND ep.NoSak = d.NoSak
+  INNER JOIN newPartials np 
+    ON np.noBroker = d.NoBroker AND np.noSak = d.NoSak;
+END;
+
+
+ /* ==============================
+   GILINGAN PARTIAL (Y.##########)
+   ============================== */
+IF EXISTS (SELECT 1 FROM OPENJSON(@jsPartials, '$.gilinganPartialNew'))
+BEGIN
+  DECLARE @nextG int = ISNULL((
+    SELECT MAX(TRY_CAST(RIGHT(NoGilinganPartial,10) AS int))
+    FROM dbo.GilinganPartial WITH (UPDLOCK, HOLDLOCK)
+    WHERE NoGilinganPartial LIKE 'Y.%'
+  ), 0);
+
+  ;WITH src AS (
+    SELECT
+      noGilingan,
+      berat,
+      ROW_NUMBER() OVER (ORDER BY (SELECT 1)) AS rn
+    FROM OPENJSON(@jsPartials, '$.gilinganPartialNew')
+    WITH (
+      noGilingan varchar(50) '$.noGilingan',
+      berat      decimal(18,3) '$.berat'
+    )
+  ),
+  numbered AS (
+    SELECT
+      NewNo = CONCAT('Y.', RIGHT(REPLICATE('0',10) + CAST(@nextG + rn AS varchar(10)), 10)),
+      noGilingan, berat
+    FROM src
+  )
+  INSERT INTO dbo.GilinganPartial (NoGilinganPartial, NoGilingan, Berat)
+  OUTPUT INSERTED.NoGilinganPartial INTO @gilNew(NoGilinganPartial)
+  SELECT NewNo, noGilingan, berat
+  FROM numbered;
+
+  INSERT INTO dbo.BrokerProduksiInputGilinganPartial (NoProduksi, NoGilinganPartial)
+  SELECT @no, n.NoGilinganPartial
+  FROM @gilNew n;
+
+  -- ⬇️ PERBAIKAN: Hitung total partial (existing + new) vs berat awal
+  ;WITH existingPartials AS (
+    SELECT 
+      gp.NoGilingan,
+      SUM(ISNULL(gp.Berat, 0)) AS TotalBeratPartialExisting
+    FROM dbo.GilinganPartial gp WITH (NOLOCK)
+    WHERE gp.NoGilinganPartial NOT IN (SELECT NoGilinganPartial FROM @gilNew)
+    GROUP BY gp.NoGilingan
+  ),
+  newPartials AS (
+    SELECT 
+      noGilingan,
+      SUM(berat) AS TotalBeratPartialNew
+    FROM OPENJSON(@jsPartials, '$.gilinganPartialNew')
+    WITH (
+      noGilingan varchar(50) '$.noGilingan',
+      berat      decimal(18,3) '$.berat'
+    )
+    GROUP BY noGilingan
+  )
+  UPDATE g
+  SET 
+    g.IsPartial = 1,
+    g.DateUsage = CASE 
+      -- Jika (Berat - total existing partial - total new partial) <= 0, maka habis
+      WHEN (g.Berat - ISNULL(ep.TotalBeratPartialExisting, 0) - ISNULL(np.TotalBeratPartialNew, 0)) <= 0 
+      THEN @tglProduksi 
+      ELSE g.DateUsage 
+    END
+  FROM dbo.Gilingan g
+  LEFT JOIN existingPartials ep ON ep.NoGilingan = g.NoGilingan
+  INNER JOIN newPartials np ON np.noGilingan = g.NoGilingan;
+END;
+
+ /* ==========================
+   MIXER PARTIAL (T.##########)
+   ========================== */
+IF EXISTS (SELECT 1 FROM OPENJSON(@jsPartials, '$.mixerPartialNew'))
+BEGIN
+  DECLARE @nextM int = ISNULL((
+    SELECT MAX(TRY_CAST(RIGHT(NoMixerPartial,10) AS int))
+    FROM dbo.MixerPartial WITH (UPDLOCK, HOLDLOCK)
+    WHERE NoMixerPartial LIKE 'T.%'
+  ), 0);
+
+  ;WITH src AS (
+    SELECT
+      noMixer,
+      noSak,
+      berat,
+      ROW_NUMBER() OVER (ORDER BY (SELECT 1)) AS rn
     FROM OPENJSON(@jsPartials, '$.mixerPartialNew')
     WITH (
       noMixer varchar(50) '$.noMixer',
       noSak   int         '$.noSak',
       berat   decimal(18,3) '$.berat'
-    ) s
-    WHERE NOT EXISTS (
-      SELECT 1 FROM dbo.BrokerProduksiInputMixer x
-      WHERE x.NoProduksi=@no AND x.NoMixer=s.noMixer AND x.NoSak=s.noSak
-    );
-
-    -- Update Mixer_d: Set IsPartial=1, reduce Berat, set DateUsage if remaining=0
-    UPDATE m
-    SET 
-      m.IsPartial = 1,
-      m.DateUsage = CASE 
-        WHEN (m.Berat - src.berat) <= 0 THEN @tglProduksi 
-        ELSE m.DateUsage 
-      END
-    FROM dbo.Mixer_d m
-    INNER JOIN (
-      SELECT noMixer, noSak, berat
-      FROM OPENJSON(@jsPartials, '$.mixerPartialNew')
-      WITH (
-        noMixer varchar(50) '$.noMixer',
-        noSak   int         '$.noSak',
-        berat   decimal(18,3) '$.berat'
-      )
-    ) src ON m.NoMixer = src.noMixer AND m.NoSak = src.noSak;
-  END;
-
-  /* ===============================
-     REJECT PARTIAL (BK.##########)
-     =============================== */
-  IF EXISTS (SELECT 1 FROM OPENJSON(@jsPartials, '$.rejectPartialNew'))
-  BEGIN
-    DECLARE @nextRj int = ISNULL((
-      SELECT MAX(TRY_CAST(RIGHT(NoRejectPartial,10) AS int))
-      FROM dbo.RejectV2Partial WITH (UPDLOCK, HOLDLOCK)
-      WHERE NoRejectPartial LIKE 'BK.%'
-    ), 0);
-
-    ;WITH src AS (
-      SELECT
-        noReject,
-        berat,
-        ROW_NUMBER() OVER (ORDER BY (SELECT 1)) AS rn
-      FROM OPENJSON(@jsPartials, '$.rejectPartialNew')
-      WITH (
-        noReject varchar(50) '$.noReject',
-        berat    decimal(18,3) '$.berat'
-      )
-    ),
-    numbered AS (
-      SELECT
-        NewNo = CONCAT('BK.', RIGHT(REPLICATE('0',10) + CAST(@nextRj + rn AS varchar(10)), 10)),
-        noReject, berat
-      FROM src
     )
-    INSERT INTO dbo.RejectV2Partial (NoRejectPartial, NoReject, Berat)
-    OUTPUT INSERTED.NoRejectPartial INTO @rejNew(NoRejectPartial)
-    SELECT NewNo, noReject, berat
-    FROM numbered;
+  ),
+  numbered AS (
+    SELECT
+      NewNo = CONCAT('T.', RIGHT(REPLICATE('0',10) + CAST(@nextM + rn AS varchar(10)), 10)),
+      noMixer, noSak, berat
+    FROM src
+  )
+  INSERT INTO dbo.MixerPartial (NoMixerPartial, NoMixer, NoSak, Berat)
+  OUTPUT INSERTED.NoMixerPartial INTO @mixNew(NoMixerPartial)
+  SELECT NewNo, noMixer, noSak, berat
+  FROM numbered;
 
-    INSERT INTO dbo.BrokerProduksiInputRejectPartial (NoProduksi, NoRejectPartial)
-    SELECT @no, n.NoRejectPartial
-    FROM @rejNew n;
+  INSERT INTO dbo.BrokerProduksiInputMixerPartial (NoProduksi, NoMixerPartial)
+  SELECT @no, n.NoMixerPartial
+  FROM @mixNew n;
 
-    -- Update RejectV2: reduce Berat, set DateUsage if remaining=0
-    -- Note: RejectV2 doesn't have IsPartial column based on the schema you provided
-    UPDATE r
-    SET 
-      r.DateUsage = CASE 
-        WHEN (r.Berat - src.berat) <= 0 THEN @tglProduksi 
-        ELSE r.DateUsage 
-      END
-    FROM dbo.RejectV2 r
-    INNER JOIN (
-      SELECT noReject, berat
-      FROM OPENJSON(@jsPartials, '$.rejectPartialNew')
-      WITH (
-        noReject varchar(50) '$.noReject',
-        berat    decimal(18,3) '$.berat'
-      )
-    ) src ON r.NoReject = src.noReject;
-  END;
+  -- ⬇️ PERBAIKAN: Hitung total partial (existing + new) vs berat awal
+  ;WITH existingPartials AS (
+    SELECT 
+      mp.NoMixer, 
+      mp.NoSak, 
+      SUM(ISNULL(mp.Berat, 0)) AS TotalBeratPartialExisting
+    FROM dbo.MixerPartial mp WITH (NOLOCK)
+    WHERE mp.NoMixerPartial NOT IN (SELECT NoMixerPartial FROM @mixNew)
+    GROUP BY mp.NoMixer, mp.NoSak
+  ),
+  newPartials AS (
+    SELECT 
+      noMixer, 
+      noSak, 
+      SUM(berat) AS TotalBeratPartialNew
+    FROM OPENJSON(@jsPartials, '$.mixerPartialNew')
+    WITH (
+      noMixer varchar(50) '$.noMixer',
+      noSak   int         '$.noSak',
+      berat   decimal(18,3) '$.berat'
+    )
+    GROUP BY noMixer, noSak
+  )
+  UPDATE d
+  SET
+    d.IsPartial = 1,
+    d.DateUsage = CASE 
+      -- Jika (Berat - total existing partial - total new partial) <= 0, maka habis
+      WHEN (d.Berat - ISNULL(ep.TotalBeratPartialExisting, 0) - ISNULL(np.TotalBeratPartialNew, 0)) <= 0 
+      THEN @tglProduksi 
+      ELSE d.DateUsage 
+    END
+  FROM dbo.Mixer_d d
+  LEFT JOIN existingPartials ep 
+    ON ep.NoMixer = d.NoMixer AND ep.NoSak = d.NoSak
+  INNER JOIN newPartials np 
+    ON np.noMixer = d.NoMixer AND np.noSak = d.NoSak;
+END;
+
+ /* ===============================
+   REJECT PARTIAL (BK.##########)
+   =============================== */
+IF EXISTS (SELECT 1 FROM OPENJSON(@jsPartials, '$.rejectPartialNew'))
+BEGIN
+  DECLARE @nextRj int = ISNULL((
+    SELECT MAX(TRY_CAST(RIGHT(NoRejectPartial,10) AS int))
+    FROM dbo.RejectV2Partial WITH (UPDLOCK, HOLDLOCK)
+    WHERE NoRejectPartial LIKE 'BK.%'
+  ), 0);
+
+  ;WITH src AS (
+    SELECT
+      noReject,
+      berat,
+      ROW_NUMBER() OVER (ORDER BY (SELECT 1)) AS rn
+    FROM OPENJSON(@jsPartials, '$.rejectPartialNew')
+    WITH (
+      noReject varchar(50) '$.noReject',
+      berat    decimal(18,3) '$.berat'
+    )
+  ),
+  numbered AS (
+    SELECT
+      NewNo = CONCAT('BK.', RIGHT(REPLICATE('0',10) + CAST(@nextRj + rn AS varchar(10)), 10)),
+      noReject, berat
+    FROM src
+  )
+  INSERT INTO dbo.RejectV2Partial (NoRejectPartial, NoReject, Berat)
+  OUTPUT INSERTED.NoRejectPartial INTO @rejNew(NoRejectPartial)
+  SELECT NewNo, noReject, berat
+  FROM numbered;
+
+  INSERT INTO dbo.BrokerProduksiInputRejectPartial (NoProduksi, NoRejectPartial)
+  SELECT @no, n.NoRejectPartial
+  FROM @rejNew n;
+
+  -- ⬇️ PERBAIKAN: Hitung total partial (existing + new) vs berat awal
+  ;WITH existingPartials AS (
+    SELECT 
+      rp.NoReject,
+      SUM(ISNULL(rp.Berat, 0)) AS TotalBeratPartialExisting
+    FROM dbo.RejectV2Partial rp WITH (NOLOCK)
+    WHERE rp.NoRejectPartial NOT IN (SELECT NoRejectPartial FROM @rejNew)
+    GROUP BY rp.NoReject
+  ),
+  newPartials AS (
+    SELECT 
+      noReject,
+      SUM(berat) AS TotalBeratPartialNew
+    FROM OPENJSON(@jsPartials, '$.rejectPartialNew')
+    WITH (
+      noReject varchar(50) '$.noReject',
+      berat    decimal(18,3) '$.berat'
+    )
+    GROUP BY noReject
+  )
+  UPDATE r
+  SET 
+    r.IsPartial = 1,
+    r.DateUsage = CASE 
+      -- Jika (Berat - total existing partial - total new partial) <= 0, maka habis
+      WHEN (r.Berat - ISNULL(ep.TotalBeratPartialExisting, 0) - ISNULL(np.TotalBeratPartialNew, 0)) <= 0 
+      THEN @tglProduksi 
+      ELSE r.DateUsage 
+    END
+  FROM dbo.RejectV2 r
+  LEFT JOIN existingPartials ep ON ep.NoReject = r.NoReject
+  INNER JOIN newPartials np ON np.noReject = r.NoReject;
+  
+  -- Note: RejectV2 tidak punya kolom IsPartial
+END;
 
   -- Release the applock
   EXEC sp_releaseapplock @Resource = 'SEQ_PARTIALS', @DbPrincipal = 'public';
 
   -- Summaries
   SELECT 'bbPartialNew'       AS Section, COUNT(*) AS Created FROM @bbNew
+  UNION ALL
+  SELECT 'brokerPartialNew'   AS Section, COUNT(*) FROM @broNew
   UNION ALL
   SELECT 'gilinganPartialNew' AS Section, COUNT(*) FROM @gilNew
   UNION ALL
@@ -1615,10 +1833,11 @@ async function _insertPartialsWithTx(tx, noProduksi, lists) {
   SELECT 'rejectPartialNew'   AS Section, COUNT(*) FROM @rejNew;
 
   -- Return generated codes as separate recordsets (for UI)
-  SELECT NoBBPartial        FROM @bbNew;
-  SELECT NoGilinganPartial  FROM @gilNew;
-  SELECT NoMixerPartial     FROM @mixNew;
-  SELECT NoRejectPartial    FROM @rejNew;
+  SELECT NoBBPartial        FROM @bbNew;        -- recordsets[1]
+  SELECT NoBrokerPartial    FROM @broNew;       -- recordsets[2]
+  SELECT NoGilinganPartial  FROM @gilNew;       -- recordsets[3]
+  SELECT NoMixerPartial     FROM @mixNew;       -- recordsets[4]
+  SELECT NoRejectPartial    FROM @rejNew;       -- recordsets[5]
   `;
 
   const rs = await req.query(SQL_PARTIALS);
@@ -1629,13 +1848,15 @@ async function _insertPartialsWithTx(tx, noProduksi, lists) {
     summary[row.Section] = { created: row.Created };
   }
 
-  // Recordsets[1..4]: codes
+  // Recordsets[1..5]: codes
   const createdLists = {
-    bbPartialNew: (rs.recordsets?.[1] || []).map((r) => r.NoBBPartial),
-    gilinganPartialNew: (rs.recordsets?.[2] || []).map((r) => r.NoGilinganPartial),
-    mixerPartialNew: (rs.recordsets?.[3] || []).map((r) => r.NoMixerPartial),
-    rejectPartialNew: (rs.recordsets?.[4] || []).map((r) => r.NoRejectPartial),
+    bbPartialNew:       (rs.recordsets?.[1] || []).map((r) => r.NoBBPartial),
+    brokerPartialNew:   (rs.recordsets?.[2] || []).map((r) => r.NoBrokerPartial),
+    gilinganPartialNew: (rs.recordsets?.[3] || []).map((r) => r.NoGilinganPartial),
+    mixerPartialNew:    (rs.recordsets?.[4] || []).map((r) => r.NoMixerPartial),
+    rejectPartialNew:   (rs.recordsets?.[5] || []).map((r) => r.NoRejectPartial),
   };
+
 
   return { summary, createdLists };
 }
@@ -2028,4 +2249,859 @@ async function _insertInputsWithTx(tx, noProduksi, lists) {
   return out;
 }
 
-module.exports = { getAllProduksi, getProduksiByDate, fetchInputs, createBrokerProduksi, updateBrokerProduksi, deleteBrokerProduksi, validateLabel, upsertInputsAndPartials };
+
+
+
+
+async function deleteInputsAndPartials(noProduksi, payload) {
+  const pool = await poolPromise;
+  const tx = new sql.Transaction(pool);
+
+  const norm = (a) => (Array.isArray(a) ? a : []);
+
+  const body = {
+    broker: norm(payload.broker),
+    bb: norm(payload.bb),
+    washing: norm(payload.washing),
+    crusher: norm(payload.crusher),
+    gilingan: norm(payload.gilingan),
+    mixer: norm(payload.mixer),
+    reject: norm(payload.reject),
+
+    bbPartial: norm(payload.bbPartial),
+    brokerPartial: norm(payload.brokerPartial),
+    gilinganPartial: norm(payload.gilinganPartial),
+    mixerPartial: norm(payload.mixerPartial),
+    rejectPartial: norm(payload.rejectPartial),
+  };
+
+  try {
+    await tx.begin();
+
+    // 1) Delete partials mappings
+    const partialsResult = await _deletePartialsWithTx(tx, noProduksi, {
+      bbPartial: body.bbPartial,
+      brokerPartial: body.brokerPartial,
+      gilinganPartial: body.gilinganPartial,
+      mixerPartial: body.mixerPartial,
+      rejectPartial: body.rejectPartial,
+    });
+
+    // 2) Delete inputs mappings
+    const inputsResult = await _deleteInputsWithTx(tx, noProduksi, {
+      broker: body.broker,
+      bb: body.bb,
+      washing: body.washing,
+      crusher: body.crusher,
+      gilingan: body.gilingan,
+      mixer: body.mixer,
+      reject: body.reject,
+    });
+
+    await tx.commit();
+
+    // Calculate totals
+    const totalDeleted = Object.values(inputsResult).reduce((sum, item) => sum + (item.deleted || 0), 0);
+    const totalNotFound = Object.values(inputsResult).reduce((sum, item) => sum + (item.notFound || 0), 0);
+    const totalPartialsDeleted = Object.values(partialsResult.summary).reduce((sum, item) => sum + (item.deleted || 0), 0);
+    const totalPartialsNotFound = Object.values(partialsResult.summary).reduce((sum, item) => sum + (item.notFound || 0), 0);
+
+    const hasNotFound = totalNotFound > 0 || totalPartialsNotFound > 0;
+    const hasNoSuccess = totalDeleted === 0 && totalPartialsDeleted === 0;
+
+    const response = {
+      noProduksi,
+      summary: {
+        totalDeleted,
+        totalNotFound,
+        totalPartialsDeleted,
+        totalPartialsNotFound
+      },
+      details: {
+        inputs: _buildDeleteInputDetails(inputsResult, body),
+        partials: _buildDeletePartialDetails(partialsResult, body),
+      },
+    };
+
+    return {
+      success: !hasNoSuccess,
+      hasWarnings: hasNotFound,
+      data: response,
+    };
+  } catch (err) {
+    try {
+      await tx.rollback();
+    } catch {}
+    throw err;
+  }
+}
+
+// Helper to build delete input details
+function _buildDeleteInputDetails(results, requestBody) {
+  const details = [];
+  const sections = [
+    { key: 'broker', label: 'Broker' },
+    { key: 'bb', label: 'Bahan Baku' },
+    { key: 'washing', label: 'Washing' },
+    { key: 'crusher', label: 'Crusher' },
+    { key: 'gilingan', label: 'Gilingan' },
+    { key: 'mixer', label: 'Mixer' },
+    { key: 'reject', label: 'Reject' },
+  ];
+
+  for (const section of sections) {
+    const requestedCount = requestBody[section.key]?.length || 0;
+    if (requestedCount === 0) continue;
+
+    const result = results[section.key] || { deleted: 0, notFound: 0 };
+
+    details.push({
+      section: section.key,
+      label: section.label,
+      requested: requestedCount,
+      deleted: result.deleted,
+      notFound: result.notFound,
+      status: result.notFound > 0 ? 'warning' : 'success',
+      message: `${section.label}: ${result.deleted} berhasil dihapus${result.notFound > 0 ? `, ${result.notFound} tidak ditemukan` : ''}`,
+    });
+  }
+
+  return details;
+}
+
+// Helper to build delete partial details
+function _buildDeletePartialDetails(partialsResult, requestBody) {
+  const details = [];
+  const sections = [
+    { key: 'bbPartial', label: 'Bahan Baku Partial' },
+    { key: 'brokerPartial', label: 'Broker Partial' },
+    { key: 'gilinganPartial', label: 'Gilingan Partial' },
+    { key: 'mixerPartial', label: 'Mixer Partial' },
+    { key: 'rejectPartial', label: 'Reject Partial' },
+  ];
+
+  for (const section of sections) {
+    const requestedCount = requestBody[section.key]?.length || 0;
+    if (requestedCount === 0) continue;
+
+    const result = partialsResult.summary[section.key] || { deleted: 0, notFound: 0 };
+
+    details.push({
+      section: section.key,
+      label: section.label,
+      requested: requestedCount,
+      deleted: result.deleted,
+      notFound: result.notFound,
+      status: result.notFound > 0 ? 'warning' : 'success',
+      message: `${section.label}: ${result.deleted} berhasil dihapus${result.notFound > 0 ? `, ${result.notFound} tidak ditemukan` : ''}`,
+    });
+  }
+
+  return details;
+}
+
+// Delete partials with transaction
+async function _deletePartialsWithTx(tx, noProduksi, lists) {
+  const req = new sql.Request(tx);
+  req.input('no', sql.VarChar(50), noProduksi);
+  req.input('jsPartials', sql.NVarChar(sql.MAX), JSON.stringify(lists));
+
+  const SQL_DELETE_PARTIALS = `
+  SET NOCOUNT ON;
+
+  DECLARE @out TABLE(Section sysname, Deleted int, NotFound int);
+
+  -- BROKER PARTIAL
+  DECLARE @brokerDeleted int = 0, @brokerNotFound int = 0;
+  
+  SELECT @brokerDeleted = COUNT(*)
+  FROM dbo.BrokerProduksiInputBrokerPartial map
+  INNER JOIN OPENJSON(@jsPartials, '$.brokerPartial') 
+  WITH (noBrokerPartial varchar(50) '$.noBrokerPartial') j
+  ON map.NoBrokerPartial = j.noBrokerPartial
+  WHERE map.NoProduksi = @no;
+  
+  DECLARE @deletedBrokerPartials TABLE (
+    NoBroker varchar(50),
+    NoSak int
+  );
+  
+  INSERT INTO @deletedBrokerPartials (NoBroker, NoSak)
+  SELECT DISTINCT bp.NoBroker, bp.NoSak
+  FROM dbo.BrokerPartial bp
+  INNER JOIN dbo.BrokerProduksiInputBrokerPartial map ON bp.NoBrokerPartial = map.NoBrokerPartial
+  INNER JOIN OPENJSON(@jsPartials, '$.brokerPartial') 
+  WITH (noBrokerPartial varchar(50) '$.noBrokerPartial') j
+  ON map.NoBrokerPartial = j.noBrokerPartial
+  WHERE map.NoProduksi = @no;
+  
+  DELETE map
+  FROM dbo.BrokerProduksiInputBrokerPartial map
+  INNER JOIN OPENJSON(@jsPartials, '$.brokerPartial') 
+  WITH (noBrokerPartial varchar(50) '$.noBrokerPartial') j
+  ON map.NoBrokerPartial = j.noBrokerPartial
+  WHERE map.NoProduksi = @no;
+  
+  DELETE bp
+  FROM dbo.BrokerPartial bp
+  INNER JOIN OPENJSON(@jsPartials, '$.brokerPartial') 
+  WITH (noBrokerPartial varchar(50) '$.noBrokerPartial') j
+  ON bp.NoBrokerPartial = j.noBrokerPartial;
+  
+  IF @brokerDeleted > 0
+  BEGIN
+    UPDATE d
+    SET 
+      d.DateUsage = NULL,
+      d.IsPartial = 1
+    FROM dbo.Broker_d d
+    INNER JOIN @deletedBrokerPartials del ON d.NoBroker = del.NoBroker AND d.NoSak = del.NoSak
+    WHERE EXISTS (
+      SELECT 1 
+      FROM dbo.BrokerPartial bp 
+      WHERE bp.NoBroker = d.NoBroker AND bp.NoSak = d.NoSak
+    );
+    
+    UPDATE d
+    SET 
+      d.DateUsage = NULL,
+      d.IsPartial = 0
+    FROM dbo.Broker_d d
+    INNER JOIN @deletedBrokerPartials del ON d.NoBroker = del.NoBroker AND d.NoSak = del.NoSak
+    WHERE NOT EXISTS (
+      SELECT 1 
+      FROM dbo.BrokerPartial bp 
+      WHERE bp.NoBroker = d.NoBroker AND bp.NoSak = d.NoSak
+    );
+  END;
+  
+  DECLARE @brokerRequested int;
+  SELECT @brokerRequested = COUNT(*)
+  FROM OPENJSON(@jsPartials, '$.brokerPartial');
+  
+  SET @brokerNotFound = @brokerRequested - @brokerDeleted;
+  
+  INSERT INTO @out SELECT 'brokerPartial', @brokerDeleted, @brokerNotFound;
+
+  -- BB PARTIAL
+  DECLARE @bbDeleted int = 0, @bbNotFound int = 0;
+  
+  SELECT @bbDeleted = COUNT(*)
+  FROM dbo.BrokerProduksiInputBBPartial map
+  INNER JOIN OPENJSON(@jsPartials, '$.bbPartial') 
+  WITH (noBBPartial varchar(50) '$.noBBPartial') j
+  ON map.NoBBPartial = j.noBBPartial
+  WHERE map.NoProduksi = @no;
+  
+  DECLARE @deletedBBPartials TABLE (
+    NoBahanBaku varchar(50),
+    NoPallet int,
+    NoSak int
+  );
+  
+  INSERT INTO @deletedBBPartials (NoBahanBaku, NoPallet, NoSak)
+  SELECT DISTINCT bp.NoBahanBaku, bp.NoPallet, bp.NoSak
+  FROM dbo.BahanBakuPartial bp
+  INNER JOIN dbo.BrokerProduksiInputBBPartial map ON bp.NoBBPartial = map.NoBBPartial
+  INNER JOIN OPENJSON(@jsPartials, '$.bbPartial') 
+  WITH (noBBPartial varchar(50) '$.noBBPartial') j
+  ON map.NoBBPartial = j.noBBPartial
+  WHERE map.NoProduksi = @no;
+  
+  DELETE map
+  FROM dbo.BrokerProduksiInputBBPartial map
+  INNER JOIN OPENJSON(@jsPartials, '$.bbPartial') 
+  WITH (noBBPartial varchar(50) '$.noBBPartial') j
+  ON map.NoBBPartial = j.noBBPartial
+  WHERE map.NoProduksi = @no;
+  
+  DELETE bp
+  FROM dbo.BahanBakuPartial bp
+  INNER JOIN OPENJSON(@jsPartials, '$.bbPartial') 
+  WITH (noBBPartial varchar(50) '$.noBBPartial') j
+  ON bp.NoBBPartial = j.noBBPartial;
+  
+  IF @bbDeleted > 0
+  BEGIN
+    UPDATE d
+    SET 
+      d.DateUsage = NULL,
+      d.IsPartial = 1
+    FROM dbo.BahanBaku_d d
+    INNER JOIN @deletedBBPartials del 
+      ON d.NoBahanBaku = del.NoBahanBaku 
+      AND d.NoPallet = del.NoPallet 
+      AND d.NoSak = del.NoSak
+    WHERE EXISTS (
+      SELECT 1 
+      FROM dbo.BahanBakuPartial bp 
+      WHERE bp.NoBahanBaku = d.NoBahanBaku 
+        AND bp.NoPallet = d.NoPallet 
+        AND bp.NoSak = d.NoSak
+    );
+    
+    UPDATE d
+    SET 
+      d.DateUsage = NULL,
+      d.IsPartial = 0
+    FROM dbo.BahanBaku_d d
+    INNER JOIN @deletedBBPartials del 
+      ON d.NoBahanBaku = del.NoBahanBaku 
+      AND d.NoPallet = del.NoPallet 
+      AND d.NoSak = del.NoSak
+    WHERE NOT EXISTS (
+      SELECT 1 
+      FROM dbo.BahanBakuPartial bp 
+      WHERE bp.NoBahanBaku = d.NoBahanBaku 
+        AND bp.NoPallet = d.NoPallet 
+        AND bp.NoSak = d.NoSak
+    );
+  END;
+  
+  DECLARE @bbRequested int;
+  SELECT @bbRequested = COUNT(*)
+  FROM OPENJSON(@jsPartials, '$.bbPartial');
+  
+  SET @bbNotFound = @bbRequested - @bbDeleted;
+  
+  INSERT INTO @out SELECT 'bbPartial', @bbDeleted, @bbNotFound;
+
+  -- GILINGAN PARTIAL
+  DECLARE @gilinganDeleted int = 0, @gilinganNotFound int = 0;
+  
+  SELECT @gilinganDeleted = COUNT(*)
+  FROM dbo.BrokerProduksiInputGilinganPartial map
+  INNER JOIN OPENJSON(@jsPartials, '$.gilinganPartial') 
+  WITH (noGilinganPartial varchar(50) '$.noGilinganPartial') j
+  ON map.NoGilinganPartial = j.noGilinganPartial
+  WHERE map.NoProduksi = @no;
+  
+  DECLARE @deletedGilinganPartials TABLE (
+    NoGilingan varchar(50)
+  );
+  
+  INSERT INTO @deletedGilinganPartials (NoGilingan)
+  SELECT DISTINCT gp.NoGilingan
+  FROM dbo.GilinganPartial gp
+  INNER JOIN dbo.BrokerProduksiInputGilinganPartial map ON gp.NoGilinganPartial = map.NoGilinganPartial
+  INNER JOIN OPENJSON(@jsPartials, '$.gilinganPartial') 
+  WITH (noGilinganPartial varchar(50) '$.noGilinganPartial') j
+  ON map.NoGilinganPartial = j.noGilinganPartial
+  WHERE map.NoProduksi = @no;
+  
+  DELETE map
+  FROM dbo.BrokerProduksiInputGilinganPartial map
+  INNER JOIN OPENJSON(@jsPartials, '$.gilinganPartial') 
+  WITH (noGilinganPartial varchar(50) '$.noGilinganPartial') j
+  ON map.NoGilinganPartial = j.noGilinganPartial
+  WHERE map.NoProduksi = @no;
+  
+  DELETE gp
+  FROM dbo.GilinganPartial gp
+  INNER JOIN OPENJSON(@jsPartials, '$.gilinganPartial') 
+  WITH (noGilinganPartial varchar(50) '$.noGilinganPartial') j
+  ON gp.NoGilinganPartial = j.noGilinganPartial;
+  
+  IF @gilinganDeleted > 0
+  BEGIN
+    UPDATE g
+    SET 
+      g.DateUsage = NULL,
+      g.IsPartial = 1
+    FROM dbo.Gilingan g
+    INNER JOIN @deletedGilinganPartials del ON g.NoGilingan = del.NoGilingan
+    WHERE EXISTS (
+      SELECT 1 
+      FROM dbo.GilinganPartial gp 
+      WHERE gp.NoGilingan = g.NoGilingan
+    );
+    
+    UPDATE g
+    SET 
+      g.DateUsage = NULL,
+      g.IsPartial = 0
+    FROM dbo.Gilingan g
+    INNER JOIN @deletedGilinganPartials del ON g.NoGilingan = del.NoGilingan
+    WHERE NOT EXISTS (
+      SELECT 1 
+      FROM dbo.GilinganPartial gp 
+      WHERE gp.NoGilingan = g.NoGilingan
+    );
+  END;
+  
+  DECLARE @gilinganRequested int;
+  SELECT @gilinganRequested = COUNT(*)
+  FROM OPENJSON(@jsPartials, '$.gilinganPartial');
+  
+  SET @gilinganNotFound = @gilinganRequested - @gilinganDeleted;
+  
+  INSERT INTO @out SELECT 'gilinganPartial', @gilinganDeleted, @gilinganNotFound;
+
+  -- MIXER PARTIAL
+  DECLARE @mixerDeleted int = 0, @mixerNotFound int = 0;
+  
+  SELECT @mixerDeleted = COUNT(*)
+  FROM dbo.BrokerProduksiInputMixerPartial map
+  INNER JOIN OPENJSON(@jsPartials, '$.mixerPartial') 
+  WITH (noMixerPartial varchar(50) '$.noMixerPartial') j
+  ON map.NoMixerPartial = j.noMixerPartial
+  WHERE map.NoProduksi = @no;
+  
+  -- Simpan NoMixer dan NoSak dari partial yang akan dihapus
+  DECLARE @deletedMixerPartials TABLE (
+    NoMixer varchar(50),
+    NoSak int
+  );
+  
+  INSERT INTO @deletedMixerPartials (NoMixer, NoSak)
+  SELECT DISTINCT mp.NoMixer, mp.NoSak
+  FROM dbo.MixerPartial mp
+  INNER JOIN dbo.BrokerProduksiInputMixerPartial map ON mp.NoMixerPartial = map.NoMixerPartial
+  INNER JOIN OPENJSON(@jsPartials, '$.mixerPartial') 
+  WITH (noMixerPartial varchar(50) '$.noMixerPartial') j
+  ON map.NoMixerPartial = j.noMixerPartial
+  WHERE map.NoProduksi = @no;
+  
+  -- Delete dari mapping table
+  DELETE map
+  FROM dbo.BrokerProduksiInputMixerPartial map
+  INNER JOIN OPENJSON(@jsPartials, '$.mixerPartial') 
+  WITH (noMixerPartial varchar(50) '$.noMixerPartial') j
+  ON map.NoMixerPartial = j.noMixerPartial
+  WHERE map.NoProduksi = @no;
+  
+  -- Delete dari MixerPartial table
+  DELETE mp
+  FROM dbo.MixerPartial mp
+  INNER JOIN OPENJSON(@jsPartials, '$.mixerPartial') 
+  WITH (noMixerPartial varchar(50) '$.noMixerPartial') j
+  ON mp.NoMixerPartial = j.noMixerPartial;
+  
+  -- Update Mixer_d
+  IF @mixerDeleted > 0
+  BEGIN
+    -- Update untuk yang MASIH ADA partial lainnya
+    UPDATE d
+    SET 
+      d.DateUsage = NULL,
+      d.IsPartial = 1
+    FROM dbo.Mixer_d d
+    INNER JOIN @deletedMixerPartials del ON d.NoMixer = del.NoMixer AND d.NoSak = del.NoSak
+    WHERE EXISTS (
+      SELECT 1 
+      FROM dbo.MixerPartial mp 
+      WHERE mp.NoMixer = d.NoMixer AND mp.NoSak = d.NoSak
+    );
+    
+    -- Update untuk yang TIDAK ADA lagi partial nya
+    UPDATE d
+    SET 
+      d.DateUsage = NULL,
+      d.IsPartial = 0
+    FROM dbo.Mixer_d d
+    INNER JOIN @deletedMixerPartials del ON d.NoMixer = del.NoMixer AND d.NoSak = del.NoSak
+    WHERE NOT EXISTS (
+      SELECT 1 
+      FROM dbo.MixerPartial mp 
+      WHERE mp.NoMixer = d.NoMixer AND mp.NoSak = d.NoSak
+    );
+  END;
+  
+  DECLARE @mixerRequested int;
+  SELECT @mixerRequested = COUNT(*)
+  FROM OPENJSON(@jsPartials, '$.mixerPartial');
+  
+  SET @mixerNotFound = @mixerRequested - @mixerDeleted;
+  
+  INSERT INTO @out SELECT 'mixerPartial', @mixerDeleted, @mixerNotFound;
+
+  -- REJECT PARTIAL
+  DECLARE @rejectDeleted int = 0, @rejectNotFound int = 0;
+  
+  SELECT @rejectDeleted = COUNT(*)
+  FROM dbo.BrokerProduksiInputRejectPartial map
+  INNER JOIN OPENJSON(@jsPartials, '$.rejectPartial') 
+  WITH (noRejectPartial varchar(50) '$.noRejectPartial') j
+  ON map.NoRejectPartial = j.noRejectPartial
+  WHERE map.NoProduksi = @no;
+  
+  -- Simpan NoReject dari partial yang akan dihapus
+  DECLARE @deletedRejectPartials TABLE (
+    NoReject varchar(50)
+  );
+  
+  INSERT INTO @deletedRejectPartials (NoReject)
+  SELECT DISTINCT rp.NoReject
+  FROM dbo.RejectV2Partial rp
+  INNER JOIN dbo.BrokerProduksiInputRejectPartial map ON rp.NoRejectPartial = map.NoRejectPartial
+  INNER JOIN OPENJSON(@jsPartials, '$.rejectPartial') 
+  WITH (noRejectPartial varchar(50) '$.noRejectPartial') j
+  ON map.NoRejectPartial = j.noRejectPartial
+  WHERE map.NoProduksi = @no;
+  
+  -- Delete dari mapping table
+  DELETE map
+  FROM dbo.BrokerProduksiInputRejectPartial map
+  INNER JOIN OPENJSON(@jsPartials, '$.rejectPartial') 
+  WITH (noRejectPartial varchar(50) '$.noRejectPartial') j
+  ON map.NoRejectPartial = j.noRejectPartial
+  WHERE map.NoProduksi = @no;
+  
+  -- Delete dari RejectV2Partial table
+  DELETE rp
+  FROM dbo.RejectV2Partial rp
+  INNER JOIN OPENJSON(@jsPartials, '$.rejectPartial') 
+  WITH (noRejectPartial varchar(50) '$.noRejectPartial') j
+  ON rp.NoRejectPartial = j.noRejectPartial;
+  
+  -- Update RejectV2
+  IF @rejectDeleted > 0
+  BEGIN
+    -- Update untuk yang MASIH ADA partial lainnya
+    UPDATE r
+    SET 
+      r.DateUsage = NULL,
+      r.IsPartial = 1
+    FROM dbo.RejectV2 r
+    INNER JOIN @deletedRejectPartials del ON r.NoReject = del.NoReject
+    WHERE EXISTS (
+      SELECT 1 
+      FROM dbo.RejectV2Partial rp 
+      WHERE rp.NoReject = r.NoReject
+    );
+    
+    -- Update untuk yang TIDAK ADA lagi partial nya
+    UPDATE r
+    SET 
+      r.DateUsage = NULL,
+      r.IsPartial = 0
+    FROM dbo.RejectV2 r
+    INNER JOIN @deletedRejectPartials del ON r.NoReject = del.NoReject
+    WHERE NOT EXISTS (
+      SELECT 1 
+      FROM dbo.RejectV2Partial rp 
+      WHERE rp.NoReject = r.NoReject
+    );
+  END;
+  
+  DECLARE @rejectRequested int;
+  SELECT @rejectRequested = COUNT(*)
+  FROM OPENJSON(@jsPartials, '$.rejectPartial');
+  
+  SET @rejectNotFound = @rejectRequested - @rejectDeleted;
+  
+  INSERT INTO @out SELECT 'rejectPartial', @rejectDeleted, @rejectNotFound;
+
+  SELECT Section, Deleted, NotFound FROM @out ORDER BY Section;
+  `;
+
+  const rs = await req.query(SQL_DELETE_PARTIALS);
+
+  const summary = {};
+  for (const row of rs.recordset || []) {
+    summary[row.Section] = {
+      deleted: row.Deleted,
+      notFound: row.NotFound,
+    };
+  }
+
+  return { summary };
+}
+
+// Delete inputs with transaction
+async function _deleteInputsWithTx(tx, noProduksi, lists) {
+  const req = new sql.Request(tx);
+  req.input('no', sql.VarChar(50), noProduksi);
+  req.input('jsInputs', sql.NVarChar(sql.MAX), JSON.stringify(lists));
+
+  const SQL_DELETE_INPUTS = `
+  SET NOCOUNT ON;
+
+  DECLARE @out TABLE(Section sysname, Deleted int, NotFound int);
+
+  -- BROKER
+  DECLARE @brokerDeleted int = 0, @brokerNotFound int = 0;
+  
+  -- Hitung yang akan dihapus SEBELUM DELETE
+  SELECT @brokerDeleted = COUNT(*)
+  FROM dbo.BrokerProduksiInputBroker map
+  INNER JOIN OPENJSON(@jsInputs, '$.broker') 
+  WITH (noBroker varchar(50) '$.noBroker', noSak int '$.noSak') j
+  ON map.NoBroker = j.noBroker AND map.NoSak = j.noSak
+  WHERE map.NoProduksi = @no;
+  
+  -- Reset DateUsage sebelum DELETE
+  IF @brokerDeleted > 0
+  BEGIN
+    UPDATE d
+    SET d.DateUsage = NULL
+    FROM dbo.Broker_d d
+    INNER JOIN dbo.BrokerProduksiInputBroker map ON d.NoBroker = map.NoBroker AND d.NoSak = map.NoSak
+    INNER JOIN OPENJSON(@jsInputs, '$.broker') 
+    WITH (noBroker varchar(50) '$.noBroker', noSak int '$.noSak') j
+    ON map.NoBroker = j.noBroker AND map.NoSak = j.noSak
+    WHERE map.NoProduksi = @no;
+  END;
+  
+  -- DELETE
+  DELETE map
+  FROM dbo.BrokerProduksiInputBroker map
+  INNER JOIN OPENJSON(@jsInputs, '$.broker') 
+  WITH (noBroker varchar(50) '$.noBroker', noSak int '$.noSak') j
+  ON map.NoBroker = j.noBroker AND map.NoSak = j.noSak
+  WHERE map.NoProduksi = @no;
+  
+  -- Hitung total request
+  DECLARE @brokerRequested int;
+  SELECT @brokerRequested = COUNT(*)
+  FROM OPENJSON(@jsInputs, '$.broker');
+  
+  SET @brokerNotFound = @brokerRequested - @brokerDeleted;
+  
+  INSERT INTO @out SELECT 'broker', @brokerDeleted, @brokerNotFound;
+
+  -- BB
+  DECLARE @bbDeleted int = 0, @bbNotFound int = 0;
+  
+  SELECT @bbDeleted = COUNT(*)
+  FROM dbo.BrokerProduksiInputBB map
+  INNER JOIN OPENJSON(@jsInputs, '$.bb') 
+  WITH (noBahanBaku varchar(50) '$.noBahanBaku', noPallet int '$.noPallet', noSak int '$.noSak') j
+  ON map.NoBahanBaku = j.noBahanBaku AND map.NoPallet = j.noPallet AND map.NoSak = j.noSak
+  WHERE map.NoProduksi = @no;
+  
+  -- Reset DateUsage sebelum DELETE
+  IF @bbDeleted > 0
+  BEGIN
+    UPDATE d
+    SET d.DateUsage = NULL
+    FROM dbo.BahanBaku_d d
+    INNER JOIN dbo.BrokerProduksiInputBB map 
+      ON d.NoBahanBaku = map.NoBahanBaku AND d.NoPallet = map.NoPallet AND d.NoSak = map.NoSak
+    INNER JOIN OPENJSON(@jsInputs, '$.bb') 
+    WITH (noBahanBaku varchar(50) '$.noBahanBaku', noPallet int '$.noPallet', noSak int '$.noSak') j
+    ON map.NoBahanBaku = j.noBahanBaku AND map.NoPallet = j.noPallet AND map.NoSak = j.noSak
+    WHERE map.NoProduksi = @no;
+  END;
+  
+  DELETE map
+  FROM dbo.BrokerProduksiInputBB map
+  INNER JOIN OPENJSON(@jsInputs, '$.bb') 
+  WITH (noBahanBaku varchar(50) '$.noBahanBaku', noPallet int '$.noPallet', noSak int '$.noSak') j
+  ON map.NoBahanBaku = j.noBahanBaku AND map.NoPallet = j.noPallet AND map.NoSak = j.noSak
+  WHERE map.NoProduksi = @no;
+  
+  DECLARE @bbRequested int;
+  SELECT @bbRequested = COUNT(*)
+  FROM OPENJSON(@jsInputs, '$.bb');
+  
+  SET @bbNotFound = @bbRequested - @bbDeleted;
+  
+  INSERT INTO @out SELECT 'bb', @bbDeleted, @bbNotFound;
+
+  -- WASHING
+  DECLARE @washingDeleted int = 0, @washingNotFound int = 0;
+  
+  SELECT @washingDeleted = COUNT(*)
+  FROM dbo.BrokerProduksiInputWashing map
+  INNER JOIN OPENJSON(@jsInputs, '$.washing') 
+  WITH (noWashing varchar(50) '$.noWashing', noSak int '$.noSak') j
+  ON map.NoWashing = j.noWashing AND map.NoSak = j.noSak
+  WHERE map.NoProduksi = @no;
+  
+  -- Reset DateUsage sebelum DELETE
+  IF @washingDeleted > 0
+  BEGIN
+    UPDATE d
+    SET d.DateUsage = NULL
+    FROM dbo.Washing_d d
+    INNER JOIN dbo.BrokerProduksiInputWashing map ON d.NoWashing = map.NoWashing AND d.NoSak = map.NoSak
+    INNER JOIN OPENJSON(@jsInputs, '$.washing') 
+    WITH (noWashing varchar(50) '$.noWashing', noSak int '$.noSak') j
+    ON map.NoWashing = j.noWashing AND map.NoSak = j.noSak
+    WHERE map.NoProduksi = @no;
+  END;
+  
+  DELETE map
+  FROM dbo.BrokerProduksiInputWashing map
+  INNER JOIN OPENJSON(@jsInputs, '$.washing') 
+  WITH (noWashing varchar(50) '$.noWashing', noSak int '$.noSak') j
+  ON map.NoWashing = j.noWashing AND map.NoSak = j.noSak
+  WHERE map.NoProduksi = @no;
+  
+  DECLARE @washingRequested int;
+  SELECT @washingRequested = COUNT(*)
+  FROM OPENJSON(@jsInputs, '$.washing');
+  
+  SET @washingNotFound = @washingRequested - @washingDeleted;
+  
+  INSERT INTO @out SELECT 'washing', @washingDeleted, @washingNotFound;
+
+  -- CRUSHER
+  DECLARE @crusherDeleted int = 0, @crusherNotFound int = 0;
+  
+  SELECT @crusherDeleted = COUNT(*)
+  FROM dbo.BrokerProduksiInputCrusher map
+  INNER JOIN OPENJSON(@jsInputs, '$.crusher') 
+  WITH (noCrusher varchar(50) '$.noCrusher') j
+  ON map.NoCrusher = j.noCrusher
+  WHERE map.NoProduksi = @no;
+  
+  -- Reset DateUsage sebelum DELETE
+  IF @crusherDeleted > 0
+  BEGIN
+    UPDATE c
+    SET c.DateUsage = NULL
+    FROM dbo.Crusher c
+    INNER JOIN dbo.BrokerProduksiInputCrusher map ON c.NoCrusher = map.NoCrusher
+    INNER JOIN OPENJSON(@jsInputs, '$.crusher') 
+    WITH (noCrusher varchar(50) '$.noCrusher') j
+    ON map.NoCrusher = j.noCrusher
+    WHERE map.NoProduksi = @no;
+  END;
+  
+  DELETE map
+  FROM dbo.BrokerProduksiInputCrusher map
+  INNER JOIN OPENJSON(@jsInputs, '$.crusher') 
+  WITH (noCrusher varchar(50) '$.noCrusher') j
+  ON map.NoCrusher = j.noCrusher
+  WHERE map.NoProduksi = @no;
+  
+  DECLARE @crusherRequested int;
+  SELECT @crusherRequested = COUNT(*)
+  FROM OPENJSON(@jsInputs, '$.crusher');
+  
+  SET @crusherNotFound = @crusherRequested - @crusherDeleted;
+  
+  INSERT INTO @out SELECT 'crusher', @crusherDeleted, @crusherNotFound;
+
+  -- GILINGAN
+  DECLARE @gilinganDeleted int = 0, @gilinganNotFound int = 0;
+  
+  SELECT @gilinganDeleted = COUNT(*)
+  FROM dbo.BrokerProduksiInputGilingan map
+  INNER JOIN OPENJSON(@jsInputs, '$.gilingan') 
+  WITH (noGilingan varchar(50) '$.noGilingan') j
+  ON map.NoGilingan = j.noGilingan
+  WHERE map.NoProduksi = @no;
+  
+  -- Reset DateUsage sebelum DELETE
+  IF @gilinganDeleted > 0
+  BEGIN
+    UPDATE g
+    SET g.DateUsage = NULL
+    FROM dbo.Gilingan g
+    INNER JOIN dbo.BrokerProduksiInputGilingan map ON g.NoGilingan = map.NoGilingan
+    INNER JOIN OPENJSON(@jsInputs, '$.gilingan') 
+    WITH (noGilingan varchar(50) '$.noGilingan') j
+    ON map.NoGilingan = j.noGilingan
+    WHERE map.NoProduksi = @no;
+  END;
+  
+  DELETE map
+  FROM dbo.BrokerProduksiInputGilingan map
+  INNER JOIN OPENJSON(@jsInputs, '$.gilingan') 
+  WITH (noGilingan varchar(50) '$.noGilingan') j
+  ON map.NoGilingan = j.noGilingan
+  WHERE map.NoProduksi = @no;
+  
+  DECLARE @gilinganRequested int;
+  SELECT @gilinganRequested = COUNT(*)
+  FROM OPENJSON(@jsInputs, '$.gilingan');
+  
+  SET @gilinganNotFound = @gilinganRequested - @gilinganDeleted;
+  
+  INSERT INTO @out SELECT 'gilingan', @gilinganDeleted, @gilinganNotFound;
+
+  -- MIXER
+  DECLARE @mixerDeleted int = 0, @mixerNotFound int = 0;
+  
+  SELECT @mixerDeleted = COUNT(*)
+  FROM dbo.BrokerProduksiInputMixer map
+  INNER JOIN OPENJSON(@jsInputs, '$.mixer') 
+  WITH (noMixer varchar(50) '$.noMixer', noSak int '$.noSak') j
+  ON map.NoMixer = j.noMixer AND map.NoSak = j.noSak
+  WHERE map.NoProduksi = @no;
+  
+  -- Reset DateUsage sebelum DELETE
+  IF @mixerDeleted > 0
+  BEGIN
+    UPDATE d
+    SET d.DateUsage = NULL
+    FROM dbo.Mixer_d d
+    INNER JOIN dbo.BrokerProduksiInputMixer map ON d.NoMixer = map.NoMixer AND d.NoSak = map.NoSak
+    INNER JOIN OPENJSON(@jsInputs, '$.mixer') 
+    WITH (noMixer varchar(50) '$.noMixer', noSak int '$.noSak') j
+    ON map.NoMixer = j.noMixer AND map.NoSak = j.noSak
+    WHERE map.NoProduksi = @no;
+  END;
+  
+  DELETE map
+  FROM dbo.BrokerProduksiInputMixer map
+  INNER JOIN OPENJSON(@jsInputs, '$.mixer') 
+  WITH (noMixer varchar(50) '$.noMixer', noSak int '$.noSak') j
+  ON map.NoMixer = j.noMixer AND map.NoSak = j.noSak
+  WHERE map.NoProduksi = @no;
+  
+  DECLARE @mixerRequested int;
+  SELECT @mixerRequested = COUNT(*)
+  FROM OPENJSON(@jsInputs, '$.mixer');
+  
+  SET @mixerNotFound = @mixerRequested - @mixerDeleted;
+  
+  INSERT INTO @out SELECT 'mixer', @mixerDeleted, @mixerNotFound;
+
+  -- REJECT
+  DECLARE @rejectDeleted int = 0, @rejectNotFound int = 0;
+  
+  SELECT @rejectDeleted = COUNT(*)
+  FROM dbo.BrokerProduksiInputReject map
+  INNER JOIN OPENJSON(@jsInputs, '$.reject') 
+  WITH (noReject varchar(50) '$.noReject') j
+  ON map.NoReject = j.noReject
+  WHERE map.NoProduksi = @no;
+  
+  -- Reset DateUsage sebelum DELETE
+  IF @rejectDeleted > 0
+  BEGIN
+    UPDATE r
+    SET r.DateUsage = NULL
+    FROM dbo.RejectV2 r
+    INNER JOIN dbo.BrokerProduksiInputReject map ON r.NoReject = map.NoReject
+    INNER JOIN OPENJSON(@jsInputs, '$.reject') 
+    WITH (noReject varchar(50) '$.noReject') j
+    ON map.NoReject = j.noReject
+    WHERE map.NoProduksi = @no;
+  END;
+  
+  DELETE map
+  FROM dbo.BrokerProduksiInputReject map
+  INNER JOIN OPENJSON(@jsInputs, '$.reject') 
+  WITH (noReject varchar(50) '$.noReject') j
+  ON map.NoReject = j.noReject
+  WHERE map.NoProduksi = @no;
+  
+  DECLARE @rejectRequested int;
+  SELECT @rejectRequested = COUNT(*)
+  FROM OPENJSON(@jsInputs, '$.reject');
+  
+  SET @rejectNotFound = @rejectRequested - @rejectDeleted;
+  
+  INSERT INTO @out SELECT 'reject', @rejectDeleted, @rejectNotFound;
+
+  SELECT Section, Deleted, NotFound FROM @out ORDER BY Section;
+  `;
+
+  const rs = await req.query(SQL_DELETE_INPUTS);
+
+  const out = {};
+  for (const row of rs.recordset || []) {
+    out[row.Section] = {
+      deleted: row.Deleted,
+      notFound: row.NotFound,
+    };
+  }
+  return out;
+}
+
+module.exports = { getAllProduksi, getProduksiByDate, fetchInputs, createBrokerProduksi, updateBrokerProduksi, deleteBrokerProduksi, validateLabel, upsertInputsAndPartials, deleteInputsAndPartials };

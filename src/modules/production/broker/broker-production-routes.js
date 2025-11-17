@@ -36,5 +36,6 @@ router.get('/broker/:noProduksi/inputs', verifyToken, brokerProduksiController.g
 // routes/broker-production-route.js
 router.post('/broker/:noProduksi/inputs', verifyToken, brokerProduksiController.upsertInputsAndPartials);
 
+router.delete('/broker/:noProduksi/inputs', verifyToken, brokerProduksiController.deleteInputsAndPartials);
 
 module.exports = router;

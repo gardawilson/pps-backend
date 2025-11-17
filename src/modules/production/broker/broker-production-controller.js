@@ -302,15 +302,15 @@ async function upsertInputsAndPartials(req, res) {
                     'bbPartialNew', 'gilinganPartialNew', 'mixerPartialNew', 'rejectPartialNew']
     .some(key => payload[key] && Array.isArray(payload[key]) && payload[key].length > 0);
 
-  if (!hasInput) {
-    return res.status(400).json({
-      success: false,
-      message: 'Tidak ada data input yang diberikan',
-      error: {
-        message: 'Request body harus berisi minimal satu array input (broker, bb, washing, dll) yang tidak kosong'
-      }
-    });
-  }
+  // if (!hasInput) {
+  //   return res.status(400).json({
+  //     success: false,
+  //     message: 'Tidak ada data input yang diberikan',
+  //     error: {
+  //       message: 'Request body harus berisi minimal satu array input (broker, bb, washing, dll) yang tidak kosong'
+  //     }
+  //   });
+  // }
 
   try {
     const result = await brokerProduksiService.upsertInputsAndPartials(noProduksi, payload);
@@ -352,4 +352,68 @@ async function upsertInputsAndPartials(req, res) {
 }
 
 
-module.exports = { getProduksiByDate, getInputsByNoProduksi, getAllProduksi, createProduksi, updateProduksi, deleteProduksi, validateLabel, upsertInputsAndPartials };
+async function deleteInputsAndPartials(req, res) {
+  const noProduksi = String(req.params.noProduksi || '').trim();
+  
+  if (!noProduksi) {
+    return res.status(400).json({ 
+      success: false, 
+      message: 'noProduksi is required',
+      error: {
+        field: 'noProduksi',
+        message: 'Parameter noProduksi tidak boleh kosong'
+      }
+    });
+  }
+
+  const payload = req.body || {};
+
+  // Validate that at least one input is provided
+  const hasInput = ['broker', 'bb', 'washing', 'crusher', 'gilingan', 'mixer', 'reject',
+                    'bbPartial', 'brokerPartial', 'gilinganPartial', 'mixerPartial', 'rejectPartial']
+    .some(key => payload[key] && Array.isArray(payload[key]) && payload[key].length > 0);
+
+  if (!hasInput) {
+    return res.status(400).json({
+      success: false,
+      message: 'Tidak ada data input yang diberikan',
+      error: {
+        message: 'Request body harus berisi minimal satu array input yang tidak kosong'
+      }
+    });
+  }
+
+  try {
+    const result = await brokerProduksiService.deleteInputsAndPartials(noProduksi, payload);
+
+    const { success, hasWarnings, data } = result;
+
+    let statusCode = 200;
+    let message = 'Inputs & partials deleted successfully';
+
+    if (!success) {
+      statusCode = 404;
+      message = 'Tidak ada data yang berhasil dihapus';
+    } else if (hasWarnings) {
+      message = 'Inputs & partials deleted with warnings';
+    }
+
+    return res.status(statusCode).json({
+      success,
+      message,
+      data,
+    });
+  } catch (e) {
+    console.error('[deleteInputsAndPartials]', e);
+    return res.status(500).json({
+      success: false,
+      message: 'Internal Server Error',
+      error: {
+        message: e.message,
+        details: process.env.NODE_ENV === 'development' ? e.stack : undefined
+      }
+    });
+  }
+}
+
+module.exports = { getProduksiByDate, getInputsByNoProduksi, getAllProduksi, createProduksi, updateProduksi, deleteProduksi, validateLabel, upsertInputsAndPartials, deleteInputsAndPartials };

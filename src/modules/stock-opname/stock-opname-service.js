@@ -2033,7 +2033,7 @@ async function validateStockOpnameLabel({ noso, label, username, blok, idlokasi 
       isValidWarehouse,
       isDuplicate: false,
       foundInStockOpname: false,
-      idDiscrepancy: 3,
+      idDiscrepancy: 2,
       labelType,
       parsed,
       idWarehouse: fallbackData.IdWarehouse || idWarehouse,

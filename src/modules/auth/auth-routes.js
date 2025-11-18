@@ -4,6 +4,10 @@ const authController = require('./auth-controller');
 
 router.use(express.json()); // Middleware parsing JSON
 
+router.post('/login', authController.login);
+
+//FORCE UPDATE
 router.post('/login1', authController.login);
+
 
 module.exports = router;

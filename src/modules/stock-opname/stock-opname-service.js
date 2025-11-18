@@ -1562,15 +1562,45 @@ async function validateStockOpnameLabel({ noso, label, username, blok, idlokasi 
       WHERE h.NoMixer = @NoMixer;
     `;
     originalDataQuery = `
-      SELECT 
-          COUNT(*) AS JumlahSak,
-          SUM(md.Berat) AS Berat,          -- berat biasanya di detail
-          MAX(md.IdLokasi) AS IdLokasi,    -- atau MAX(mh.IdLokasi) kalau lokasinya di header
-          MAX(mh.IdWarehouse) AS IdWarehouse
-      FROM dbo.Mixer_d AS md
-      JOIN dbo.Mixer_h AS mh 
-        ON md.NoMixer = mh.NoMixer
-      WHERE md.NoMixer = @NoMixer;
+  SELECT
+        agg.JmlhSak,
+        agg.Berat,
+        h.Blok,
+        h.IdLokasi
+      FROM [dbo].[Mixer_h] AS h
+      LEFT JOIN (
+        SELECT
+          d.NoMixer,
+          COUNT(*) AS JmlhSak,
+          SUM(
+            CASE
+              WHEN d.IsPartial = 1 THEN
+                CASE
+                  WHEN ISNULL(d.Berat,0) - ISNULL(p.TotalPartial,0) < 0
+                    THEN 0
+                  ELSE ISNULL(d.Berat,0) - ISNULL(p.TotalPartial,0)
+                END
+              ELSE ISNULL(d.Berat,0)
+            END
+          ) AS Berat
+        FROM [dbo].[Mixer_d] AS d
+        LEFT JOIN (
+          SELECT
+            NoMixer,
+            NoSak,
+            SUM(ISNULL(Berat,0)) AS TotalPartial
+          FROM [dbo].[MixerPartial]
+          WHERE NoMixer = @NoMixer
+          GROUP BY NoMixer, NoSak
+        ) AS p
+            ON p.NoMixer = d.NoMixer
+           AND p.NoSak   = d.NoSak
+        WHERE d.NoMixer = @NoMixer
+          AND d.DateUsage IS NULL
+        GROUP BY d.NoMixer
+      ) AS agg
+        ON agg.NoMixer = h.NoMixer
+      WHERE h.NoMixer = @NoMixer;
     `;
 
   } else if (isFurnitureWIP) {

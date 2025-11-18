@@ -6,7 +6,7 @@ router.use(express.json()); // Middleware parsing JSON
 
 router.post('/login', authController.login);
 
-//FORCE UPDATE
+//FORCE UPDATE FOR MOBILE
 router.post('/login1', authController.login);
 
 

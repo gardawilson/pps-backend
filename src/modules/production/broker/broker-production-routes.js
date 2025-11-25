@@ -27,9 +27,6 @@ router.delete('/broker/:noProduksi', verifyToken, brokerProduksiController.delet
 // Add this route after your existing routes
 router.get('/broker/validate-label/:labelCode', verifyToken, brokerProduksiController.validateLabel);
 
-
-
-
 //get input routes
 router.get('/broker/:noProduksi/inputs', verifyToken, brokerProduksiController.getInputsByNoProduksi);
 

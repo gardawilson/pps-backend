@@ -17,5 +17,27 @@ router.get(
 );
 
 
+// ✅ Create WashingProduksi_h
+router.post('/washing', verifyToken, washingProduksiController.createProduksi);
+
+router.put('/washing/:noProduksi', verifyToken, washingProduksiController.updateProduksi);
+
+router.delete('/washing/:noProduksi', verifyToken, washingProduksiController.deleteProduksi);
+
+
+
+// GET /api/production/washing/:noProduksi/inputs
+router.get(
+  '/washing/:noProduksi/inputs',
+  verifyToken,
+  washingProduksiController.getInputsByNoProduksi
+);
+
+
+router.get('/washing/validate-label/:labelCode', verifyToken, washingProduksiController.validateLabel);
+
+router.post('/washing/:noProduksi/inputs', verifyToken, washingProduksiController.upsertInputsAndPartials);
+
+router.delete('/washing/:noProduksi/inputs', verifyToken, washingProduksiController.deleteInputsAndPartials);
 
 module.exports = router;

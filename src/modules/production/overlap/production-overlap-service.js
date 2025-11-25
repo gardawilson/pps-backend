@@ -1,14 +1,15 @@
 // services/production-overlap-service.js
 const { sql, poolPromise } = require('../../../core/config/db');
 
-// Whitelist config per modul — PERHATIKAN schema/DB sesuai yang kamu kirim: PPS.dbo untuk Washing & Gilingan.
-// Broker/Crusher sesuaikan dengan real DB-mu.
+// Whitelist config per modul — TANPA hard-coded DB.
+// Dia akan ikut default DB dari connection string (env).
 function getConfig(kind) {
   switch (kind) {
     case 'broker':
       return {
         mode: 'range',
-        db: 'PPS_TEST2', schema: 'dbo', table: 'BrokerProduksi_h',  // ganti ke 'PPS' jika sudah pindah
+        schema: 'dbo',
+        table: 'BrokerProduksi_h',
         pk: 'NoProduksi',
         dateCol: 'TglProduksi',
         idMesinCol: 'IdMesin',
@@ -18,7 +19,8 @@ function getConfig(kind) {
     case 'crusher':
       return {
         mode: 'range',
-        db: 'PPS', schema: 'dbo', table: 'CrusherProduksi_h',
+        schema: 'dbo',
+        table: 'CrusherProduksi_h',
         pk: 'NoCrusherProduksi',
         dateCol: 'Tanggal',
         idMesinCol: 'IdMesin',
@@ -28,7 +30,8 @@ function getConfig(kind) {
     case 'washing':
       return {
         mode: 'range',
-        db: 'PPS', schema: 'dbo', table: 'WashingProduksi_h',
+        schema: 'dbo',
+        table: 'WashingProduksi_h',
         pk: 'NoProduksi',
         dateCol: 'TglProduksi',
         idMesinCol: 'IdMesin',
@@ -38,7 +41,8 @@ function getConfig(kind) {
     case 'gilingan':
       return {
         mode: 'range',
-        db: 'PPS', schema: 'dbo', table: 'GilinganProduksi_h',
+        schema: 'dbo',
+        table: 'GilinganProduksi_h',
         pk: 'NoProduksi',
         dateCol: 'Tanggal',
         idMesinCol: 'IdMesin',
@@ -50,28 +54,35 @@ function getConfig(kind) {
   }
 }
 
-function qIdent(db, schema, table, col) {
-  if (col) return `[${col}]`;
-  return `[${db}].[${schema}].[${table}]`;
-}
-
 /**
  * Cek overlap jam untuk (kind, date, idMesin).
  * - Cross-midnight didukung (end < start → +1 hari)
  * - Exclude dokumen saat edit didukung
  */
-async function checkOverlapGeneric({ kind, tglProduksi, idMesin, hourStart, hourEnd, excludeNoProduksi = null }) {
+async function checkOverlapGeneric({
+  kind,
+  tglProduksi,
+  idMesin,
+  hourStart,
+  hourEnd,
+  excludeNoProduksi = null,
+}) {
   const cfg = getConfig(kind);
 
   const pool = await poolPromise;
   const request = pool.request();
 
-  const FQN = qIdent(cfg.db, cfg.schema, cfg.table);
-  const NO  = qIdent(null, null, null, cfg.pk);
-  const DT  = qIdent(null, null, null, cfg.dateCol);
-  const IMS = qIdent(null, null, null, cfg.idMesinCol);
-  const HS  = qIdent(null, null, null, cfg.hourStartCol);
-  const HE  = qIdent(null, null, null, cfg.hourEndCol);
+  // Full Qualified Name pakai schema + table saja (tanpa DB)
+  const FQN = cfg.schema
+    ? `[${cfg.schema}].[${cfg.table}]`
+    : `[${cfg.table}]`;
+
+  // Column identifiers
+  const NO  = `[${cfg.pk}]`;
+  const DT  = `[${cfg.dateCol}]`;
+  const IMS = `[${cfg.idMesinCol}]`;
+  const HS  = `[${cfg.hourStartCol}]`;
+  const HE  = `[${cfg.hourEndCol}]`;
 
   const sqlText = `
     DECLARE @tgl DATE = TRY_CONVERT(date, @TglProduksi);

@@ -1355,7 +1355,7 @@ async function _insertPartialsWithTx(tx, noProduksi, lists) {
     SET 
       bb.IsPartial = 1,
       bb.DateUsage = CASE 
-        WHEN (bb.BeratAct - ISNULL(ep.TotalBeratPartialExisting, 0) - ISNULL(np.TotalBeratPartialNew, 0)) <= 0 
+      WHEN (ISNULL(NULLIF(bb.BeratAct, 0), bb.Berat) - ISNULL(ep.TotalBeratPartialExisting, 0) - ISNULL(np.TotalBeratPartialNew, 0)) <= 0.001
         THEN @tglProduksi 
         ELSE bb.DateUsage 
       END
@@ -1431,7 +1431,7 @@ async function _insertPartialsWithTx(tx, noProduksi, lists) {
     SET 
       g.IsPartial = 1,
       g.DateUsage = CASE 
-        WHEN (g.Berat - ISNULL(ep.TotalBeratPartialExisting, 0) - ISNULL(np.TotalBeratPartialNew, 0)) <= 0 
+      WHEN (g.Berat - ISNULL(ep.TotalBeratPartialExisting, 0) - ISNULL(np.TotalBeratPartialNew, 0)) <= 0.001
         THEN @tglProduksi 
         ELSE g.DateUsage 
       END

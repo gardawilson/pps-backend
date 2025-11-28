@@ -1868,402 +1868,400 @@ async function _insertPartialsWithTx(tx, noProduksi, lists) {
   DECLARE @gilNew TABLE(NoGilinganPartial varchar(50));
   DECLARE @mixNew TABLE(NoMixerPartial varchar(50));
   DECLARE @rejNew TABLE(NoRejectPartial varchar(50));
-  DECLARE @broNew TABLE(NoBrokerPartial    varchar(50));  -- <<< baru
+  DECLARE @broNew TABLE(NoBrokerPartial varchar(50));
 
 
- /* =========================
-   BB PARTIAL (P.##########)
-   ========================= */
-IF EXISTS (SELECT 1 FROM OPENJSON(@jsPartials, '$.bbPartialNew'))
-BEGIN
-  DECLARE @nextBB int = ISNULL((
-    SELECT MAX(TRY_CAST(RIGHT(NoBBPartial,10) AS int))
-    FROM dbo.BahanBakuPartial WITH (UPDLOCK, HOLDLOCK)
-    WHERE NoBBPartial LIKE 'P.%'
-  ), 0);
+  /* =========================
+     BB PARTIAL (P.##########)
+     ========================= */
+  IF EXISTS (SELECT 1 FROM OPENJSON(@jsPartials, '$.bbPartialNew'))
+  BEGIN
+    DECLARE @nextBB int = ISNULL((
+      SELECT MAX(TRY_CAST(RIGHT(NoBBPartial,10) AS int))
+      FROM dbo.BahanBakuPartial WITH (UPDLOCK, HOLDLOCK)
+      WHERE NoBBPartial LIKE 'P.%'
+    ), 0);
 
-  ;WITH src AS (
-    SELECT
-      noBahanBaku,
-      noPallet,
-      noSak,
-      berat,
-      ROW_NUMBER() OVER (ORDER BY (SELECT 1)) AS rn
-    FROM OPENJSON(@jsPartials, '$.bbPartialNew')
-    WITH (
-      noBahanBaku varchar(50) '$.noBahanBaku',
-      noPallet    int         '$.noPallet',
-      noSak       int         '$.noSak',
-      berat       decimal(18,3) '$.berat'
+    ;WITH src AS (
+      SELECT
+        noBahanBaku,
+        noPallet,
+        noSak,
+        berat,
+        ROW_NUMBER() OVER (ORDER BY (SELECT 1)) AS rn
+      FROM OPENJSON(@jsPartials, '$.bbPartialNew')
+      WITH (
+        noBahanBaku varchar(50) '$.noBahanBaku',
+        noPallet    int         '$.noPallet',
+        noSak       int         '$.noSak',
+        berat       decimal(18,3) '$.berat'
+      )
+    ),
+    numbered AS (
+      SELECT
+        NewNo = CONCAT('P.', RIGHT(REPLICATE('0',10) + CAST(@nextBB + rn AS varchar(10)), 10)),
+        noBahanBaku, noPallet, noSak, berat
+      FROM src
     )
-  ),
-  numbered AS (
-    SELECT
-      NewNo = CONCAT('P.', RIGHT(REPLICATE('0',10) + CAST(@nextBB + rn AS varchar(10)), 10)),
-      noBahanBaku, noPallet, noSak, berat
-    FROM src
-  )
-  INSERT INTO dbo.BahanBakuPartial (NoBBPartial, NoBahanBaku, NoPallet, NoSak, Berat)
-  OUTPUT INSERTED.NoBBPartial INTO @bbNew(NoBBPartial)
-  SELECT NewNo, noBahanBaku, noPallet, noSak, berat
-  FROM numbered;
+    INSERT INTO dbo.BahanBakuPartial (NoBBPartial, NoBahanBaku, NoPallet, NoSak, Berat)
+    OUTPUT INSERTED.NoBBPartial INTO @bbNew(NoBBPartial)
+    SELECT NewNo, noBahanBaku, noPallet, noSak, berat
+    FROM numbered;
 
-  -- Map to produksi
-  INSERT INTO dbo.BrokerProduksiInputBBPartial (NoProduksi, NoBBPartial)
-  SELECT @no, n.NoBBPartial
-  FROM @bbNew n;
+    -- Map to produksi
+    INSERT INTO dbo.BrokerProduksiInputBBPartial (NoProduksi, NoBBPartial)
+    SELECT @no, n.NoBBPartial
+    FROM @bbNew n;
 
-  -- ⬇️ PERBAIKAN: Hitung total partial (existing + new) vs berat awal
-  ;WITH existingPartials AS (
-    SELECT 
-      bp.NoBahanBaku,
-      bp.NoPallet,
-      bp.NoSak,
-      SUM(ISNULL(bp.Berat, 0)) AS TotalBeratPartialExisting
-    FROM dbo.BahanBakuPartial bp WITH (NOLOCK)
-    WHERE bp.NoBBPartial NOT IN (SELECT NoBBPartial FROM @bbNew) -- exclude yang baru saja diinsert
-    GROUP BY bp.NoBahanBaku, bp.NoPallet, bp.NoSak
-  ),
-  newPartials AS (
-    SELECT 
-      noBahanBaku,
-      noPallet,
-      noSak,
-      SUM(berat) AS TotalBeratPartialNew
-    FROM OPENJSON(@jsPartials, '$.bbPartialNew')
-    WITH (
-      noBahanBaku varchar(50) '$.noBahanBaku',
-      noPallet    int         '$.noPallet',
-      noSak       int         '$.noSak',
-      berat       decimal(18,3) '$.berat'
+    -- Update IsPartial & DateUsage for BahanBaku_d
+    ;WITH existingPartials AS (
+      SELECT 
+        bp.NoBahanBaku,
+        bp.NoPallet,
+        bp.NoSak,
+        SUM(ISNULL(bp.Berat, 0)) AS TotalBeratPartialExisting
+      FROM dbo.BahanBakuPartial bp WITH (NOLOCK)
+      WHERE bp.NoBBPartial NOT IN (SELECT NoBBPartial FROM @bbNew)
+      GROUP BY bp.NoBahanBaku, bp.NoPallet, bp.NoSak
+    ),
+    newPartials AS (
+      SELECT 
+        noBahanBaku,
+        noPallet,
+        noSak,
+        SUM(berat) AS TotalBeratPartialNew
+      FROM OPENJSON(@jsPartials, '$.bbPartialNew')
+      WITH (
+        noBahanBaku varchar(50) '$.noBahanBaku',
+        noPallet    int         '$.noPallet',
+        noSak       int         '$.noSak',
+        berat       decimal(18,3) '$.berat'
+      )
+      GROUP BY noBahanBaku, noPallet, noSak
     )
-    GROUP BY noBahanBaku, noPallet, noSak
-  )
-  UPDATE bb
-  SET 
-    bb.IsPartial = 1,
-    bb.DateUsage = CASE 
-      -- Jika (BeratAct - total existing partial - total new partial) <= 0, maka habis
-      WHEN (bb.BeratAct - ISNULL(ep.TotalBeratPartialExisting, 0) - ISNULL(np.TotalBeratPartialNew, 0)) <= 0 
-      THEN @tglProduksi 
-      ELSE bb.DateUsage 
-    END
-  FROM dbo.BahanBaku_d bb
-  LEFT JOIN existingPartials ep 
-    ON ep.NoBahanBaku = bb.NoBahanBaku 
-    AND ep.NoPallet = bb.NoPallet 
-    AND ep.NoSak = bb.NoSak
-  INNER JOIN newPartials np 
-    ON np.noBahanBaku = bb.NoBahanBaku 
-    AND np.noPallet = bb.NoPallet 
-    AND np.noSak = bb.NoSak;
-END;
+    UPDATE bb
+    SET 
+      bb.IsPartial = 1,
+      -- ✅ FIX: Add tolerance of 0.001 kg (1 gram) for floating point comparison
+      -- ✅ FIX: Use ISNULL(NULLIF(BeratAct, 0), Berat) as fallback
+      bb.DateUsage = CASE 
+        WHEN (ISNULL(NULLIF(bb.BeratAct, 0), bb.Berat) - ISNULL(ep.TotalBeratPartialExisting, 0) - ISNULL(np.TotalBeratPartialNew, 0)) <= 0.001
+        THEN @tglProduksi 
+        ELSE bb.DateUsage 
+      END
+    FROM dbo.BahanBaku_d bb
+    LEFT JOIN existingPartials ep 
+      ON ep.NoBahanBaku = bb.NoBahanBaku 
+      AND ep.NoPallet = bb.NoPallet 
+      AND ep.NoSak = bb.NoSak
+    INNER JOIN newPartials np 
+      ON np.noBahanBaku = bb.NoBahanBaku 
+      AND np.noPallet = bb.NoPallet 
+      AND np.noSak = bb.NoSak;
+  END;
 
 
- /* ===========================
-   BROKER PARTIAL (Q.##########)
-   ============================ */
-IF EXISTS (SELECT 1 FROM OPENJSON(@jsPartials, '$.brokerPartialNew'))
-BEGIN
-  -- NOTE:
-  -- Ganti 'Q.' & 'Q.%' di bawah ini dengan prefix yang kamu inginkan
-  -- untuk NoBrokerPartial (misal 'V.' atau yang lain).
-  DECLARE @nextBr int = ISNULL((
-    SELECT MAX(TRY_CAST(RIGHT(NoBrokerPartial,10) AS int))
-    FROM dbo.BrokerPartial WITH (UPDLOCK, HOLDLOCK)
-    WHERE NoBrokerPartial LIKE 'Q.%'   -- <<< ganti prefix di sini kalau perlu
-  ), 0);
+  /* ===========================
+     BROKER PARTIAL (Q.##########)
+     ============================ */
+  IF EXISTS (SELECT 1 FROM OPENJSON(@jsPartials, '$.brokerPartialNew'))
+  BEGIN
+    DECLARE @nextBr int = ISNULL((
+      SELECT MAX(TRY_CAST(RIGHT(NoBrokerPartial,10) AS int))
+      FROM dbo.BrokerPartial WITH (UPDLOCK, HOLDLOCK)
+      WHERE NoBrokerPartial LIKE 'Q.%'
+    ), 0);
 
-  ;WITH src AS (
-    SELECT
-      noBroker,
-      noSak,
-      berat,
-      ROW_NUMBER() OVER (ORDER BY (SELECT 1)) AS rn
-    FROM OPENJSON(@jsPartials, '$.brokerPartialNew')
-    WITH (
-      noBroker varchar(50) '$.noBroker',
-      noSak    int         '$.noSak',
-      berat    decimal(18,3) '$.berat'
+    ;WITH src AS (
+      SELECT
+        noBroker,
+        noSak,
+        berat,
+        ROW_NUMBER() OVER (ORDER BY (SELECT 1)) AS rn
+      FROM OPENJSON(@jsPartials, '$.brokerPartialNew')
+      WITH (
+        noBroker varchar(50) '$.noBroker',
+        noSak    int         '$.noSak',
+        berat    decimal(18,3) '$.berat'
+      )
+    ),
+    numbered AS (
+      SELECT
+        NewNo = CONCAT('Q.', RIGHT(REPLICATE('0',10) + CAST(@nextBr + rn AS varchar(10)), 10)),
+        noBroker, noSak, berat
+      FROM src
     )
-  ),
-  numbered AS (
-    SELECT
-      NewNo = CONCAT('Q.', RIGHT(REPLICATE('0',10) + CAST(@nextBr + rn AS varchar(10)), 10)), -- <<< prefix di sini juga
-      noBroker, noSak, berat
-    FROM src
-  )
-  INSERT INTO dbo.BrokerPartial (NoBrokerPartial, NoBroker, NoSak, Berat)
-  OUTPUT INSERTED.NoBrokerPartial INTO @broNew(NoBrokerPartial)
-  SELECT NewNo, noBroker, noSak, berat
-  FROM numbered;
+    INSERT INTO dbo.BrokerPartial (NoBrokerPartial, NoBroker, NoSak, Berat)
+    OUTPUT INSERTED.NoBrokerPartial INTO @broNew(NoBrokerPartial)
+    SELECT NewNo, noBroker, noSak, berat
+    FROM numbered;
 
-  -- Map ke produksi
-  INSERT INTO dbo.BrokerProduksiInputBrokerPartial (NoProduksi, NoBrokerPartial)
-  SELECT @no, n.NoBrokerPartial
-  FROM @broNew n;
+    -- Map ke produksi
+    INSERT INTO dbo.BrokerProduksiInputBrokerPartial (NoProduksi, NoBrokerPartial)
+    SELECT @no, n.NoBrokerPartial
+    FROM @broNew n;
 
-  -- Hitung total partial (existing + new) vs berat awal di Broker_d
-  ;WITH existingPartials AS (
-    SELECT 
-      bp.NoBroker,
-      bp.NoSak,
-      SUM(ISNULL(bp.Berat, 0)) AS TotalBeratPartialExisting
-    FROM dbo.BrokerPartial bp WITH (NOLOCK)
-    WHERE bp.NoBrokerPartial NOT IN (SELECT NoBrokerPartial FROM @broNew) -- exclude yang baru dibuat
-    GROUP BY bp.NoBroker, bp.NoSak
-  ),
-  newPartials AS (
-    SELECT 
-      noBroker,
-      noSak,
-      SUM(berat) AS TotalBeratPartialNew
-    FROM OPENJSON(@jsPartials, '$.brokerPartialNew')
-    WITH (
-      noBroker varchar(50) '$.noBroker',
-      noSak    int         '$.noSak',
-      berat    decimal(18,3) '$.berat'
+    -- Update IsPartial & DateUsage for Broker_d
+    ;WITH existingPartials AS (
+      SELECT 
+        bp.NoBroker,
+        bp.NoSak,
+        SUM(ISNULL(bp.Berat, 0)) AS TotalBeratPartialExisting
+      FROM dbo.BrokerPartial bp WITH (NOLOCK)
+      WHERE bp.NoBrokerPartial NOT IN (SELECT NoBrokerPartial FROM @broNew)
+      GROUP BY bp.NoBroker, bp.NoSak
+    ),
+    newPartials AS (
+      SELECT 
+        noBroker,
+        noSak,
+        SUM(berat) AS TotalBeratPartialNew
+      FROM OPENJSON(@jsPartials, '$.brokerPartialNew')
+      WITH (
+        noBroker varchar(50) '$.noBroker',
+        noSak    int         '$.noSak',
+        berat    decimal(18,3) '$.berat'
+      )
+      GROUP BY noBroker, noSak
     )
-    GROUP BY noBroker, noSak
-  )
-  UPDATE d
-  SET
-    d.IsPartial = 1,
-    d.DateUsage = CASE 
-      -- Jika (Berat - total existing partial - total new partial) <= 0, maka dianggap habis
-      WHEN (d.Berat - ISNULL(ep.TotalBeratPartialExisting, 0) - ISNULL(np.TotalBeratPartialNew, 0)) <= 0 
-      THEN @tglProduksi 
-      ELSE d.DateUsage 
-    END
-  FROM dbo.Broker_d d
-  LEFT JOIN existingPartials ep 
-    ON ep.NoBroker = d.NoBroker AND ep.NoSak = d.NoSak
-  INNER JOIN newPartials np 
-    ON np.noBroker = d.NoBroker AND np.noSak = d.NoSak;
-END;
+    UPDATE d
+    SET
+      d.IsPartial = 1,
+      -- ✅ FIX: Add tolerance of 0.001 kg (1 gram) for floating point comparison
+      d.DateUsage = CASE 
+        WHEN (d.Berat - ISNULL(ep.TotalBeratPartialExisting, 0) - ISNULL(np.TotalBeratPartialNew, 0)) <= 0.001
+        THEN @tglProduksi 
+        ELSE d.DateUsage 
+      END
+    FROM dbo.Broker_d d
+    LEFT JOIN existingPartials ep 
+      ON ep.NoBroker = d.NoBroker AND ep.NoSak = d.NoSak
+    INNER JOIN newPartials np 
+      ON np.noBroker = d.NoBroker AND np.noSak = d.NoSak;
+  END;
 
 
- /* ==============================
-   GILINGAN PARTIAL (Y.##########)
-   ============================== */
-IF EXISTS (SELECT 1 FROM OPENJSON(@jsPartials, '$.gilinganPartialNew'))
-BEGIN
-  DECLARE @nextG int = ISNULL((
-    SELECT MAX(TRY_CAST(RIGHT(NoGilinganPartial,10) AS int))
-    FROM dbo.GilinganPartial WITH (UPDLOCK, HOLDLOCK)
-    WHERE NoGilinganPartial LIKE 'Y.%'
-  ), 0);
+  /* ==============================
+     GILINGAN PARTIAL (Y.##########)
+     ============================== */
+  IF EXISTS (SELECT 1 FROM OPENJSON(@jsPartials, '$.gilinganPartialNew'))
+  BEGIN
+    DECLARE @nextG int = ISNULL((
+      SELECT MAX(TRY_CAST(RIGHT(NoGilinganPartial,10) AS int))
+      FROM dbo.GilinganPartial WITH (UPDLOCK, HOLDLOCK)
+      WHERE NoGilinganPartial LIKE 'Y.%'
+    ), 0);
 
-  ;WITH src AS (
-    SELECT
-      noGilingan,
-      berat,
-      ROW_NUMBER() OVER (ORDER BY (SELECT 1)) AS rn
-    FROM OPENJSON(@jsPartials, '$.gilinganPartialNew')
-    WITH (
-      noGilingan varchar(50) '$.noGilingan',
-      berat      decimal(18,3) '$.berat'
+    ;WITH src AS (
+      SELECT
+        noGilingan,
+        berat,
+        ROW_NUMBER() OVER (ORDER BY (SELECT 1)) AS rn
+      FROM OPENJSON(@jsPartials, '$.gilinganPartialNew')
+      WITH (
+        noGilingan varchar(50) '$.noGilingan',
+        berat      decimal(18,3) '$.berat'
+      )
+    ),
+    numbered AS (
+      SELECT
+        NewNo = CONCAT('Y.', RIGHT(REPLICATE('0',10) + CAST(@nextG + rn AS varchar(10)), 10)),
+        noGilingan, berat
+      FROM src
     )
-  ),
-  numbered AS (
-    SELECT
-      NewNo = CONCAT('Y.', RIGHT(REPLICATE('0',10) + CAST(@nextG + rn AS varchar(10)), 10)),
-      noGilingan, berat
-    FROM src
-  )
-  INSERT INTO dbo.GilinganPartial (NoGilinganPartial, NoGilingan, Berat)
-  OUTPUT INSERTED.NoGilinganPartial INTO @gilNew(NoGilinganPartial)
-  SELECT NewNo, noGilingan, berat
-  FROM numbered;
+    INSERT INTO dbo.GilinganPartial (NoGilinganPartial, NoGilingan, Berat)
+    OUTPUT INSERTED.NoGilinganPartial INTO @gilNew(NoGilinganPartial)
+    SELECT NewNo, noGilingan, berat
+    FROM numbered;
 
-  INSERT INTO dbo.BrokerProduksiInputGilinganPartial (NoProduksi, NoGilinganPartial)
-  SELECT @no, n.NoGilinganPartial
-  FROM @gilNew n;
+    INSERT INTO dbo.BrokerProduksiInputGilinganPartial (NoProduksi, NoGilinganPartial)
+    SELECT @no, n.NoGilinganPartial
+    FROM @gilNew n;
 
-  -- ⬇️ PERBAIKAN: Hitung total partial (existing + new) vs berat awal
-  ;WITH existingPartials AS (
-    SELECT 
-      gp.NoGilingan,
-      SUM(ISNULL(gp.Berat, 0)) AS TotalBeratPartialExisting
-    FROM dbo.GilinganPartial gp WITH (NOLOCK)
-    WHERE gp.NoGilinganPartial NOT IN (SELECT NoGilinganPartial FROM @gilNew)
-    GROUP BY gp.NoGilingan
-  ),
-  newPartials AS (
-    SELECT 
-      noGilingan,
-      SUM(berat) AS TotalBeratPartialNew
-    FROM OPENJSON(@jsPartials, '$.gilinganPartialNew')
-    WITH (
-      noGilingan varchar(50) '$.noGilingan',
-      berat      decimal(18,3) '$.berat'
+    -- Update IsPartial & DateUsage for Gilingan
+    ;WITH existingPartials AS (
+      SELECT 
+        gp.NoGilingan,
+        SUM(ISNULL(gp.Berat, 0)) AS TotalBeratPartialExisting
+      FROM dbo.GilinganPartial gp WITH (NOLOCK)
+      WHERE gp.NoGilinganPartial NOT IN (SELECT NoGilinganPartial FROM @gilNew)
+      GROUP BY gp.NoGilingan
+    ),
+    newPartials AS (
+      SELECT 
+        noGilingan,
+        SUM(berat) AS TotalBeratPartialNew
+      FROM OPENJSON(@jsPartials, '$.gilinganPartialNew')
+      WITH (
+        noGilingan varchar(50) '$.noGilingan',
+        berat      decimal(18,3) '$.berat'
+      )
+      GROUP BY noGilingan
     )
-    GROUP BY noGilingan
-  )
-  UPDATE g
-  SET 
-    g.IsPartial = 1,
-    g.DateUsage = CASE 
-      -- Jika (Berat - total existing partial - total new partial) <= 0, maka habis
-      WHEN (g.Berat - ISNULL(ep.TotalBeratPartialExisting, 0) - ISNULL(np.TotalBeratPartialNew, 0)) <= 0 
-      THEN @tglProduksi 
-      ELSE g.DateUsage 
-    END
-  FROM dbo.Gilingan g
-  LEFT JOIN existingPartials ep ON ep.NoGilingan = g.NoGilingan
-  INNER JOIN newPartials np ON np.noGilingan = g.NoGilingan;
-END;
+    UPDATE g
+    SET 
+      g.IsPartial = 1,
+      -- ✅ FIX: Add tolerance of 0.001 kg (1 gram) for floating point comparison
+      g.DateUsage = CASE 
+        WHEN (g.Berat - ISNULL(ep.TotalBeratPartialExisting, 0) - ISNULL(np.TotalBeratPartialNew, 0)) <= 0.001
+        THEN @tglProduksi 
+        ELSE g.DateUsage 
+      END
+    FROM dbo.Gilingan g
+    LEFT JOIN existingPartials ep ON ep.NoGilingan = g.NoGilingan
+    INNER JOIN newPartials np ON np.noGilingan = g.NoGilingan;
+  END;
 
- /* ==========================
-   MIXER PARTIAL (T.##########)
-   ========================== */
-IF EXISTS (SELECT 1 FROM OPENJSON(@jsPartials, '$.mixerPartialNew'))
-BEGIN
-  DECLARE @nextM int = ISNULL((
-    SELECT MAX(TRY_CAST(RIGHT(NoMixerPartial,10) AS int))
-    FROM dbo.MixerPartial WITH (UPDLOCK, HOLDLOCK)
-    WHERE NoMixerPartial LIKE 'T.%'
-  ), 0);
 
-  ;WITH src AS (
-    SELECT
-      noMixer,
-      noSak,
-      berat,
-      ROW_NUMBER() OVER (ORDER BY (SELECT 1)) AS rn
-    FROM OPENJSON(@jsPartials, '$.mixerPartialNew')
-    WITH (
-      noMixer varchar(50) '$.noMixer',
-      noSak   int         '$.noSak',
-      berat   decimal(18,3) '$.berat'
+  /* ==========================
+     MIXER PARTIAL (T.##########)
+     ========================== */
+  IF EXISTS (SELECT 1 FROM OPENJSON(@jsPartials, '$.mixerPartialNew'))
+  BEGIN
+    DECLARE @nextM int = ISNULL((
+      SELECT MAX(TRY_CAST(RIGHT(NoMixerPartial,10) AS int))
+      FROM dbo.MixerPartial WITH (UPDLOCK, HOLDLOCK)
+      WHERE NoMixerPartial LIKE 'T.%'
+    ), 0);
+
+    ;WITH src AS (
+      SELECT
+        noMixer,
+        noSak,
+        berat,
+        ROW_NUMBER() OVER (ORDER BY (SELECT 1)) AS rn
+      FROM OPENJSON(@jsPartials, '$.mixerPartialNew')
+      WITH (
+        noMixer varchar(50) '$.noMixer',
+        noSak   int         '$.noSak',
+        berat   decimal(18,3) '$.berat'
+      )
+    ),
+    numbered AS (
+      SELECT
+        NewNo = CONCAT('T.', RIGHT(REPLICATE('0',10) + CAST(@nextM + rn AS varchar(10)), 10)),
+        noMixer, noSak, berat
+      FROM src
     )
-  ),
-  numbered AS (
-    SELECT
-      NewNo = CONCAT('T.', RIGHT(REPLICATE('0',10) + CAST(@nextM + rn AS varchar(10)), 10)),
-      noMixer, noSak, berat
-    FROM src
-  )
-  INSERT INTO dbo.MixerPartial (NoMixerPartial, NoMixer, NoSak, Berat)
-  OUTPUT INSERTED.NoMixerPartial INTO @mixNew(NoMixerPartial)
-  SELECT NewNo, noMixer, noSak, berat
-  FROM numbered;
+    INSERT INTO dbo.MixerPartial (NoMixerPartial, NoMixer, NoSak, Berat)
+    OUTPUT INSERTED.NoMixerPartial INTO @mixNew(NoMixerPartial)
+    SELECT NewNo, noMixer, noSak, berat
+    FROM numbered;
 
-  INSERT INTO dbo.BrokerProduksiInputMixerPartial (NoProduksi, NoMixerPartial)
-  SELECT @no, n.NoMixerPartial
-  FROM @mixNew n;
+    INSERT INTO dbo.BrokerProduksiInputMixerPartial (NoProduksi, NoMixerPartial)
+    SELECT @no, n.NoMixerPartial
+    FROM @mixNew n;
 
-  -- ⬇️ PERBAIKAN: Hitung total partial (existing + new) vs berat awal
-  ;WITH existingPartials AS (
-    SELECT 
-      mp.NoMixer, 
-      mp.NoSak, 
-      SUM(ISNULL(mp.Berat, 0)) AS TotalBeratPartialExisting
-    FROM dbo.MixerPartial mp WITH (NOLOCK)
-    WHERE mp.NoMixerPartial NOT IN (SELECT NoMixerPartial FROM @mixNew)
-    GROUP BY mp.NoMixer, mp.NoSak
-  ),
-  newPartials AS (
-    SELECT 
-      noMixer, 
-      noSak, 
-      SUM(berat) AS TotalBeratPartialNew
-    FROM OPENJSON(@jsPartials, '$.mixerPartialNew')
-    WITH (
-      noMixer varchar(50) '$.noMixer',
-      noSak   int         '$.noSak',
-      berat   decimal(18,3) '$.berat'
+    -- Update IsPartial & DateUsage for Mixer_d
+    ;WITH existingPartials AS (
+      SELECT 
+        mp.NoMixer, 
+        mp.NoSak, 
+        SUM(ISNULL(mp.Berat, 0)) AS TotalBeratPartialExisting
+      FROM dbo.MixerPartial mp WITH (NOLOCK)
+      WHERE mp.NoMixerPartial NOT IN (SELECT NoMixerPartial FROM @mixNew)
+      GROUP BY mp.NoMixer, mp.NoSak
+    ),
+    newPartials AS (
+      SELECT 
+        noMixer, 
+        noSak, 
+        SUM(berat) AS TotalBeratPartialNew
+      FROM OPENJSON(@jsPartials, '$.mixerPartialNew')
+      WITH (
+        noMixer varchar(50) '$.noMixer',
+        noSak   int         '$.noSak',
+        berat   decimal(18,3) '$.berat'
+      )
+      GROUP BY noMixer, noSak
     )
-    GROUP BY noMixer, noSak
-  )
-  UPDATE d
-  SET
-    d.IsPartial = 1,
-    d.DateUsage = CASE 
-      -- Jika (Berat - total existing partial - total new partial) <= 0, maka habis
-      WHEN (d.Berat - ISNULL(ep.TotalBeratPartialExisting, 0) - ISNULL(np.TotalBeratPartialNew, 0)) <= 0 
-      THEN @tglProduksi 
-      ELSE d.DateUsage 
-    END
-  FROM dbo.Mixer_d d
-  LEFT JOIN existingPartials ep 
-    ON ep.NoMixer = d.NoMixer AND ep.NoSak = d.NoSak
-  INNER JOIN newPartials np 
-    ON np.noMixer = d.NoMixer AND np.noSak = d.NoSak;
-END;
+    UPDATE d
+    SET
+      d.IsPartial = 1,
+      -- ✅ FIX: Add tolerance of 0.001 kg (1 gram) for floating point comparison
+      d.DateUsage = CASE 
+        WHEN (d.Berat - ISNULL(ep.TotalBeratPartialExisting, 0) - ISNULL(np.TotalBeratPartialNew, 0)) <= 0.001
+        THEN @tglProduksi 
+        ELSE d.DateUsage 
+      END
+    FROM dbo.Mixer_d d
+    LEFT JOIN existingPartials ep 
+      ON ep.NoMixer = d.NoMixer AND ep.NoSak = d.NoSak
+    INNER JOIN newPartials np 
+      ON np.noMixer = d.NoMixer AND np.noSak = d.NoSak;
+  END;
 
- /* ===============================
-   REJECT PARTIAL (BK.##########)
-   =============================== */
-IF EXISTS (SELECT 1 FROM OPENJSON(@jsPartials, '$.rejectPartialNew'))
-BEGIN
-  DECLARE @nextRj int = ISNULL((
-    SELECT MAX(TRY_CAST(RIGHT(NoRejectPartial,10) AS int))
-    FROM dbo.RejectV2Partial WITH (UPDLOCK, HOLDLOCK)
-    WHERE NoRejectPartial LIKE 'BK.%'
-  ), 0);
 
-  ;WITH src AS (
-    SELECT
-      noReject,
-      berat,
-      ROW_NUMBER() OVER (ORDER BY (SELECT 1)) AS rn
-    FROM OPENJSON(@jsPartials, '$.rejectPartialNew')
-    WITH (
-      noReject varchar(50) '$.noReject',
-      berat    decimal(18,3) '$.berat'
+  /* ===============================
+     REJECT PARTIAL (BK.##########)
+     =============================== */
+  IF EXISTS (SELECT 1 FROM OPENJSON(@jsPartials, '$.rejectPartialNew'))
+  BEGIN
+    DECLARE @nextRj int = ISNULL((
+      SELECT MAX(TRY_CAST(RIGHT(NoRejectPartial,10) AS int))
+      FROM dbo.RejectV2Partial WITH (UPDLOCK, HOLDLOCK)
+      WHERE NoRejectPartial LIKE 'BK.%'
+    ), 0);
+
+    ;WITH src AS (
+      SELECT
+        noReject,
+        berat,
+        ROW_NUMBER() OVER (ORDER BY (SELECT 1)) AS rn
+      FROM OPENJSON(@jsPartials, '$.rejectPartialNew')
+      WITH (
+        noReject varchar(50) '$.noReject',
+        berat    decimal(18,3) '$.berat'
+      )
+    ),
+    numbered AS (
+      SELECT
+        NewNo = CONCAT('BK.', RIGHT(REPLICATE('0',10) + CAST(@nextRj + rn AS varchar(10)), 10)),
+        noReject, berat
+      FROM src
     )
-  ),
-  numbered AS (
-    SELECT
-      NewNo = CONCAT('BK.', RIGHT(REPLICATE('0',10) + CAST(@nextRj + rn AS varchar(10)), 10)),
-      noReject, berat
-    FROM src
-  )
-  INSERT INTO dbo.RejectV2Partial (NoRejectPartial, NoReject, Berat)
-  OUTPUT INSERTED.NoRejectPartial INTO @rejNew(NoRejectPartial)
-  SELECT NewNo, noReject, berat
-  FROM numbered;
+    INSERT INTO dbo.RejectV2Partial (NoRejectPartial, NoReject, Berat)
+    OUTPUT INSERTED.NoRejectPartial INTO @rejNew(NoRejectPartial)
+    SELECT NewNo, noReject, berat
+    FROM numbered;
 
-  INSERT INTO dbo.BrokerProduksiInputRejectPartial (NoProduksi, NoRejectPartial)
-  SELECT @no, n.NoRejectPartial
-  FROM @rejNew n;
+    INSERT INTO dbo.BrokerProduksiInputRejectPartial (NoProduksi, NoRejectPartial)
+    SELECT @no, n.NoRejectPartial
+    FROM @rejNew n;
 
-  -- ⬇️ PERBAIKAN: Hitung total partial (existing + new) vs berat awal
-  ;WITH existingPartials AS (
-    SELECT 
-      rp.NoReject,
-      SUM(ISNULL(rp.Berat, 0)) AS TotalBeratPartialExisting
-    FROM dbo.RejectV2Partial rp WITH (NOLOCK)
-    WHERE rp.NoRejectPartial NOT IN (SELECT NoRejectPartial FROM @rejNew)
-    GROUP BY rp.NoReject
-  ),
-  newPartials AS (
-    SELECT 
-      noReject,
-      SUM(berat) AS TotalBeratPartialNew
-    FROM OPENJSON(@jsPartials, '$.rejectPartialNew')
-    WITH (
-      noReject varchar(50) '$.noReject',
-      berat    decimal(18,3) '$.berat'
+    -- Update IsPartial & DateUsage for RejectV2
+    ;WITH existingPartials AS (
+      SELECT 
+        rp.NoReject,
+        SUM(ISNULL(rp.Berat, 0)) AS TotalBeratPartialExisting
+      FROM dbo.RejectV2Partial rp WITH (NOLOCK)
+      WHERE rp.NoRejectPartial NOT IN (SELECT NoRejectPartial FROM @rejNew)
+      GROUP BY rp.NoReject
+    ),
+    newPartials AS (
+      SELECT 
+        noReject,
+        SUM(berat) AS TotalBeratPartialNew
+      FROM OPENJSON(@jsPartials, '$.rejectPartialNew')
+      WITH (
+        noReject varchar(50) '$.noReject',
+        berat    decimal(18,3) '$.berat'
+      )
+      GROUP BY noReject
     )
-    GROUP BY noReject
-  )
-  UPDATE r
-  SET 
-    r.IsPartial = 1,
-    r.DateUsage = CASE 
-      -- Jika (Berat - total existing partial - total new partial) <= 0, maka habis
-      WHEN (r.Berat - ISNULL(ep.TotalBeratPartialExisting, 0) - ISNULL(np.TotalBeratPartialNew, 0)) <= 0 
-      THEN @tglProduksi 
-      ELSE r.DateUsage 
-    END
-  FROM dbo.RejectV2 r
-  LEFT JOIN existingPartials ep ON ep.NoReject = r.NoReject
-  INNER JOIN newPartials np ON np.noReject = r.NoReject;
-  
-  -- Note: RejectV2 tidak punya kolom IsPartial
-END;
+    UPDATE r
+    SET 
+      r.IsPartial = 1,
+      -- ✅ FIX: Add tolerance of 0.001 kg (1 gram) for floating point comparison
+      r.DateUsage = CASE 
+        WHEN (r.Berat - ISNULL(ep.TotalBeratPartialExisting, 0) - ISNULL(np.TotalBeratPartialNew, 0)) <= 0.001
+        THEN @tglProduksi 
+        ELSE r.DateUsage 
+      END
+    FROM dbo.RejectV2 r
+    LEFT JOIN existingPartials ep ON ep.NoReject = r.NoReject
+    INNER JOIN newPartials np ON np.noReject = r.NoReject;
+  END;
 
   -- Release the applock
   EXEC sp_releaseapplock @Resource = 'SEQ_PARTIALS', @DbPrincipal = 'public';
@@ -2303,7 +2301,6 @@ END;
     mixerPartialNew:    (rs.recordsets?.[4] || []).map((r) => r.NoMixerPartial),
     rejectPartialNew:   (rs.recordsets?.[5] || []).map((r) => r.NoRejectPartial),
   };
-
 
   return { summary, createdLists };
 }

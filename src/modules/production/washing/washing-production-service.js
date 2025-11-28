@@ -1284,14 +1284,14 @@ async function _insertPartialsWithTx(tx, noProduksi, lists) {
   DECLARE @gilNew TABLE(NoGilinganPartial varchar(50));
 
   /* =========================
-     BB PARTIAL (WP.##########)
+     BB PARTIAL (P.##########)
      ========================= */
   IF EXISTS (SELECT 1 FROM OPENJSON(@jsPartials, '$.bbPartialNew'))
   BEGIN
     DECLARE @nextBB int = ISNULL((
       SELECT MAX(TRY_CAST(RIGHT(NoBBPartial,10) AS int))
       FROM dbo.BahanBakuPartial WITH (UPDLOCK, HOLDLOCK)
-      WHERE NoBBPartial LIKE 'WP.%'
+      WHERE NoBBPartial LIKE 'P.%'
     ), 0);
 
     ;WITH src AS (
@@ -1311,7 +1311,7 @@ async function _insertPartialsWithTx(tx, noProduksi, lists) {
     ),
     numbered AS (
       SELECT
-        NewNo = CONCAT('WP.', RIGHT(REPLICATE('0',10) + CAST(@nextBB + rn AS varchar(10)), 10)),
+        NewNo = CONCAT('P.', RIGHT(REPLICATE('0',10) + CAST(@nextBB + rn AS varchar(10)), 10)),
         noBahanBaku, noPallet, noSak, berat
       FROM src
     )
@@ -1371,14 +1371,14 @@ async function _insertPartialsWithTx(tx, noProduksi, lists) {
   END;
 
   /* ==============================
-     GILINGAN PARTIAL (WY.##########)
+     GILINGAN PARTIAL (Y.##########)
      ============================== */
   IF EXISTS (SELECT 1 FROM OPENJSON(@jsPartials, '$.gilinganPartialNew'))
   BEGIN
     DECLARE @nextG int = ISNULL((
       SELECT MAX(TRY_CAST(RIGHT(NoGilinganPartial,10) AS int))
       FROM dbo.GilinganPartial WITH (UPDLOCK, HOLDLOCK)
-      WHERE NoGilinganPartial LIKE 'WY.%'
+      WHERE NoGilinganPartial LIKE 'Y.%'
     ), 0);
 
     ;WITH src AS (
@@ -1394,7 +1394,7 @@ async function _insertPartialsWithTx(tx, noProduksi, lists) {
     ),
     numbered AS (
       SELECT
-        NewNo = CONCAT('WY.', RIGHT(REPLICATE('0',10) + CAST(@nextG + rn AS varchar(10)), 10)),
+        NewNo = CONCAT('Y.', RIGHT(REPLICATE('0',10) + CAST(@nextG + rn AS varchar(10)), 10)),
         noGilingan, berat
       FROM src
     )

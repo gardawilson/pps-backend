@@ -575,6 +575,7 @@ exports.updateBrokerCascade = async (payload) => {
 
 
 // Delete 1 header + outputs + details (safe)
+// Delete 1 Broker header + outputs + details + partials (safe)
 exports.deleteBrokerCascade = async (nobroker) => {
   const pool = await poolPromise;
   const tx = new sql.Transaction(pool);
@@ -582,7 +583,8 @@ exports.deleteBrokerCascade = async (nobroker) => {
   const NoBroker = (nobroker || '').toString().trim();
   if (!NoBroker) {
     const e = new Error('NoBroker is required');
-    e.statusCode = 400; throw e;
+    e.statusCode = 400;
+    throw e;
   }
 
   try {
@@ -597,9 +599,11 @@ exports.deleteBrokerCascade = async (nobroker) => {
         FROM dbo.Broker_h WITH (UPDLOCK, HOLDLOCK)
         WHERE NoBroker = @NoBroker
       `);
+
     if (exist.recordset.length === 0) {
       const e = new Error(`NoBroker ${NoBroker} not found`);
-      e.statusCode = 404; throw e;
+      e.statusCode = 404;
+      throw e;
     }
 
     // 1) Block if any detail is already used
@@ -611,21 +615,60 @@ exports.deleteBrokerCascade = async (nobroker) => {
         FROM dbo.Broker_d WITH (UPDLOCK, HOLDLOCK)
         WHERE NoBroker = @NoBroker AND DateUsage IS NOT NULL
       `);
+
     if (used.recordset.length > 0) {
-      const e = new Error('Cannot delete: some details are already used (DateUsage IS NOT NULL).');
-      e.statusCode = 409; throw e;
+      const e = new Error(
+        'Cannot delete: some details are already used (DateUsage IS NOT NULL).'
+      );
+      e.statusCode = 409;
+      throw e;
     }
 
     // 2) Delete outputs first (avoid FK)
     await new sql.Request(tx)
       .input('NoBroker', sql.VarChar, NoBroker)
-      .query(`DELETE FROM dbo.BrokerProduksiOutput WHERE NoBroker = @NoBroker`);
+      .query(`
+        DELETE FROM dbo.BrokerProduksiOutput
+        WHERE NoBroker = @NoBroker
+      `);
 
     await new sql.Request(tx)
       .input('NoBroker', sql.VarChar, NoBroker)
-      .query(`DELETE FROM dbo.BongkarSusunOutputBroker WHERE NoBroker = @NoBroker`);
+      .query(`
+        DELETE FROM dbo.BongkarSusunOutputBroker
+        WHERE NoBroker = @NoBroker
+      `);
 
-    // 3) Delete details (only the ones not used)
+    // 3) Delete partial INPUT usages that reference BrokerPartial for this NoBroker
+    const delBrokerInputPartial = await new sql.Request(tx)
+      .input('NoBroker', sql.VarChar, NoBroker)
+      .query(`
+        DELETE bip
+        FROM dbo.BrokerProduksiInputBrokerPartial AS bip
+        INNER JOIN dbo.BrokerPartial AS bp
+          ON bp.NoBrokerPartial = bip.NoBrokerPartial
+        WHERE bp.NoBroker = @NoBroker
+      `);
+
+    const delMixerInputPartial = await new sql.Request(tx)
+      .input('NoBroker', sql.VarChar, NoBroker)
+      .query(`
+        DELETE mip
+        FROM dbo.MixerProduksiInputBrokerPartial AS mip
+        INNER JOIN dbo.BrokerPartial AS bp
+          ON bp.NoBrokerPartial = mip.NoBrokerPartial
+        WHERE bp.NoBroker = @NoBroker
+      `);
+
+    // 4) Delete partial rows themselves
+    const delPartial = await new sql.Request(tx)
+      .input('NoBroker', sql.VarChar, NoBroker)
+      .query(`
+        DELETE FROM dbo.BrokerPartial
+        WHERE NoBroker = @NoBroker
+      `);
+
+    // 5) Delete details (only the ones not used)
     const delDet = await new sql.Request(tx)
       .input('NoBroker', sql.VarChar, NoBroker)
       .query(`
@@ -633,10 +676,13 @@ exports.deleteBrokerCascade = async (nobroker) => {
         WHERE NoBroker = @NoBroker AND DateUsage IS NULL
       `);
 
-    // 4) Delete header
+    // 6) Delete header
     const delHead = await new sql.Request(tx)
       .input('NoBroker', sql.VarChar, NoBroker)
-      .query(`DELETE FROM dbo.Broker_h WHERE NoBroker = @NoBroker`);
+      .query(`
+        DELETE FROM dbo.Broker_h
+        WHERE NoBroker = @NoBroker
+      `);
 
     await tx.commit();
 
@@ -646,10 +692,18 @@ exports.deleteBrokerCascade = async (nobroker) => {
         header: delHead.rowsAffected?.[0] ?? 0,
         details: delDet.rowsAffected?.[0] ?? 0,
         outputs: 'BrokerProduksiOutput + BongkarSusunOutputBroker',
+        partials: {
+          brokerPartial: delPartial.rowsAffected?.[0] ?? 0,
+          brokerInputPartial: delBrokerInputPartial.rowsAffected?.[0] ?? 0,
+          mixerInputPartial: delMixerInputPartial.rowsAffected?.[0] ?? 0,
+        },
       },
     };
   } catch (e) {
-    try { await tx.rollback(); } catch (_) {}
+    try {
+      await tx.rollback();
+    } catch (_) {}
+
     // Map FK constraint error
     if (e.number === 547) {
       e.statusCode = 409;
@@ -657,7 +711,8 @@ exports.deleteBrokerCascade = async (nobroker) => {
     }
     throw e;
   }
-}
+};
+
 
 
 exports.getPartialInfoByBrokerAndSak = async (nobroker, nosak) => {

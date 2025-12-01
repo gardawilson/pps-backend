@@ -34,8 +34,6 @@ const productionCrusherRoutes = require('./modules/production/crusher/crusher-pr
 const crusherTypeRoutes = require('./modules/master-crusher/master-crusher-routes');
 
 
-
-
 const mstMesinRoutes = require('./modules/master-mesin/master-mesin-routes');
 const mstOperatorRoutes = require('./modules/master-operator/master-operator-routes');
 
@@ -43,9 +41,20 @@ const mstOperatorRoutes = require('./modules/master-operator/master-operator-rou
 const checkOverlapRoutes = require('./modules/production/overlap/production-overlap-routes');
 
 
+const labelGilinganRoutes = require('./modules/label/gilingan/gilingan-routes');
+
+const labelMixerRoutes = require('./modules/label/mixer/mixer-routes');
 
 
+const productionMixerRoutes = require('./modules/production/mixer/mixer-production-routes');
 
+const mixerTypeRoutes = require('./modules/master-mixer/mixer-type-routes');
+
+
+const gilinganTypeRoutes = require('./modules/master-gilingan/gilingan-type-routes');
+
+
+const productionGilinganRoutes = require('./modules/production/gilingan/gilingan-production-routes');
 
 
 
@@ -91,6 +100,22 @@ app.use('/api/mst-mesin', mstMesinRoutes);
 app.use('/api/mst-operator', mstOperatorRoutes);
 
 app.use('/api/production', checkOverlapRoutes);
+
+app.use('/api/', labelGilinganRoutes);
+
+app.use('/api/', labelMixerRoutes);
+
+app.use('/api/production', productionMixerRoutes);
+
+app.use('/api/mixer-type', mixerTypeRoutes);
+
+
+app.use('/api/gilingan-type', gilinganTypeRoutes);
+
+
+app.use('/api/production', productionGilinganRoutes);
+
+
 
 
 

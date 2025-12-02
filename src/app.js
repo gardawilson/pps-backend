@@ -57,6 +57,8 @@ const gilinganTypeRoutes = require('./modules/master-gilingan/gilingan-type-rout
 const productionGilinganRoutes = require('./modules/production/gilingan/gilingan-production-routes');
 
 
+const labelFurnitureWipRoutes = require('./modules/label/furniture-wip/furniture-wip-routes');
+
 
 const app = express();
 
@@ -109,11 +111,12 @@ app.use('/api/production', productionMixerRoutes);
 
 app.use('/api/mixer-type', mixerTypeRoutes);
 
-
 app.use('/api/gilingan-type', gilinganTypeRoutes);
 
-
 app.use('/api/production', productionGilinganRoutes);
+
+app.use('/api/', labelFurnitureWipRoutes);
+
 
 
 

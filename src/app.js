@@ -56,8 +56,28 @@ const gilinganTypeRoutes = require('./modules/master-gilingan/gilingan-type-rout
 
 const productionGilinganRoutes = require('./modules/production/gilingan/gilingan-production-routes');
 
-
 const labelFurnitureWipRoutes = require('./modules/label/furniture-wip/furniture-wip-routes');
+
+const productionHotStampRoutes = require('./modules/production/hot-stamp/hot-stamp-production-routes');
+
+const productionKeyFittingRoutes = require('./modules/production/key-fitting/key-fitting-production-routes');
+
+const productionSpannerRoutes = require('./modules/production/spanner/spanner-production-routes');
+
+const productionReturnRoutes = require('./modules/production/return/return-production-routes');
+
+const furnitureWipTypeRoutes = require('./modules/master-furniture-wip/furniture-wip-type-routes');
+
+const labelPackingRoutes = require('./modules/label/packing/packing-routes');
+
+const productionPackingRoutes = require('./modules/production/packing/packing-production-routes');
+
+
+const packingTypeRoutes = require('./modules/master-packing/packing-master-routes');
+
+
+
+
 
 
 const app = express();
@@ -116,6 +136,20 @@ app.use('/api/gilingan-type', gilinganTypeRoutes);
 app.use('/api/production', productionGilinganRoutes);
 
 app.use('/api/', labelFurnitureWipRoutes);
+
+app.use('/api/production', productionHotStampRoutes);
+app.use('/api/production', productionKeyFittingRoutes);
+app.use('/api/production', productionSpannerRoutes);
+app.use('/api/production', productionReturnRoutes);
+
+app.use('/api/furniture-wip-type', furnitureWipTypeRoutes);
+
+app.use('/api/', labelPackingRoutes);
+
+app.use('/api/production', productionPackingRoutes);
+
+
+app.use('/api/packing-type', packingTypeRoutes);
 
 
 

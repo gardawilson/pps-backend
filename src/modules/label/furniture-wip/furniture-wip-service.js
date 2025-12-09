@@ -29,9 +29,45 @@ exports.getAll = async ({ page, limit, search }) => {
       f.IsPartial,
       f.IdWarna,
       f.Blok,
-      f.IdLokasi
+      f.IdLokasi,
+
+      -- 🔗 TIPE SUMBER (HOTSTAMPING / PASANG_KUNCI / BONGKAR_SUSUN / RETUR / SPANNER / INJECT)
+      CASE
+        WHEN MAX(hsmap.NoProduksi)     IS NOT NULL THEN 'HOTSTAMPING'
+        WHEN MAX(pkmap.NoProduksi)     IS NOT NULL THEN 'PASANG_KUNCI'
+        WHEN MAX(bsmap.NoBongkarSusun) IS NOT NULL THEN 'BONGKAR_SUSUN'
+        WHEN MAX(retmap.NoRetur)       IS NOT NULL THEN 'RETUR'
+        WHEN MAX(spmap.NoProduksi)     IS NOT NULL THEN 'SPANNER'
+        WHEN MAX(injmap.NoProduksi)    IS NOT NULL THEN 'INJECT'
+        ELSE NULL
+      END AS OutputType,
+
+      -- 🔗 KODE SUMBER (BH./BI./BG./L./BJ./S.)
+      MAX(
+        COALESCE(
+          hsmap.NoProduksi,
+          pkmap.NoProduksi,
+          spmap.NoProduksi,
+          injmap.NoProduksi,
+          bsmap.NoBongkarSusun,
+          retmap.NoRetur
+        )
+      ) AS OutputCode,
+
+      -- 🔗 NAMA MESIN / NAMA PEMBELI / 'Bongkar Susun'
+      MAX(
+        COALESCE(
+          mHs.NamaMesin,
+          mPk.NamaMesin,
+          mSp.NamaMesin,
+          mInj.NamaMesin,
+          CASE WHEN bsmap.NoBongkarSusun IS NOT NULL THEN 'Bongkar Susun' END,
+          pemb.NamaPembeli
+        )
+      ) AS OutputNamaMesin
 
     FROM [dbo].[FurnitureWIP] f
+
     -- 🔹 Aggregate partial per NoFurnitureWIP
     LEFT JOIN (
       SELECT
@@ -46,6 +82,63 @@ exports.getAll = async ({ page, limit, search }) => {
     LEFT JOIN [dbo].[MstCabinetWIP] cw
       ON cw.IdCabinetWIP = f.IdFurnitureWIP
 
+    ----------------------------------------------------------------------
+    -- 🔗 MAPPING HOT STAMPING (BH.)
+    ----------------------------------------------------------------------
+    LEFT JOIN [dbo].[HotStampingOutputLabelFWIP] hsmap
+           ON hsmap.NoFurnitureWIP = f.NoFurnitureWIP
+    LEFT JOIN [dbo].[HotStamping_h] hsh
+           ON hsh.NoProduksi = hsmap.NoProduksi
+    LEFT JOIN [dbo].[MstMesin] mHs
+           ON mHs.IdMesin = hsh.IdMesin
+
+    ----------------------------------------------------------------------
+    -- 🔗 MAPPING PASANG KUNCI (BI.)
+    ----------------------------------------------------------------------
+    LEFT JOIN [dbo].[PasangKunciOutputLabelFWIP] pkmap
+           ON pkmap.NoFurnitureWIP = f.NoFurnitureWIP
+    LEFT JOIN [dbo].[PasangKunci_h] pkh
+           ON pkh.NoProduksi = pkmap.NoProduksi
+    LEFT JOIN [dbo].[MstMesin] mPk
+           ON mPk.IdMesin = pkh.IdMesin
+
+    ----------------------------------------------------------------------
+    -- 🔗 MAPPING BONGKAR SUSUN (BG.)
+    --     Tidak ada mesin → NamaMesin = 'Bongkar Susun'
+    ----------------------------------------------------------------------
+    LEFT JOIN [dbo].[BongkarSusunOutputFurnitureWIP] bsmap
+           ON bsmap.NoFurnitureWIP = f.NoFurnitureWIP
+
+    ----------------------------------------------------------------------
+    -- 🔗 MAPPING RETUR (L.) → pakai NamaPembeli
+    ----------------------------------------------------------------------
+    LEFT JOIN [dbo].[BJReturFurnitureWIP_d] retmap
+           ON retmap.NoFurnitureWIP = f.NoFurnitureWIP
+    LEFT JOIN [dbo].[BJRetur_h] bjh
+           ON bjh.NoRetur = retmap.NoRetur
+    LEFT JOIN [dbo].[MstPembeli] pemb
+           ON pemb.IdPembeli = bjh.IdPembeli
+
+    ----------------------------------------------------------------------
+    -- 🔗 MAPPING SPANNER (BJ.)
+    ----------------------------------------------------------------------
+    LEFT JOIN [dbo].[SpannerOutputLabelFWIP] spmap
+           ON spmap.NoFurnitureWIP = f.NoFurnitureWIP
+    LEFT JOIN [dbo].[Spanner_h] sph
+           ON sph.NoProduksi = spmap.NoProduksi
+    LEFT JOIN [dbo].[MstMesin] mSp
+           ON mSp.IdMesin = sph.IdMesin
+
+    ----------------------------------------------------------------------
+    -- 🔗 MAPPING INJECT PRODUKSI (S.)
+    ----------------------------------------------------------------------
+    LEFT JOIN [dbo].[InjectProduksiOutputFurnitureWIP] injmap
+           ON injmap.NoFurnitureWIP = f.NoFurnitureWIP
+    LEFT JOIN [dbo].[InjectProduksi_h] injh
+           ON injh.NoProduksi = injmap.NoProduksi
+    LEFT JOIN [dbo].[MstMesin] mInj
+           ON mInj.IdMesin = injh.IdMesin
+
     WHERE 1=1
       AND f.DateUsage IS NULL
       ${
@@ -56,6 +149,21 @@ exports.getAll = async ({ page, limit, search }) => {
                OR CONVERT(VARCHAR(20), f.IdLokasi) LIKE @search
                OR CONVERT(VARCHAR(20), f.IdFurnitureWIP) LIKE @search
                OR ISNULL(cw.Nama,'') LIKE @search
+
+               -- cari berdasarkan kode sumber
+               OR ISNULL(hsmap.NoProduksi,'')     LIKE @search
+               OR ISNULL(pkmap.NoProduksi,'')     LIKE @search
+               OR ISNULL(bsmap.NoBongkarSusun,'') LIKE @search
+               OR ISNULL(retmap.NoRetur,'')       LIKE @search
+               OR ISNULL(spmap.NoProduksi,'')     LIKE @search
+               OR ISNULL(injmap.NoProduksi,'')    LIKE @search
+
+               -- cari berdasarkan nama mesin / pembeli
+               OR ISNULL(mHs.NamaMesin,'')        LIKE @search
+               OR ISNULL(mPk.NamaMesin,'')        LIKE @search
+               OR ISNULL(mSp.NamaMesin,'')        LIKE @search
+               OR ISNULL(mInj.NamaMesin,'')       LIKE @search
+               OR ISNULL(pemb.NamaPembeli,'')     LIKE @search
              )`
           : ''
       }
@@ -79,6 +187,45 @@ exports.getAll = async ({ page, limit, search }) => {
     FROM [dbo].[FurnitureWIP] f
     LEFT JOIN [dbo].[MstCabinetWIP] cw
       ON cw.IdCabinetWIP = f.IdFurnitureWIP
+
+    LEFT JOIN [dbo].[HotStampingOutputLabelFWIP] hsmap
+           ON hsmap.NoFurnitureWIP = f.NoFurnitureWIP
+    LEFT JOIN [dbo].[HotStamping_h] hsh
+           ON hsh.NoProduksi = hsmap.NoProduksi
+    LEFT JOIN [dbo].[MstMesin] mHs
+           ON mHs.IdMesin = hsh.IdMesin
+
+    LEFT JOIN [dbo].[PasangKunciOutputLabelFWIP] pkmap
+           ON pkmap.NoFurnitureWIP = f.NoFurnitureWIP
+    LEFT JOIN [dbo].[PasangKunci_h] pkh
+           ON pkh.NoProduksi = pkmap.NoProduksi
+    LEFT JOIN [dbo].[MstMesin] mPk
+           ON mPk.IdMesin = pkh.IdMesin
+
+    LEFT JOIN [dbo].[BongkarSusunOutputFurnitureWIP] bsmap
+           ON bsmap.NoFurnitureWIP = f.NoFurnitureWIP
+
+    LEFT JOIN [dbo].[BJReturFurnitureWIP_d] retmap
+           ON retmap.NoFurnitureWIP = f.NoFurnitureWIP
+    LEFT JOIN [dbo].[BJRetur_h] bjh
+           ON bjh.NoRetur = retmap.NoRetur
+    LEFT JOIN [dbo].[MstPembeli] pemb
+           ON pemb.IdPembeli = bjh.IdPembeli
+
+    LEFT JOIN [dbo].[SpannerOutputLabelFWIP] spmap
+           ON spmap.NoFurnitureWIP = f.NoFurnitureWIP
+    LEFT JOIN [dbo].[Spanner_h] sph
+           ON sph.NoProduksi = spmap.NoProduksi
+    LEFT JOIN [dbo].[MstMesin] mSp
+           ON mSp.IdMesin = sph.IdMesin
+
+    LEFT JOIN [dbo].[InjectProduksiOutputFurnitureWIP] injmap
+           ON injmap.NoFurnitureWIP = f.NoFurnitureWIP
+    LEFT JOIN [dbo].[InjectProduksi_h] injh
+           ON injh.NoProduksi = injmap.NoProduksi
+    LEFT JOIN [dbo].[MstMesin] mInj
+           ON mInj.IdMesin = injh.IdMesin
+
     WHERE 1=1
       AND f.DateUsage IS NULL
       ${
@@ -89,6 +236,17 @@ exports.getAll = async ({ page, limit, search }) => {
                OR CONVERT(VARCHAR(20), f.IdLokasi) LIKE @search
                OR CONVERT(VARCHAR(20), f.IdFurnitureWIP) LIKE @search
                OR ISNULL(cw.Nama,'') LIKE @search
+               OR ISNULL(hsmap.NoProduksi,'')     LIKE @search
+               OR ISNULL(pkmap.NoProduksi,'')     LIKE @search
+               OR ISNULL(bsmap.NoBongkarSusun,'') LIKE @search
+               OR ISNULL(retmap.NoRetur,'')       LIKE @search
+               OR ISNULL(spmap.NoProduksi,'')     LIKE @search
+               OR ISNULL(injmap.NoProduksi,'')    LIKE @search
+               OR ISNULL(mHs.NamaMesin,'')        LIKE @search
+               OR ISNULL(mPk.NamaMesin,'')        LIKE @search
+               OR ISNULL(mSp.NamaMesin,'')        LIKE @search
+               OR ISNULL(mInj.NamaMesin,'')       LIKE @search
+               OR ISNULL(pemb.NamaPembeli,'')     LIKE @search
              )`
           : ''
       }
@@ -115,64 +273,293 @@ exports.getAll = async ({ page, limit, search }) => {
 
 
 function padLeft(num, width) {
-    const s = String(num);
-    return s.length >= width ? s : '0'.repeat(width - s.length) + s;
+  const s = String(num);
+  return s.length >= width ? s : '0'.repeat(width - s.length) + s;
+}
+
+// Generate next NoFurnitureWIP: e.g. 'BB.0000000002'
+async function generateNextNoFurnitureWip(
+  tx,
+  { prefix = 'BB.', width = 10 } = {}
+) {
+  const rq = new sql.Request(tx);
+  const q = `
+    SELECT TOP 1 f.NoFurnitureWIP
+    FROM [dbo].[FurnitureWIP] AS f WITH (UPDLOCK, HOLDLOCK)
+    WHERE f.NoFurnitureWIP LIKE @prefix + '%'
+    ORDER BY TRY_CONVERT(BIGINT, SUBSTRING(f.NoFurnitureWIP, LEN(@prefix) + 1, 50)) DESC,
+             f.NoFurnitureWIP DESC;
+  `;
+  const r = await rq.input('prefix', sql.VarChar, prefix).query(q);
+
+  let lastNum = 0;
+  if (r.recordset.length > 0) {
+    const last = r.recordset[0].NoFurnitureWIP;
+    const numericPart = last.substring(prefix.length);
+    lastNum = parseInt(numericPart, 10) || 0;
   }
-  
-  // Generate next NoFurnitureWIP: e.g. 'FW.0000000002'
-  // ⚠️ GANTI prefix 'FW.' kalau format NoFurnitureWIP kamu beda.
-  async function generateNextNoFurnitureWip(
-    tx,
-    { prefix = 'BB.', width = 10 } = {}
-  ) {
-    const rq = new sql.Request(tx);
+  const next = lastNum + 1;
+  return prefix + padLeft(next, width);
+}
+
+/**
+ * Helper: insert 1 row FurnitureWIP + mapping ke table output (HotStamp / BI / BG / L / BJ / S)
+ */
+async function insertSingleFurnitureWip({
+  tx,
+  header,
+  idFurnitureWip,
+  outputCode,
+  outputType,
+  mappingTable,
+}) {
+  // 1) Generate NoFurnitureWIP
+  const generatedNo = await generateNextNoFurnitureWip(tx, {
+    prefix: 'BB.', // ganti kalau prefix NoFurnitureWIP kamu berbeda
+    width: 10,
+  });
+
+  // Double-check uniqueness (rare)
+  const rqCheck = new sql.Request(tx);
+  const exist = await rqCheck
+    .input('NoFurnitureWIP', sql.VarChar, generatedNo)
+    .query(`
+      SELECT 1
+      FROM [dbo].[FurnitureWIP] WITH (UPDLOCK, HOLDLOCK)
+      WHERE NoFurnitureWIP = @NoFurnitureWIP
+    `);
+
+  const noFurnitureWip =
+    exist.recordset.length > 0
+      ? await generateNextNoFurnitureWip(tx, { prefix: 'BB.', width: 10 })
+      : generatedNo;
+
+  // 2) Insert header ke dbo.FurnitureWIP
+  const nowDateOnly = header.DateCreate || null; // null -> GETDATE() (date only)
+  const insertHeaderSql = `
+    INSERT INTO [dbo].[FurnitureWIP] (
+      NoFurnitureWIP,
+      DateCreate,
+      Pcs,
+      IdFurnitureWIP,
+      Berat,
+      IsPartial,
+      DateUsage,
+      IdWarna,
+      CreateBy,
+      DateTimeCreate,
+      Blok,
+      IdLokasi
+    )
+    VALUES (
+      @NoFurnitureWIP,
+      ${nowDateOnly ? '@DateCreate' : 'CONVERT(date, GETDATE())'},
+      @Pcs,
+      @IdFurnitureWIP,
+      @Berat,
+      @IsPartial,
+      NULL,
+      @IdWarna,
+      @CreateBy,
+      GETDATE(),
+      @Blok,
+      @IdLokasi
+    );
+  `;
+
+  const rqHeader = new sql.Request(tx);
+
+  // normalize IdLokasi
+  const rawIdLokasi = header.IdLokasi;
+  let idLokasiVal = null;
+  if (rawIdLokasi !== undefined && rawIdLokasi !== null) {
+    idLokasiVal = String(rawIdLokasi).trim();
+    if (idLokasiVal.length === 0) {
+      idLokasiVal = null;
+    }
+  }
+
+  rqHeader
+    .input('NoFurnitureWIP', sql.VarChar, noFurnitureWip)
+    .input('Pcs', sql.Decimal(18, 3), header.Pcs ?? null)
+    .input('IdFurnitureWIP', sql.Int, idFurnitureWip)
+    .input('Berat', sql.Decimal(18, 3), header.Berat ?? null)
+    .input('IsPartial', sql.Bit, header.IsPartial ?? 0)
+    .input('IdWarna', sql.Int, header.IdWarna ?? null)
+    .input('CreateBy', sql.VarChar, header.CreateBy ?? null)
+    .input('Blok', sql.VarChar, header.Blok ?? null)
+    .input('IdLokasi', sql.VarChar, idLokasiVal);
+
+  if (nowDateOnly) {
+    rqHeader.input('DateCreate', sql.Date, new Date(nowDateOnly));
+  }
+
+  await rqHeader.query(insertHeaderSql);
+
+  // 3) Insert mapping berdasarkan outputType / mappingTable
+  const rqMap = new sql.Request(tx)
+    .input('OutputCode', sql.VarChar, outputCode)
+    .input('NoFurnitureWIP', sql.VarChar, noFurnitureWip);
+
+  if (mappingTable === 'HotStampingOutputLabelFWIP') {
     const q = `
-      SELECT TOP 1 f.NoFurnitureWIP
-      FROM [dbo].[FurnitureWIP] AS f WITH (UPDLOCK, HOLDLOCK)
-      WHERE f.NoFurnitureWIP LIKE @prefix + '%'
-      ORDER BY TRY_CONVERT(BIGINT, SUBSTRING(f.NoFurnitureWIP, LEN(@prefix) + 1, 50)) DESC,
-               f.NoFurnitureWIP DESC;
+      INSERT INTO [dbo].[HotStampingOutputLabelFWIP] (NoProduksi, NoFurnitureWIP)
+      VALUES (@OutputCode, @NoFurnitureWIP);
     `;
-    const r = await rq.input('prefix', sql.VarChar, prefix).query(q);
-  
-    let lastNum = 0;
-    if (r.recordset.length > 0) {
-      const last = r.recordset[0].NoFurnitureWIP;
-      const numericPart = last.substring(prefix.length);
-      lastNum = parseInt(numericPart, 10) || 0;
-    }
-    const next = lastNum + 1;
-    return prefix + padLeft(next, width);
+    await rqMap.query(q);
+  } else if (mappingTable === 'PasangKunciOutputLabelFWIP') {
+    const q = `
+      INSERT INTO [dbo].[PasangKunciOutputLabelFWIP] (NoProduksi, NoFurnitureWIP)
+      VALUES (@OutputCode, @NoFurnitureWIP);
+    `;
+    await rqMap.query(q);
+  } else if (mappingTable === 'BongkarSusunOutputFurnitureWIP') {
+    const q = `
+      INSERT INTO [dbo].[BongkarSusunOutputFurnitureWIP] (NoBongkarSusun, NoFurnitureWIP)
+      VALUES (@OutputCode, @NoFurnitureWIP);
+    `;
+    await rqMap.query(q);
+  } else if (mappingTable === 'BJReturFurnitureWIP_d') {
+    const q = `
+      INSERT INTO [dbo].[BJReturFurnitureWIP_d] (NoRetur, NoFurnitureWIP)
+      VALUES (@OutputCode, @NoFurnitureWIP);
+    `;
+    await rqMap.query(q);
+  } else if (mappingTable === 'SpannerOutputLabelFWIP') {
+    const q = `
+      INSERT INTO [dbo].[SpannerOutputLabelFWIP] (NoProduksi, NoFurnitureWIP)
+      VALUES (@OutputCode, @NoFurnitureWIP);
+    `;
+    await rqMap.query(q);
+  } else if (mappingTable === 'InjectProduksiOutputFurnitureWIP') {
+    const q = `
+      INSERT INTO [dbo].[InjectProduksiOutputFurnitureWIP] (NoProduksi, NoFurnitureWIP)
+      VALUES (@OutputCode, @NoFurnitureWIP);
+    `;
+    await rqMap.query(q);
   }
-  
-  exports.createFurnitureWip = async (payload) => {
-    const pool = await poolPromise;
-    const tx = new sql.Transaction(pool);
-  
-    const header = payload?.header || {};
-    const outputCode = (payload?.outputCode || '').toString().trim();
-  
-    // ---- validation helper
-    const badReq = (msg) => {
-      const e = new Error(msg);
-      e.statusCode = 400;
-      return e;
-    };
-  
-    if (!header.IdFurnitureWIP) {
-      throw badReq('IdFurnitureWIP is required');
-    }
-  
-    // Wajib link ke salah satu sumber label (prefix-based)
-    if (!outputCode) {
-      throw badReq('outputCode is required (BH., BI., BG., L., etc.)');
-    }
-  
-    let outputType = null;
-    let mappingTable = null;
-  
- // Prefix rules (updated)
- if (outputCode.startsWith('BH.')) {
+
+  // Return header shape yang dikirim ke controller
+  return {
+    NoFurnitureWIP: noFurnitureWip,
+    DateCreate: nowDateOnly || 'GETDATE()',
+    Pcs: header.Pcs ?? null,
+    IdFurnitureWIP: idFurnitureWip,
+    Berat: header.Berat ?? null,
+    IsPartial: header.IsPartial ?? 0,
+    IdWarna: header.IdWarna ?? null,
+    CreateBy: header.CreateBy ?? null,
+    Blok: header.Blok ?? null,
+    IdLokasi: header.IdLokasi ?? null,
+    OutputCode: outputCode,
+    OutputType: outputType,
+  };
+}
+
+/**
+ * Helper khusus: INJECT tanpa IdFurnitureWIP → multi-label
+ * - Cari InjectProduksi_h by NoProduksi
+ * - Cari semua mapping di CetakanWarnaToFurnitureWIP_d
+ * - Loop insertSingleFurnitureWip untuk tiap IdFurnitureWIP
+ */
+async function createFromInjectMapping({
+  tx,
+  header,
+  outputCode,
+  mappingTable,
+  outputType,
+  badReq,
+}) {
+  // 1) Ambil InjectProduksi_h
+  const rqInject = new sql.Request(tx);
+  rqInject.input('NoProduksi', sql.VarChar, outputCode);
+
+  const injRes = await rqInject.query(`
+    SELECT TOP 1
+      IdCetakan,
+      IdWarna,
+      IdFurnitureMaterial
+    FROM dbo.InjectProduksi_h WITH (UPDLOCK, HOLDLOCK)
+    WHERE NoProduksi = @NoProduksi
+      AND IdCetakan IS NOT NULL;
+  `);
+
+  if (injRes.recordset.length === 0) {
+    throw badReq(
+      `InjectProduksi_h ${outputCode} not found or IdCetakan is NULL`
+    );
+  }
+
+  const inj = injRes.recordset[0];
+
+  // 2) Ambil mapping ke FurnitureWIP
+  const rqMap = new sql.Request(tx);
+  rqMap
+    .input('IdCetakan', sql.Int, inj.IdCetakan)
+    .input('IdWarna', sql.Int, inj.IdWarna)
+    .input('IdFurnitureMaterial', sql.Int, inj.IdFurnitureMaterial);
+
+  const mapRes = await rqMap.query(`
+    SELECT IdFurnitureWIP
+    FROM dbo.CetakanWarnaToFurnitureWIP_d
+    WHERE IdCetakan = @IdCetakan
+      AND IdWarna = @IdWarna
+      AND (
+        (IdFurnitureMaterial IS NULL AND @IdFurnitureMaterial = 0)
+        OR IdFurnitureMaterial = @IdFurnitureMaterial
+      );
+  `);
+
+  if (mapRes.recordset.length === 0) {
+    throw badReq(
+      `No FurnitureWIP mapping found for Inject ${outputCode} (IdCetakan=${inj.IdCetakan}, IdWarna=${inj.IdWarna})`
+    );
+  }
+
+  const createdHeaders = [];
+
+  for (const row of mapRes.recordset) {
+    const idFwip = row.IdFurnitureWIP;
+
+    const created = await insertSingleFurnitureWip({
+      tx,
+      header,
+      idFurnitureWip: idFwip,
+      outputCode,
+      outputType,
+      mappingTable,
+    });
+
+    createdHeaders.push(created);
+  }
+
+  return createdHeaders;
+}
+
+exports.createFurnitureWip = async (payload) => {
+  const pool = await poolPromise;
+  const tx = new sql.Transaction(pool);
+
+  const header = payload?.header || {};
+  const outputCode = (payload?.outputCode || '').toString().trim();
+
+  // ---- validation helper
+  const badReq = (msg) => {
+    const e = new Error(msg);
+    e.statusCode = 400;
+    return e;
+  };
+
+  // Wajib link ke salah satu sumber label (prefix-based)
+  if (!outputCode) {
+    throw badReq('outputCode is required (BH., BI., BG., L., BJ., S., etc.)');
+  }
+
+  let outputType = null;
+  let mappingTable = null;
+
+  // Prefix rules (updated)
+  if (outputCode.startsWith('BH.')) {
     outputType = 'HOTSTAMPING';
     mappingTable = 'HotStampingOutputLabelFWIP';
   } else if (outputCode.startsWith('BI.')) {
@@ -184,10 +571,10 @@ function padLeft(num, width) {
   } else if (outputCode.startsWith('L.')) {
     outputType = 'RETUR';
     mappingTable = 'BJReturFurnitureWIP_d';
-  } else if (outputCode.startsWith('BJ.')) {            // 🔹 NEW
+  } else if (outputCode.startsWith('BJ.')) {
     outputType = 'SPANNER';
     mappingTable = 'SpannerOutputLabelFWIP';
-  } else if (outputCode.startsWith('S.')) {             // 🔹 NEW
+  } else if (outputCode.startsWith('S.')) {
     outputType = 'INJECT';
     mappingTable = 'InjectProduksiOutputFurnitureWIP';
   } else {
@@ -195,185 +582,73 @@ function padLeft(num, width) {
       'outputCode prefix not recognized (supported: BH., BI., BG., L., BJ., S.)'
     );
   }
-  
-    try {
-      await tx.begin(sql.ISOLATION_LEVEL.SERIALIZABLE);
-  
-      // 1) Generate NoFurnitureWIP
-      const generatedNo = await generateNextNoFurnitureWip(tx, {
-        prefix: 'BB.', // GANTI kalau prefix NoFurnitureWIP kamu berbeda
-        width: 10,
+
+  const isInject = outputType === 'INJECT';
+
+  // Untuk NON-INJECT, IdFurnitureWIP tetap wajib.
+  // Untuk INJECT, IdFurnitureWIP boleh NULL → akan diproses multi-label.
+  if (!header.IdFurnitureWIP && !isInject) {
+    throw badReq('IdFurnitureWIP is required for non-INJECT modes');
+  }
+
+  try {
+    await tx.begin(sql.ISOLATION_LEVEL.SERIALIZABLE);
+
+    let result;
+
+    if (isInject && !header.IdFurnitureWIP) {
+      // 🔹 Jalur khusus: INJECT + IdFurnitureWIP null → multi-create
+      const createdHeaders = await createFromInjectMapping({
+        tx,
+        header,
+        outputCode,
+        mappingTable,
+        outputType,
+        badReq,
       });
-  
-      // Double-check uniqueness (sangat jarang kepakai)
-      const rqCheck = new sql.Request(tx);
-      const exist = await rqCheck
-        .input('NoFurnitureWIP', sql.VarChar, generatedNo)
-        .query(`
-          SELECT 1
-          FROM [dbo].[FurnitureWIP] WITH (UPDLOCK, HOLDLOCK)
-          WHERE NoFurnitureWIP = @NoFurnitureWIP
-        `);
-  
-      const noFurnitureWip =
-        exist.recordset.length > 0
-          ? await generateNextNoFurnitureWip(tx, { prefix: 'BB.', width: 10 })
-          : generatedNo;
-  
-      // 2) Insert header ke dbo.FurnitureWIP
-      const nowDateOnly = header.DateCreate || null; // null -> GETDATE() (date only)
-      const insertHeaderSql = `
-        INSERT INTO [dbo].[FurnitureWIP] (
-          NoFurnitureWIP,
-          DateCreate,
-          Pcs,
-          IdFurnitureWIP,
-          Berat,
-          IsPartial,
-          DateUsage,
-          IdWarna,
-          CreateBy,
-          DateTimeCreate,
-          Blok,
-          IdLokasi
-        )
-        VALUES (
-          @NoFurnitureWIP,
-          ${nowDateOnly ? '@DateCreate' : 'CONVERT(date, GETDATE())'},
-          @Pcs,
-          @IdFurnitureWIP,
-          @Berat,
-          @IsPartial,
-          NULL,
-          @IdWarna,
-          @CreateBy,
-          GETDATE(),
-          @Blok,
-          @IdLokasi
-        );
-      `;
-  
-      const rqHeader = new sql.Request(tx);
-  
-      // normalize IdLokasi
-      const rawIdLokasi = header.IdLokasi;
-      let idLokasiVal = null;
-      if (rawIdLokasi !== undefined && rawIdLokasi !== null) {
-        idLokasiVal = String(rawIdLokasi).trim();
-        if (idLokasiVal.length === 0) {
-          idLokasiVal = null;
-        }
-      }
-  
-      rqHeader
-        .input('NoFurnitureWIP', sql.VarChar, noFurnitureWip)
-        .input('Pcs', sql.Decimal(18, 3), header.Pcs ?? null)
-        .input('IdFurnitureWIP', sql.Int, header.IdFurnitureWIP)
-        .input('Berat', sql.Decimal(18, 3), header.Berat ?? null)
-        .input('IsPartial', sql.Bit, header.IsPartial ?? 0)
-        .input('IdWarna', sql.Int, header.IdWarna ?? null)
-        .input('CreateBy', sql.VarChar, header.CreateBy ?? null)
-        .input('Blok', sql.VarChar, header.Blok ?? null)
-        .input('IdLokasi', sql.VarChar, idLokasiVal);
-  
-      if (nowDateOnly) {
-        rqHeader.input('DateCreate', sql.Date, new Date(nowDateOnly));
-      }
-  
-      await rqHeader.query(insertHeaderSql);
-  
-    // 3) Insert mapping berdasarkan outputType / mappingTable
-    if (mappingTable === 'HotStampingOutputLabelFWIP') {
-        const q = `
-          INSERT INTO [dbo].[HotStampingOutputLabelFWIP] (NoProduksi, NoFurnitureWIP)
-          VALUES (@OutputCode, @NoFurnitureWIP);
-        `;
-        await new sql.Request(tx)
-          .input('OutputCode', sql.VarChar, outputCode)
-          .input('NoFurnitureWIP', sql.VarChar, noFurnitureWip)
-          .query(q);
-  
-      } else if (mappingTable === 'PasangKunciOutputLabelFWIP') {
-        const q = `
-          INSERT INTO [dbo].[PasangKunciOutputLabelFWIP] (NoProduksi, NoFurnitureWIP)
-          VALUES (@OutputCode, @NoFurnitureWIP);
-        `;
-        await new sql.Request(tx)
-          .input('OutputCode', sql.VarChar, outputCode)
-          .input('NoFurnitureWIP', sql.VarChar, noFurnitureWip)
-          .query(q);
-  
-      } else if (mappingTable === 'BongkarSusunOutputFurnitureWIP') {
-        const q = `
-          INSERT INTO [dbo].[BongkarSusunOutputFurnitureWIP] (NoBongkarSusun, NoFurnitureWIP)
-          VALUES (@OutputCode, @NoFurnitureWIP);
-        `;
-        await new sql.Request(tx)
-          .input('OutputCode', sql.VarChar, outputCode)
-          .input('NoFurnitureWIP', sql.VarChar, noFurnitureWip)
-          .query(q);
-  
-      } else if (mappingTable === 'BJReturFurnitureWIP_d') {
-        const q = `
-          INSERT INTO [dbo].[BJReturFurnitureWIP_d] (NoRetur, NoFurnitureWIP)
-          VALUES (@OutputCode, @NoFurnitureWIP);
-        `;
-        await new sql.Request(tx)
-          .input('OutputCode', sql.VarChar, outputCode)
-          .input('NoFurnitureWIP', sql.VarChar, noFurnitureWip)
-          .query(q);
-  
-      } else if (mappingTable === 'SpannerOutputLabelFWIP') {   // 🔹 NEW
-        const q = `
-          INSERT INTO [dbo].[SpannerOutputLabelFWIP] (NoProduksi, NoFurnitureWIP)
-          VALUES (@OutputCode, @NoFurnitureWIP);
-        `;
-        await new sql.Request(tx)
-          .input('OutputCode', sql.VarChar, outputCode)
-          .input('NoFurnitureWIP', sql.VarChar, noFurnitureWip)
-          .query(q);
-  
-      } else if (mappingTable === 'InjectProduksiOutputFurnitureWIP') { // 🔹 NEW
-        const q = `
-          INSERT INTO [dbo].[InjectProduksiOutputFurnitureWIP] (NoProduksi, NoFurnitureWIP)
-          VALUES (@OutputCode, @NoFurnitureWIP);
-        `;
-        await new sql.Request(tx)
-          .input('OutputCode', sql.VarChar, outputCode)
-          .input('NoFurnitureWIP', sql.VarChar, noFurnitureWip)
-          .query(q);
-      }
-  
-  
-      await tx.commit();
-  
-      return {
-        header: {
-          NoFurnitureWIP: noFurnitureWip,
-          DateCreate: nowDateOnly || 'GETDATE()',
-          Pcs: header.Pcs ?? null,
-          IdFurnitureWIP: header.IdFurnitureWIP,
-          Berat: header.Berat ?? null,
-          IsPartial: header.IsPartial ?? 0,
-          IdWarna: header.IdWarna ?? null,
-          CreateBy: header.CreateBy ?? null,
-          Blok: header.Blok ?? null,
-          IdLokasi: header.IdLokasi ?? null,
-        },
+    
+      result = {
+        headers: createdHeaders,   // ⬅️ hanya array
         output: {
           code: outputCode,
-          type: outputType,   // 'HOTSTAMPING' / 'PASANG_KUNCI' / 'BONGKAR_SUSUN' / 'RETUR'
-          mappingTable,       // table used
+          type: outputType,
+          mappingTable,
+          isMulti: createdHeaders.length > 1,
+          count: createdHeaders.length,
         },
       };
-    } catch (e) {
-      try {
-        await tx.rollback();
-      } catch (_) {}
-      throw e;
+    } else {
+      // 🔹 Jalur normal: single create
+      const createdHeader = await insertSingleFurnitureWip({
+        tx,
+        header,
+        idFurnitureWip: header.IdFurnitureWIP,
+        outputCode,
+        outputType,
+        mappingTable,
+      });
+    
+      result = {
+        headers: [createdHeader],  // ⬅️ tetap array walau 1
+        output: {
+          code: outputCode,
+          type: outputType,
+          mappingTable,
+          isMulti: false,
+          count: 1,
+        },
+      };
     }
-  };
-
+    
+    await tx.commit();
+    return result;
+  } catch (e) {
+    try {
+      await tx.rollback();
+    } catch (_) {}
+    throw e;
+  }
+};
 
 
 

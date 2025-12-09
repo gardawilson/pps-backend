@@ -4,7 +4,23 @@ const router = express.Router();
 const verifyToken = require('../../../core/middleware/verify-token');
 const injectProduksiController = require('./inject-production-controller');
 
-// GET InjectProduksi_h by date (YYYY-MM-DD)
+// 🔹 GET Furniture WIP from InjectProduksi_h by NoProduksi
+router.get(
+  '/inject/furniture-wip/:noProduksi',
+  verifyToken,
+  injectProduksiController.getFurnitureWipByNoProduksi
+);
+
+
+// 🔹 GET Barang Jadi (Packing) from InjectProduksi_h by NoProduksi
+router.get(
+  '/inject/packing/:noProduksi',
+  verifyToken,
+  injectProduksiController.getPackingByNoProduksi
+);
+
+
+// 🔹 GET InjectProduksi_h by date (YYYY-MM-DD)
 router.get(
   '/inject/:date(\\d{4}-\\d{2}-\\d{2})',
   verifyToken,

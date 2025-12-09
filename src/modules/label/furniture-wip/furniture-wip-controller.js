@@ -31,7 +31,8 @@ exports.getAll = async (req, res) => {
  * Expected body:
  * {
  *   "header": {
- *     "IdFurnitureWIP": 1,          // required
+ *     "IdFurnitureWIP": 1,          // required UNTUK NON-INJECT
+ *                                   // untuk INJECT boleh null → auto-mapping multi-label
  *     "Pcs": 10,                    // optional
  *     "Berat": 25.5,                // optional
  *     "DateCreate": "2025-10-28",   // optional (default GETDATE() on server)
@@ -42,32 +43,61 @@ exports.getAll = async (req, res) => {
  *     // "CreateBy": "user"         // optional, will default from token if available
  *   },
  *   "outputCode": "BH.0000001234"   // required: prefix-based source label
+ *                                   // contoh Inject: "S.0000023471"
+ * }
+ *
+ * Response (contoh):
+ * {
+ *   "success": true,
+ *   "message": "2 Furniture WIP labels created successfully",
+ *   "data": {
+ *     "headers": [ {..}, {..} ],    // selalu array, 1 atau >1
+ *     "output": {
+ *       "code": "S.0000023471",
+ *       "type": "INJECT",
+ *       "mappingTable": "InjectProduksiOutputFurnitureWIP",
+ *       "count": 2,
+ *       "isMulti": true
+ *     }
+ *   }
  * }
  */
 exports.create = async (req, res) => {
-    try {
-      const payload = req.body || {};
-  
-      // Otomatis isi CreateBy dari token kalau belum ada
-      if (!payload?.header?.CreateBy && req.username) {
-        payload.header = { ...(payload.header || {}), CreateBy: req.username };
-      }
-  
-      const result = await service.createFurnitureWip(payload);
-  
-      return res.status(201).json({
-        success: true,
-        message: 'Furniture WIP created successfully',
-        data: result,
-      });
-    } catch (err) {
-      console.error('Create Furniture WIP Error:', err);
-      return res.status(err.statusCode || 500).json({
-        success: false,
-        message: err.message || 'Internal Server Error',
-      });
+  try {
+    const payload = req.body || {};
+
+    // Otomatis isi CreateBy dari token kalau belum ada
+    if (!payload?.header?.CreateBy && req.username) {
+      payload.header = { ...(payload.header || {}), CreateBy: req.username };
     }
-  };
+
+    const result = await service.createFurnitureWip(payload);
+
+    const headers = Array.isArray(result?.headers) ? result.headers : [];
+    const count =
+      (result?.output && typeof result.output.count === 'number')
+        ? result.output.count
+        : (headers.length || 1);
+
+    const msg =
+      count > 1
+        ? `${count} Furniture WIP labels created successfully`
+        : 'Furniture WIP created successfully';
+
+    return res.status(201).json({
+      success: true,
+      message: msg,
+      data: result,
+    });
+  } catch (err) {
+    console.error('Create Furniture WIP Error:', err);
+    return res.status(err.statusCode || 500).json({
+      success: false,
+      message: err.message || 'Internal Server Error',
+    });
+  }
+};
+
 
 
 

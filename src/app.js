@@ -76,6 +76,12 @@ const productionPackingRoutes = require('./modules/production/packing/packing-pr
 const packingTypeRoutes = require('./modules/master-packing/packing-master-routes');
 
 
+const labelRejectRoutes = require('./modules/label/reject/reject-routes');
+
+
+const rejectTypeRoutes = require('./modules/master-reject/reject-master-route');
+
+const productionSortirRejectRoutes = require('./modules/production/sortir-reject/sortir-reject-route');
 
 
 
@@ -152,6 +158,13 @@ app.use('/api/production', productionPackingRoutes);
 app.use('/api/packing-type', packingTypeRoutes);
 
 
+app.use('/api/', labelRejectRoutes);
+
+
+app.use('/api/reject-type', rejectTypeRoutes);
+
+
+app.use('/api/production', productionSortirRejectRoutes);
 
 
 

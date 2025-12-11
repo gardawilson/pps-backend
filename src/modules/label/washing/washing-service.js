@@ -1,5 +1,9 @@
 // services/label-washing-service.js
 const { sql, poolPromise } = require('../../../core/config/db');
+const {
+  getBlokLokasiFromKodeProduksi,
+} = require('../../../core/shared/mesin-location-helper'); 
+
 
 // GET all header with pagination & search
 exports.getAll = async ({ page, limit, search }) => {
@@ -156,17 +160,35 @@ exports.createWashingCascade = async (payload) => {
     // Pakai isolation level SERIALIZABLE agar generator aman dari race condition
     await tx.begin(sql.ISOLATION_LEVEL.SERIALIZABLE);
 
+    // 0) Auto-isi Blok & IdLokasi dari kode produksi / bongkar susun (jika header belum isi)
+    if (!header.Blok || !header.IdLokasi) {
+      if (hasProduksi) {
+        const lokasi = await getBlokLokasiFromKodeProduksi({
+          kode: NoProduksi,
+          runner: tx,
+        });
+
+        if (lokasi) {
+          if (!header.Blok) header.Blok = lokasi.Blok;
+          if (!header.IdLokasi) header.IdLokasi = lokasi.IdLokasi;
+        }
+      } 
+    }
+
     // 1) Generate NoWashing (abaikan NoWashing dari client kalau ada)
     const generatedNo = await generateNextNoWashing(tx, 'B.', 10);
 
     // 2) Double-check belum dipakai (harusnya aman karena holdlock, tapi kita cek lagi)
     const rqCheck = new sql.Request(tx);
-    const exist = await rqCheck.input('NoWashing', sql.VarChar, generatedNo)
+    const exist = await rqCheck
+      .input('NoWashing', sql.VarChar, generatedNo)
       .query(`SELECT 1 FROM Washing_h WITH (UPDLOCK, HOLDLOCK) WHERE NoWashing = @NoWashing`);
+
     if (exist.recordset.length > 0) {
       // sangat kecil kemungkinannya, tapi kalau kejadian—ulangi sekali
       const retryNo = await generateNextNoWashing(tx, 'B.', 10);
-      const exist2 = await new sql.Request(tx).input('NoWashing', sql.VarChar, retryNo)
+      const exist2 = await new sql.Request(tx)
+        .input('NoWashing', sql.VarChar, retryNo)
         .query(`SELECT 1 FROM Washing_h WITH (UPDLOCK, HOLDLOCK) WHERE NoWashing = @NoWashing`);
       if (exist2.recordset.length > 0) {
         const err = new Error('Gagal generate NoWashing unik, coba lagi.');
@@ -210,15 +232,15 @@ exports.createWashingCascade = async (payload) => {
       .input('Moisture2', sql.Decimal(10, 3), header.Moisture2 ?? null)
       .input('Moisture3', sql.Decimal(10, 3), header.Moisture3 ?? null)
       .input('Blok', sql.VarChar, header.Blok ?? null)
-      .input('IdLokasi', sql.VarChar, header.IdLokasi ?? null);
+      .input('IdLokasi', sql.Int, header.IdLokasi ?? null);   
 
     if (nowDateOnly) rqHeader.input('DateCreate', sql.Date, new Date(nowDateOnly));
     await rqHeader.query(insertHeaderSql);
 
     // 4) Insert details
     const insertDetailSql = `
-      INSERT INTO Washing_d (NoWashing, NoSak, Berat, DateUsage, IdLokasi)
-      VALUES (@NoWashing, @NoSak, @Berat, NULL, @IdLokasi)
+      INSERT INTO Washing_d (NoWashing, NoSak, Berat, DateUsage)
+      VALUES (@NoWashing, @NoSak, @Berat, NULL)
     `;
     let detailCount = 0;
     for (const d of details) {
@@ -227,7 +249,6 @@ exports.createWashingCascade = async (payload) => {
         .input('NoWashing', sql.VarChar, header.NoWashing)
         .input('NoSak', sql.Int, d.NoSak)
         .input('Berat', sql.Decimal(18, 3), d.Berat ?? 0)
-        .input('IdLokasi', sql.VarChar, d.IdLokasi ?? header.IdLokasi ?? null)
         .query(insertDetailSql);
       detailCount++;
     }
@@ -286,13 +307,13 @@ exports.createWashingCascade = async (payload) => {
         Moisture2: header.Moisture2 ?? null,
         Moisture3: header.Moisture3 ?? null,
         Blok: header.Blok ?? null,
-        IdLokasi: header.IdLokasi ?? null
+        IdLokasi: header.IdLokasi ?? null,
       },
       counts: {
         detailsInserted: detailCount,
-        outputInserted: outputCount
+        outputInserted: outputCount,
       },
-      outputTarget
+      outputTarget,
     };
   } catch (e) {
     try { await tx.rollback(); } catch (_) {}

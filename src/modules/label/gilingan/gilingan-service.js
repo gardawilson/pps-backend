@@ -1,5 +1,9 @@
 // services/labels/gilingan-service.js
 const { sql, poolPromise } = require('../../../core/config/db');
+const {
+  getBlokLokasiFromKodeProduksi,
+} = require('../../../core/shared/mesin-location-helper'); 
+
 
 exports.getAll = async ({ page, limit, search }) => {
   const pool = await poolPromise;
@@ -209,6 +213,21 @@ exports.createGilingan = async (payload) => {
   try {
     await tx.begin(sql.ISOLATION_LEVEL.SERIALIZABLE);
 
+        // 0) Auto-isi Blok & IdLokasi dari kode produksi / bongkar susun (jika header belum isi)
+        if (!header.Blok || !header.IdLokasi) {
+          if (outputCode) {
+            const lokasi = await getBlokLokasiFromKodeProduksi({
+              kode: outputCode,
+              runner: tx,
+            });
+    
+            if (lokasi) {
+              if (!header.Blok) header.Blok = lokasi.Blok;
+              if (!header.IdLokasi) header.IdLokasi = lokasi.IdLokasi;
+            }
+          } 
+        }
+
     // 1) Generate NoGilingan
     const generatedNo = await generateNextNoGilingan(tx, {
       prefix: 'V.',
@@ -276,7 +295,7 @@ rqHeader
   .input('IsPartial', sql.Bit, header.IsPartial ?? 0)
   .input('IdStatus', sql.Int, header.IdStatus ?? 1)
   .input('Blok', sql.VarChar, header.Blok ?? null)
-  .input('IdLokasi', sql.VarChar, idLokasiVal);
+  .input('IdLokasi', sql.Int, idLokasiVal);
 
 if (nowDateOnly) {
   rqHeader.input('DateCreate', sql.Date, new Date(nowDateOnly));

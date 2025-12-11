@@ -1,5 +1,9 @@
 // services/crusher-service.js
 const { sql, poolPromise } = require('../../../core/config/db');
+const {
+  getBlokLokasiFromKodeProduksi,
+} = require('../../../core/shared/mesin-location-helper'); 
+
 
 /**
  * Tables used:
@@ -177,6 +181,21 @@ exports.createCrusherCascade = async (payload) => {
   try {
     await tx.begin(sql.ISOLATION_LEVEL.SERIALIZABLE);
 
+    // 0) Auto-isi Blok & IdLokasi dari kode produksi / bongkar susun (jika header belum isi)
+    if (!header.Blok || !header.IdLokasi) {
+      if (processedCode) {
+        const lokasi = await getBlokLokasiFromKodeProduksi({
+          kode: processedCode,
+          runner: tx,
+        });
+
+        if (lokasi) {
+          if (!header.Blok) header.Blok = lokasi.Blok;
+          if (!header.IdLokasi) header.IdLokasi = lokasi.IdLokasi;
+        }
+      } 
+    }
+
     // 1) Generate NoCrusher
     const generatedNo = await generateNextNoCrusher(tx, { prefix: 'F.', width: 10 });
 
@@ -213,7 +232,7 @@ exports.createCrusherCascade = async (payload) => {
       .input('Berat', sql.Decimal(18, 3), header.Berat ?? null)
       .input('IdStatus', sql.Int, header.IdStatus ?? 1) // default 1
       .input('Blok', sql.VarChar, header.Blok ?? null)
-      .input('IdLokasi', sql.VarChar, header.IdLokasi ?? null)
+      .input('IdLokasi', sql.Int, header.IdLokasi ?? null)
       .input('CreateBy', sql.VarChar, header.CreateBy);
 
     if (nowDateOnly) rqHeader.input('DateCreate', sql.Date, new Date(nowDateOnly));

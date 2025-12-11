@@ -1,5 +1,9 @@
 // services/labels/furniture-wip-service.js
 const { sql, poolPromise } = require('../../../core/config/db');
+const {
+  getBlokLokasiFromKodeProduksi,
+} = require('../../../core/shared/mesin-location-helper'); 
+
 
 exports.getAll = async ({ page, limit, search }) => {
   const pool = await poolPromise;
@@ -595,6 +599,21 @@ exports.createFurnitureWip = async (payload) => {
     await tx.begin(sql.ISOLATION_LEVEL.SERIALIZABLE);
 
     let result;
+
+    // 0) Auto-isi Blok & IdLokasi dari kode produksi / bongkar susun (jika header belum isi)
+    if (!header.Blok || !header.IdLokasi) {
+      if (outputCode) {
+        const lokasi = await getBlokLokasiFromKodeProduksi({
+          kode: outputCode,
+          runner: tx,
+        });
+
+        if (lokasi) {
+          if (!header.Blok) header.Blok = lokasi.Blok;
+          if (!header.IdLokasi) header.IdLokasi = lokasi.IdLokasi;
+        }
+      } 
+    }
 
     if (isInject && !header.IdFurnitureWIP) {
       // 🔹 Jalur khusus: INJECT + IdFurnitureWIP null → multi-create

@@ -1,5 +1,9 @@
 // services/bonggolan-service.js
 const { sql, poolPromise } = require('../../../core/config/db');
+const {
+  getBlokLokasiFromKodeProduksi,
+} = require('../../../core/shared/mesin-location-helper'); 
+
 
 exports.getAll = async ({ page, limit, search }) => {
   const pool = await poolPromise;
@@ -204,6 +208,21 @@ function padLeft(num, width) {
      
        try {
          await tx.begin(sql.ISOLATION_LEVEL.SERIALIZABLE);
+
+        // 0) Auto-isi Blok & IdLokasi dari kode produksi / bongkar susun (jika header belum isi)
+        if (!header.Blok || !header.IdLokasi) {
+          if (processedCode) {
+            const lokasi = await getBlokLokasiFromKodeProduksi({
+              kode: processedCode,
+              runner: tx,
+            });
+
+            if (lokasi) {
+              if (!header.Blok) header.Blok = lokasi.Blok;
+              if (!header.IdLokasi) header.IdLokasi = lokasi.IdLokasi;
+            }
+          } 
+        }
      
          // 1) Generate NoBonggolan
          const generatedNo = await generateNextNoBonggolan(tx, { prefix: 'M.', width: 10 });
@@ -241,7 +260,7 @@ function padLeft(num, width) {
            .input('Berat', sql.Decimal(18, 3), header.Berat ?? null)
            .input('IdStatus', sql.Int, header.IdStatus ?? 1) // default 1
            .input('Blok', sql.VarChar, header.Blok ?? null)
-           .input('IdLokasi', sql.VarChar, header.IdLokasi ?? null)
+           .input('IdLokasi', sql.Int, header.IdLokasi ?? null)
            .input('CreateBy', sql.VarChar, header.CreateBy);
      
          if (nowDateOnly) rqHeader.input('DateCreate', sql.Date, new Date(nowDateOnly));

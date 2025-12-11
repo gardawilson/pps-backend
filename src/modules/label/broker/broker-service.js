@@ -1,5 +1,9 @@
 // services/broker-service.js
 const { sql, poolPromise } = require('../../../core/config/db');
+const {
+  getBlokLokasiFromKodeProduksi,
+} = require('../../../core/shared/mesin-location-helper'); 
+
 
 // GET all header Broker with pagination & search (mirror of Washing.getAll)
 exports.getAll = async ({ page, limit, search }) => {
@@ -239,6 +243,21 @@ exports.createBrokerCascade = async (payload) => {
 
   try {
     await tx.begin(sql.ISOLATION_LEVEL.SERIALIZABLE);
+    
+    // 0) Auto-isi Blok & IdLokasi dari kode produksi / bongkar susun (jika header belum isi)
+    if (!header.Blok || !header.IdLokasi) {
+      if (hasProduksi) {
+        const lokasi = await getBlokLokasiFromKodeProduksi({
+          kode: NoProduksi,
+          runner: tx,
+        });
+
+        if (lokasi) {
+          if (!header.Blok) header.Blok = lokasi.Blok;
+          if (!header.IdLokasi) header.IdLokasi = lokasi.IdLokasi;
+        }
+      } 
+    }
 
     // 1) Generate NoBroker (ignore client-provided NoBroker if any)
     const generatedNo = await generateNextNoBroker(tx, { prefix: 'D.', width: 10 }); // adjust width if you prefer
@@ -288,15 +307,15 @@ exports.createBrokerCascade = async (payload) => {
       .input('Moisture2', sql.Decimal(10, 3), header.Moisture2 ?? null)
       .input('Moisture3', sql.Decimal(10, 3), header.Moisture3 ?? null)
       .input('Blok', sql.VarChar, header.Blok ?? null)
-      .input('IdLokasi', sql.VarChar, header.IdLokasi ?? null);
+      .input('IdLokasi', sql.Int, header.IdLokasi ?? null);
 
     if (nowDateOnly) rqHeader.input('DateCreate', sql.Date, new Date(nowDateOnly));
     await rqHeader.query(insertHeaderSql);
 
     // 3) Insert details
     const insertDetailSql = `
-      INSERT INTO dbo.Broker_d (NoBroker, NoSak, Berat, DateUsage, IsPartial, IdLokasi)
-      VALUES (@NoBroker, @NoSak, @Berat, NULL, @IsPartial, @IdLokasi)
+      INSERT INTO dbo.Broker_d (NoBroker, NoSak, Berat, DateUsage, IsPartial)
+      VALUES (@NoBroker, @NoSak, @Berat, NULL, @IsPartial)
     `;
     let detailCount = 0;
     for (const d of details) {
@@ -306,7 +325,6 @@ exports.createBrokerCascade = async (payload) => {
         .input('NoSak', sql.Int, d.NoSak)
         .input('Berat', sql.Decimal(18, 3), d.Berat ?? 0)
         .input('IsPartial', sql.Int, d.IsPartial ?? 0) // default 0 if not provided
-        .input('IdLokasi', sql.VarChar, d.IdLokasi ?? header.IdLokasi ?? null)
         .query(insertDetailSql);
       detailCount++;
     }

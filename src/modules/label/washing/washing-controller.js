@@ -54,9 +54,9 @@ exports.create = async (req, res) => {
      *     "IdWarehouse": 2,                 // wajib
      *     "DateCreate": "2025-10-09",       // opsional (default GETDATE())
      *     "IdStatus": 1,                    // opsional (default 1=PASS/0=HOLD sesuai sistemmu)
-     *     "CreateBy": "ganda",              // wajib (ambil dari token juga boleh)
+     *     "CreateBy": "x",              // wajib (ambil dari token juga boleh)
      *     "Density": 0.91, "Moisture": 0.3, "Density2": null, ...,
-     *     "Blok": "A", "IdLokasi": "A1"     // opsional
+     *     "Blok": "A", "IdLokasi": 1     // opsional
      *   },
      *   "details": [
      *     { "NoSak": 1, "Berat": 25.6, "IdLokasi": "A1" },

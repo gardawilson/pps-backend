@@ -1,5 +1,9 @@
 // controllers/mixer-service.js (atau di folder yang sama dengan broker-service)
 const { sql, poolPromise } = require('../../../core/config/db');
+const {
+  getBlokLokasiFromKodeProduksi,
+} = require('../../../core/shared/mesin-location-helper'); 
+
 
 // GET all header Mixer dengan pagination & search (mirror of Broker.getAll)
 exports.getAll = async ({ page, limit, search }) => {
@@ -331,6 +335,22 @@ exports.getMixerDetailByNoMixer = async (nomixer) => {
   
     try {
       await tx.begin(sql.ISOLATION_LEVEL.SERIALIZABLE);
+
+      
+    // 0) Auto-isi Blok & IdLokasi dari kode produksi / bongkar susun (jika header belum isi)
+    if (!header.Blok || !header.IdLokasi) {
+      if (rawOutputCode) {
+        const lokasi = await getBlokLokasiFromKodeProduksi({
+          kode: rawOutputCode,
+          runner: tx,
+        });
+
+        if (lokasi) {
+          if (!header.Blok) header.Blok = lokasi.Blok;
+          if (!header.IdLokasi) header.IdLokasi = lokasi.IdLokasi;
+        }
+      } 
+    }
   
       // 1) Generate NoMixer
       const generatedNo = await generateNextNoMixer(tx, { prefix: 'H.', width: 10 });

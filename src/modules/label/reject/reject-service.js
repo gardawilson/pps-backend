@@ -11,7 +11,7 @@ exports.getAll = async ({ page, limit, search }) => {
       SELECT
         NoReject,
         SUM(ISNULL(Berat, 0)) AS TotalPartialBerat
-      FROM [PPS_TEST3].[dbo].[RejectV2Partial]
+      FROM [dbo].[RejectV2Partial]
       GROUP BY NoReject
     )
     SELECT
@@ -84,8 +84,8 @@ exports.getAll = async ({ page, limit, search }) => {
     ------------------------------------------------------------------
     LEFT JOIN [dbo].[MstReject] mr
       ON mr.IdReject = r.IdReject
-    -- kalau DB utama kamu PPS dan master ada di PPS_TEST3:
-    -- LEFT JOIN [PPS_TEST3].[dbo].[MstReject] mr
+    -- kalau DB utama kamu PPS dan master ada di PPS:
+    -- LEFT JOIN .[dbo].[MstReject] mr
     --   ON mr.IdReject = r.IdReject
 
     ------------------------------------------------------------------
@@ -176,7 +176,7 @@ exports.getAll = async ({ page, limit, search }) => {
 
     LEFT JOIN [dbo].[MstReject] mr
       ON mr.IdReject = r.IdReject
-    -- atau [PPS_TEST3].[dbo].[MstReject] mr, kalau beda DB
+    -- atau [dbo].[MstReject] mr, kalau beda DB
 
     LEFT JOIN [dbo].[InjectProduksiOutputRejectV2] injr
       ON injr.NoReject = r.NoReject

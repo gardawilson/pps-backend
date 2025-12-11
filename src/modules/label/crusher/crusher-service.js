@@ -305,7 +305,7 @@ exports.updateCrusher = async (noCrusher, payload = {}) => {
       .input('NoCrusher', sql.VarChar, noCrusher)
       .query(`
         SELECT 1
-        FROM [PPS_TEST2].[dbo].[Crusher] WITH (UPDLOCK, HOLDLOCK)
+        FROM [dbo].[Crusher] WITH (UPDLOCK, HOLDLOCK)
         WHERE NoCrusher = @NoCrusher
       `);
 
@@ -341,7 +341,7 @@ exports.updateCrusher = async (noCrusher, payload = {}) => {
     }
 
     await rq.query(`
-      UPDATE [PPS_TEST2].[dbo].[Crusher]
+      UPDATE [dbo].[Crusher]
       SET ${setClauses.join(', ')}
       WHERE NoCrusher = @NoCrusher;
     `);

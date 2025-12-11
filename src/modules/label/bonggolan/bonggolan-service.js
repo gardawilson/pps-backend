@@ -218,7 +218,7 @@ function padLeft(num, width) {
            ? await generateNextNoBonggolan(tx, { prefix: 'M.', width: 10 }) // regenerate (very rare)
            : generatedNo;
      
-         // 2) Insert header into PPS_TEST2.dbo.Bonggolan
+         // 2) Insert header into PPS.dbo.Bonggolan
          const nowDateOnly = header.DateCreate || null; // if null -> GETDATE() (date)
          const insertHeaderSql = `
            INSERT INTO [dbo].[Bonggolan] (
@@ -342,7 +342,7 @@ function padLeft(num, width) {
            .input('NoBonggolan', sql.VarChar, noBonggolan)
            .query(`
              SELECT 1
-             FROM [PPS_TEST2].[dbo].[Bonggolan] WITH (UPDLOCK, HOLDLOCK)
+             FROM [dbo].[Bonggolan] WITH (UPDLOCK, HOLDLOCK)
              WHERE NoBonggolan = @NoBonggolan
            `);
      
@@ -371,7 +371,7 @@ function padLeft(num, width) {
          }
      
          await rq.query(`
-           UPDATE [PPS_TEST2].[dbo].[Bonggolan]
+           UPDATE [dbo].[Bonggolan]
            SET ${setClauses.join(', ')}
            WHERE NoBonggolan = @NoBonggolan;
          `);

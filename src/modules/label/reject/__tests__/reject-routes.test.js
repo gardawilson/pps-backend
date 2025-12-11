@@ -46,7 +46,7 @@ describe('Reject POST Integration (DB real)', () => {
 
   beforeAll(async () => {
     app = createApp();
-    pool = await poolPromise; // pakai DB TEST (PPS_TEST3)
+    pool = await poolPromise;
   });
 
   // helper untuk hapus data test

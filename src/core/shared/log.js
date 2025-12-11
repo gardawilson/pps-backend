@@ -29,7 +29,7 @@ async function getRequest(runner) {
 async function insertLogMappingLokasi(p) {
   const {
     noLabel, beforeBlok, beforeIdLokasi,
-    afterBlok, afterIdLokasi, idUsername,
+    afterBlok, afterIdLokasi, idUsername, isSO,
     runner
   } = p;
 
@@ -38,11 +38,11 @@ async function insertLogMappingLokasi(p) {
 
   const query = `
     INSERT INTO dbo.LogMappingLokasi (
-      IdUsername, Tgl, NoLabel, BeforeBlok, BeforeIdLokasi, AfterBlok, AfterIdLokasi
+      IdUsername, Tgl, NoLabel, BeforeBlok, BeforeIdLokasi, AfterBlok, AfterIdLokasi, IsSO
     )
     OUTPUT INSERTED.IdLog, INSERTED.Tgl
     VALUES (
-      @IdUsername, GETDATE(), @NoLabel, @BeforeBlok, @BeforeIdLokasi, @AfterBlok, @AfterIdLokasi
+      @IdUsername, GETDATE(), @NoLabel, @BeforeBlok, @BeforeIdLokasi, @AfterBlok, @AfterIdLokasi, @IsSO
     )
   `;
 
@@ -54,6 +54,8 @@ async function insertLogMappingLokasi(p) {
     request.input('BeforeIdLokasi', sql.Int,         _beforeId);
     request.input('AfterBlok',      sql.VarChar(3),  afterBlok ?? null);
     request.input('AfterIdLokasi',  sql.Int,         _afterId);
+    request.input('IsSO',  sql.Bit,         isSO) ?? 0;
+
 
     const result = await request.query(query);
     const inserted = result.recordset?.[0] || {};

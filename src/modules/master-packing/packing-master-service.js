@@ -23,9 +23,9 @@ async function getAllActive() {
   `;
 
   // NOTE:
-  // - Kalau connection default kamu bukan PPS_TEST3,
+  // - Kalau connection default
   //   dan ingin paksa ke DB itu, ganti FROM menjadi:
-  //   FROM [PPS_TEST3].[dbo].[MstBarangJadi]
+  //   FROM [dbo].[MstBarangJadi]
 
   const result = await request.query(query);
   return result.recordset;

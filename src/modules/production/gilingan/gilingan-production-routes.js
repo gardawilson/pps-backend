@@ -12,4 +12,36 @@ router.get(
   gilinganProduksiController.getProduksiByDate
 );
 
+
+// GET /gilingan/produksi?page=1&pageSize=20&search=G.00001
+router.get(
+  '/gilingan',
+  verifyToken,
+  gilinganProduksiController.getAllProduksi
+);
+
+router.post(
+  '/gilingan',
+  verifyToken,
+  gilinganProduksiController.createProduksi
+);
+
+
+// UPDATE
+router.put(
+  '/gilingan/:noProduksi',
+  verifyToken,
+  gilinganProduksiController.updateProduksi
+);
+
+
+// DELETE
+router.delete(
+  '/gilingan/:noProduksi',
+  verifyToken,
+  gilinganProduksiController.deleteProduksi
+);
+
+
+
 module.exports = router;

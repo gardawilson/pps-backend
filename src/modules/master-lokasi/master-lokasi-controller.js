@@ -1,11 +1,19 @@
+// master-lokasi-controller.js
 const masterLokasiService = require('./master-lokasi-service');
 
 async function getLokasi(req, res) {
   const { username } = req;
-  console.log("🔍 Fetching MstLokasi data | Username:", username);
+  const { idWarehouse } = req.query;  // ⬅️ disini bisa "1,2,3,5,4"
+
+  console.log(
+    "🔍 Fetching MstLokasi data | Username:",
+    username,
+    "| IdWarehouse:",
+    idWarehouse
+  );
 
   try {
-    const data = await masterLokasiService.getAllLokasiAktif();
+    const data = await masterLokasiService.getAllLokasiAktif(idWarehouse);
 
     if (!data || data.length === 0) {
       return res.status(404).json({

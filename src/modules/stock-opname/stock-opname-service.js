@@ -3,7 +3,6 @@ const { formatDate } = require('../../core/utils/date-helper');
 const { insertLogMappingLokasi } = require('../../core/shared/log'); // sesuaikan path
 
 
-
 async function getNoStockOpname() {
   try {
     const pool = await poolPromise;
@@ -12,6 +11,13 @@ async function getNoStockOpname() {
       SELECT
         soh.NoSO,
         soh.Tanggal,
+    
+        -- ⬇️ AGGREGATE IdWarehouse JUGA
+        STRING_AGG(
+          CAST(sohw.IdWarehouse AS varchar(20)),
+          ', '
+        ) AS IdWarehouse,
+    
         STRING_AGG(
           CASE 
             WHEN soh.IsAscend = 1 THEN icw.Name            -- nama gudang dari IC_Warehouses
@@ -19,6 +25,7 @@ async function getNoStockOpname() {
           END, 
           ', '
         ) AS NamaWarehouse,
+    
         soh.IsBahanBaku,
         soh.IsWashing,
         soh.IsBonggolan,
@@ -33,17 +40,17 @@ async function getNoStockOpname() {
       FROM StockOpname_h soh
       LEFT JOIN StockOpname_h_WarehouseID sohw 
         ON soh.NoSO = sohw.NoSO
-
+    
       -- Join ke master lokal hanya bila IsAscend = 0
       LEFT JOIN MstWarehouse wh 
         ON sohw.IdWarehouse = wh.IdWarehouse
        AND soh.IsAscend = 0
-
+    
       -- Join ke master ASCEND hanya bila IsAscend = 1
       LEFT JOIN [AS_GSU_2022].[dbo].[IC_Warehouses] icw
         ON sohw.IdWarehouse = icw.WarehouseID
        AND soh.IsAscend = 1
-
+    
       WHERE soh.Tanggal > (
         SELECT ISNULL(MAX(PeriodHarian), '2000-01-01') 
         FROM MstTutupTransaksiHarian
@@ -64,20 +71,32 @@ async function getNoStockOpname() {
         soh.IsAscend
       ORDER BY soh.NoSO DESC
     `);
-
+    
     if (!result.recordset || result.recordset.length === 0) return null;
 
     return result.recordset.map(({
-      NoSO, Tanggal, NamaWarehouse,
+      NoSO, Tanggal, NamaWarehouse, IdWarehouse,
       IsBahanBaku, IsWashing, IsBonggolan, IsCrusher, IsBroker,
       IsGilingan, IsMixer, IsFurnitureWIP, IsBarangJadi, IsReject, IsAscend
     }) => ({
       NoSO,
       Tanggal: formatDate(Tanggal),
       NamaWarehouse: NamaWarehouse || '-',
-      IsBahanBaku, IsWashing, IsBonggolan, IsCrusher, IsBroker,
-      IsGilingan, IsMixer, IsFurnitureWIP, IsBarangJadi, IsReject, IsAscend
+      IdWarehouse: IdWarehouse || null,   // ⬅️ di-expose ke frontend
+    
+      IsBahanBaku,
+      IsWashing,
+      IsBonggolan,
+      IsCrusher,
+      IsBroker,
+      IsGilingan,
+      IsMixer,
+      IsFurnitureWIP,
+      IsBarangJadi,
+      IsReject,
+      IsAscend
     }));
+    
   } catch (err) {
     throw new Error(`Stock Opname Service Error: ${err.message}`);
   }
@@ -2013,7 +2032,7 @@ async function validateStockOpnameLabel({ noso, label, username, blok, idlokasi 
 
     // Cek mismatch Blok/IdLokasi
     if (isBlokLokasiMismatch(detailData)) {
-      return createResponse(false, {
+      return createResponse(true, {
         isValidFormat: true,
         isValidCategory: true,
         isValidWarehouse: isValidWarehouse,
@@ -2029,7 +2048,7 @@ async function validateStockOpnameLabel({ noso, label, username, blok, idlokasi 
           Berat: detailData?.Berat != null ? Number(Number(detailData.Berat).toFixed(2)) : null
         },
         mesinInfo: isBonggolan ? mesinInfo : []
-      }, `Lokasi label saat ini berada di ${detailData.Blok}${detailData.IdLokasi}`);
+      }, `Lokasi dipindahkan dari ${detailData.Blok}${detailData.IdLokasi}`);
     }
 
     return createResponse(true, {
@@ -2057,7 +2076,7 @@ async function validateStockOpnameLabel({ noso, label, username, blok, idlokasi 
   const fallbackData = fallbackResult.recordset[0];
 
   if (fallbackData && (fallbackData.JmlhSak > 0 || fallbackData.Berat > 0)) {
-    return createResponse(false, {
+    return createResponse(true, {
       isValidFormat: true,
       isValidCategory: true,
       isValidWarehouse,

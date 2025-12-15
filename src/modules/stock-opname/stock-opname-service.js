@@ -827,7 +827,6 @@ async function deleteStockOpnameHasil({ noso, nomorLabel }) {
 }
 
 
-
 async function validateStockOpnameLabel({ noso, label, username, blok, idlokasi }) {
   // Helper response
   const createResponse = (success, data = {}, message = '') => {
@@ -2087,7 +2086,7 @@ async function validateStockOpnameLabel({ noso, label, username, blok, idlokasi 
       parsed,
       idWarehouse: fallbackData.IdWarehouse || idWarehouse,
       detail: {
-        JmlhSak: fallbackData.JumlahSak ?? null,
+        JmlhSak: fallbackData.JmlhSak ?? null,
         Berat: fallbackData?.Berat != null ? Number(Number(fallbackData.Berat).toFixed(2)) : null,
         Blok: fallbackData.Blok,
         IdLokasi: fallbackData.IdLokasi

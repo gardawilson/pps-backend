@@ -11,4 +11,34 @@ router.get(
   bongkarSusunController.getByDate
 );
 
+// GET /bongkar-susun?page=1&pageSize=20&search=...
+router.get(
+  '/',
+  verifyToken,
+  bongkarSusunController.getAllBongkarSusun
+);
+
+
+// ✅ NEW: CREATE
+router.post('/', verifyToken, bongkarSusunController.createBongkarSusun);
+
+
+
+// ✅ UPDATE
+router.put(
+  '/:noBongkarSusun',
+  verifyToken,
+  bongkarSusunController.updateBongkarSusun
+);
+
+
+// ✅ DELETE
+router.delete(
+  '/:noBongkarSusun',
+  verifyToken,
+  bongkarSusunController.deleteBongkarSusun
+);
+
+
+
 module.exports = router;

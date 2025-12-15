@@ -2527,6 +2527,7 @@ async function insertStockOpnameLabel({
           beforeBlok, beforeIdLokasi: beforeId,
           afterBlok: blok, afterIdLokasi: idlokasi,
           idUsername: idUsername ?? null,
+          isSO: 1,
         });
       }
 
@@ -2565,6 +2566,7 @@ async function insertStockOpnameLabel({
           beforeBlok, beforeIdLokasi: beforeId,
           afterBlok: blok, afterIdLokasi: idlokasi,
           idUsername: idUsername ?? null,
+          isSO: 1,
         });
       }
 

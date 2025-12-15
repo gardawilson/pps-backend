@@ -922,48 +922,51 @@ async function validateStockOpnameLabel({ noso, label, username, blok, idlokasi 
       WHERE NoSO = @noso AND NoBahanBaku = @NoBahanBaku AND NoPallet = @NoPallet
     `;
     detailQuery = `
-      SELECT 
-          bbh.Blok,
-          bbh.IdLokasi,
-          COUNT(*) AS JmlhSak,
-          SUM(
-              CASE 
-                  WHEN d.IsPartial = 1 
-                      THEN ISNULL(d.Berat,0) - ISNULL(p.TotalPartial,0)
-                  ELSE ISNULL(d.Berat,0)
-              END
-          ) AS Berat
-      FROM dbo.BahanBaku_d AS d
-      LEFT JOIN (
-          SELECT 
-              NoBahanBaku, 
-              NoPallet, 
-              NoSak, 
-              SUM(ISNULL(Berat,0)) AS TotalPartial
-          FROM dbo.BahanBakuPartial
-          WHERE NoBahanBaku = @NoBahanBaku
-            AND NoPallet    = @NoPallet
-          GROUP BY NoBahanBaku, NoPallet, NoSak
-      ) AS p 
-          ON d.NoBahanBaku = p.NoBahanBaku 
-        AND d.NoPallet    = p.NoPallet
-        AND d.NoSak       = p.NoSak
-      INNER JOIN dbo.BahanBakuPallet_h AS bbh
-          ON bbh.NoBahanBaku = d.NoBahanBaku
-        AND bbh.NoPallet    = d.NoPallet
-      WHERE d.DateUsage    IS NULL
-        AND d.NoBahanBaku  = @NoBahanBaku
-        AND d.NoPallet     = @NoPallet
-        AND EXISTS (
-              SELECT 1
-              FROM dbo.StockOpnameBahanBaku AS sobb
-              WHERE sobb.NoSO        = @NoSO
-                AND sobb.NoBahanBaku = d.NoBahanBaku
-                AND sobb.NoPallet    = d.NoPallet
-        )
-      GROUP BY 
-          bbh.Blok, 
-          bbh.IdLokasi;
+;WITH p AS (
+    SELECT
+        NoBahanBaku,
+        NoPallet,
+        NoSak,
+        SUM(ISNULL(Berat,0)) AS TotalPartial
+    FROM dbo.BahanBakuPartial
+    WHERE NoBahanBaku = @NoBahanBaku
+      AND NoPallet    = @NoPallet
+    GROUP BY NoBahanBaku, NoPallet, NoSak
+)
+SELECT
+    bbh.Blok,
+    bbh.IdLokasi,
+
+    -- hitung sak yang masih ada sisa berat
+    SUM(CASE WHEN rem.SisaBerat > 0 THEN 1 ELSE 0 END) AS JmlhSak,
+
+    -- total berat sisa
+    SUM(rem.SisaBerat) AS Berat
+FROM dbo.BahanBaku_d AS d
+LEFT JOIN p
+    ON d.NoBahanBaku = p.NoBahanBaku
+   AND d.NoPallet    = p.NoPallet
+   AND d.NoSak       = p.NoSak
+INNER JOIN dbo.BahanBakuPallet_h AS bbh
+    ON bbh.NoBahanBaku = d.NoBahanBaku
+   AND bbh.NoPallet    = d.NoPallet
+CROSS APPLY (
+    SELECT
+        CASE
+            WHEN d.IsPartial = 1 THEN
+                CASE
+                    WHEN ISNULL(d.Berat,0) - ISNULL(p.TotalPartial,0) < 0 THEN 0
+                    ELSE ISNULL(d.Berat,0) - ISNULL(p.TotalPartial,0)
+                END
+            ELSE ISNULL(d.Berat,0)
+        END AS SisaBerat
+) AS rem
+WHERE d.DateUsage   IS NULL
+  AND d.NoBahanBaku = @NoBahanBaku
+  AND d.NoPallet    = @NoPallet
+GROUP BY
+    bbh.Blok,
+    bbh.IdLokasi;
     `;
     warehouseQuery = `
       SELECT mb.IdWarehouse
@@ -974,59 +977,98 @@ async function validateStockOpnameLabel({ noso, label, username, blok, idlokasi 
         AND bbh.NoPallet    = @NoPallet;
     `;
     fallbackQuery = `
-      SELECT 
-          bbh.Blok,
-          bbh.IdLokasi,
-          bbh.IdWarehouse,
-          COUNT(*) AS JumlahSak,
-          SUM(
-              CASE 
-                  WHEN d.IsPartial = 1 
-                      THEN ISNULL(d.Berat, 0) - ISNULL(p.TotalPartial, 0)
-                  ELSE ISNULL(d.Berat, 0)
-              END
-          ) AS Berat
-      FROM dbo.BahanBaku_d AS d
-      LEFT JOIN (
-          SELECT 
-              NoBahanBaku, 
-              NoPallet, 
-              NoSak, 
-              SUM(Berat) AS TotalPartial
-          FROM dbo.BahanBakuPartial
-          WHERE NoBahanBaku = @NoBahanBaku
-            AND NoPallet    = @NoPallet
-          GROUP BY NoBahanBaku, NoPallet, NoSak
-      ) AS p
-          ON d.NoBahanBaku = p.NoBahanBaku 
-        AND d.NoPallet    = p.NoPallet
-        AND d.NoSak       = p.NoSak
-      INNER JOIN dbo.BahanBakuPallet_h AS bbh
-          ON bbh.NoBahanBaku = d.NoBahanBaku
-        AND bbh.NoPallet    = d.NoPallet
-      WHERE d.NoBahanBaku = @NoBahanBaku
-        AND d.NoPallet    = @NoPallet
-        -- logic lama kamu: boleh yang belum dipakai ATAU warehouse-nya tidak ada di SO itu
-        AND (
-              d.DateUsage IS NULL
-            )
-      GROUP BY 
-          bbh.Blok,
-          bbh.IdLokasi,
-          bbh.IdWarehouse;
+    ;WITH p AS (
+    SELECT
+        NoBahanBaku,
+        NoPallet,
+        NoSak,
+        SUM(ISNULL(Berat,0)) AS TotalPartial
+    FROM dbo.BahanBakuPartial
+    WHERE NoBahanBaku = @NoBahanBaku
+      AND NoPallet    = @NoPallet
+    GROUP BY NoBahanBaku, NoPallet, NoSak
+)
+SELECT
+    bbh.Blok,
+    bbh.IdLokasi,
+
+    -- hitung sak yang masih ada sisa berat
+    SUM(CASE WHEN rem.SisaBerat > 0 THEN 1 ELSE 0 END) AS JmlhSak,
+
+    -- total berat sisa
+    SUM(rem.SisaBerat) AS Berat
+FROM dbo.BahanBaku_d AS d
+LEFT JOIN p
+    ON d.NoBahanBaku = p.NoBahanBaku
+   AND d.NoPallet    = p.NoPallet
+   AND d.NoSak       = p.NoSak
+INNER JOIN dbo.BahanBakuPallet_h AS bbh
+    ON bbh.NoBahanBaku = d.NoBahanBaku
+   AND bbh.NoPallet    = d.NoPallet
+CROSS APPLY (
+    SELECT
+        CASE
+            WHEN d.IsPartial = 1 THEN
+                CASE
+                    WHEN ISNULL(d.Berat,0) - ISNULL(p.TotalPartial,0) < 0 THEN 0
+                    ELSE ISNULL(d.Berat,0) - ISNULL(p.TotalPartial,0)
+                END
+            ELSE ISNULL(d.Berat,0)
+        END AS SisaBerat
+) AS rem
+WHERE d.DateUsage   IS NULL
+  AND d.NoBahanBaku = @NoBahanBaku
+  AND d.NoPallet    = @NoPallet
+GROUP BY
+    bbh.Blok,
+    bbh.IdLokasi;
     `;
     originalDataQuery = `
-      SELECT 
-          COUNT(*) AS JumlahSak,
-          SUM(bb.Berat) AS Berat,          -- berat dari detail
-          MAX(bb.IdLokasi) AS IdLokasi,    -- atau MAX(bbh.IdLokasi) pilih yang benar
-          MAX(bbh.IdWarehouse) AS IdWarehouse
-      FROM BahanBaku_d AS bb
-      JOIN BahanBakuPallet_h AS bbh
-        ON bb.NoBahanBaku = bbh.NoBahanBaku
-      AND bb.NoPallet    = bbh.NoPallet
-      WHERE bb.NoBahanBaku = @NoBahanBaku
-        AND bb.NoPallet    = @NoPallet;
+     ;WITH p AS (
+    SELECT
+        NoBahanBaku,
+        NoPallet,
+        NoSak,
+        SUM(ISNULL(Berat,0)) AS TotalPartial
+    FROM dbo.BahanBakuPartial
+    WHERE NoBahanBaku = @NoBahanBaku
+      AND NoPallet    = @NoPallet
+    GROUP BY NoBahanBaku, NoPallet, NoSak
+)
+SELECT
+    bbh.Blok,
+    bbh.IdLokasi,
+
+    -- hitung sak yang masih ada sisa berat
+    SUM(CASE WHEN rem.SisaBerat > 0 THEN 1 ELSE 0 END) AS JmlhSak,
+
+    -- total berat sisa
+    SUM(rem.SisaBerat) AS Berat
+FROM dbo.BahanBaku_d AS d
+LEFT JOIN p
+    ON d.NoBahanBaku = p.NoBahanBaku
+   AND d.NoPallet    = p.NoPallet
+   AND d.NoSak       = p.NoSak
+INNER JOIN dbo.BahanBakuPallet_h AS bbh
+    ON bbh.NoBahanBaku = d.NoBahanBaku
+   AND bbh.NoPallet    = d.NoPallet
+CROSS APPLY (
+    SELECT
+        CASE
+            WHEN d.IsPartial = 1 THEN
+                CASE
+                    WHEN ISNULL(d.Berat,0) - ISNULL(p.TotalPartial,0) < 0 THEN 0
+                    ELSE ISNULL(d.Berat,0) - ISNULL(p.TotalPartial,0)
+                END
+            ELSE ISNULL(d.Berat,0)
+        END AS SisaBerat
+) AS rem
+WHERE d.DateUsage   IS NULL
+  AND d.NoBahanBaku = @NoBahanBaku
+  AND d.NoPallet    = @NoPallet
+GROUP BY
+    bbh.Blok,
+    bbh.IdLokasi;
     `;
 
   } else if (isWashing) {
@@ -1039,30 +1081,25 @@ async function validateStockOpnameLabel({ noso, label, username, blok, idlokasi 
       WHERE NoSO = @noso AND NoWashing = @NoWashing
     `;
     detailQuery = `
-      SELECT
-          ISNULL(dstats.JmlhSak, 0) AS JmlhSak,
-          ISNULL(dstats.Berat, 0.0) AS Berat,
-          h.Blok,
-          h.IdLokasi
-      FROM dbo.Washing_h AS h
-      LEFT JOIN (
-          SELECT
-              NoWashing,
-              COUNT(1) AS JmlhSak,
-              SUM(ISNULL(Berat, 0.0)) AS Berat
-          FROM dbo.Washing_d
-          WHERE NoWashing = @NoWashing
-            AND DateUsage IS NULL
-          GROUP BY NoWashing
-      ) AS dstats
-          ON dstats.NoWashing = h.NoWashing
-      WHERE h.NoWashing = @NoWashing
-        AND EXISTS (
-              SELECT 1
-              FROM dbo.StockOpnameWashing AS sow
-              WHERE sow.NoSO      = @NoSO
-                AND sow.NoWashing = h.NoWashing
-        );
+SELECT
+    ISNULL(dstats.JmlhSak, 0)   AS JmlhSak,
+    ISNULL(dstats.Berat, 0.0)   AS Berat,
+    h.Blok,
+    h.IdLokasi
+FROM dbo.Washing_h AS h
+LEFT JOIN (
+    SELECT
+        NoWashing,
+        COUNT(1) AS JmlhSak,
+        SUM(ISNULL(Berat, 0.0)) AS Berat
+    FROM dbo.Washing_d
+    WHERE NoWashing = @NoWashing
+      AND DateUsage IS NULL
+    GROUP BY NoWashing
+) AS dstats
+    ON dstats.NoWashing = h.NoWashing
+WHERE h.NoWashing = @NoWashing;
+
     `;
     warehouseQuery = `
       SELECT mb.IdWarehouse
@@ -1072,35 +1109,44 @@ async function validateStockOpnameLabel({ noso, label, username, blok, idlokasi 
       WHERE wh.NoWashing = @NoWashing;
     `;
     fallbackQuery = `
-      SELECT
-        ISNULL(dstats.JmlhSak, 0) AS JmlhSak,
-        ISNULL(dstats.Berat, 0.0) AS Berat,
-        h.Blok,
-        h.IdLokasi
-      FROM [dbo].[Washing_h] AS h
-      LEFT JOIN (
-        SELECT
-          NoWashing,
-          COUNT(1) AS JmlhSak,
-          SUM(ISNULL(Berat, 0.0)) AS Berat
-        FROM [dbo].[Washing_d]
-        WHERE NoWashing = @NoWashing
-          AND DateUsage IS NULL
-        GROUP BY NoWashing
-      ) AS dstats
-        ON dstats.NoWashing = h.NoWashing
-      WHERE h.NoWashing = @NoWashing;
+SELECT
+    ISNULL(dstats.JmlhSak, 0)   AS JmlhSak,
+    ISNULL(dstats.Berat, 0.0)   AS Berat,
+    h.Blok,
+    h.IdLokasi
+FROM dbo.Washing_h AS h
+LEFT JOIN (
+    SELECT
+        NoWashing,
+        COUNT(1) AS JmlhSak,
+        SUM(ISNULL(Berat, 0.0)) AS Berat
+    FROM dbo.Washing_d
+    WHERE NoWashing = @NoWashing
+      AND DateUsage IS NULL
+    GROUP BY NoWashing
+) AS dstats
+    ON dstats.NoWashing = h.NoWashing
+WHERE h.NoWashing = @NoWashing;
     `;
     originalDataQuery = `
-      SELECT 
-          COUNT(*) AS JumlahSak,
-          SUM(wd.Berat) AS Berat,
-          MAX(wd.IdLokasi) AS IdLokasi,      -- kalau IdLokasi adanya di detail
-          MAX(wh.IdWarehouse) AS IdWarehouse -- ambil dari header
-      FROM Washing_d AS wd
-      JOIN Washing_h AS wh 
-        ON wd.NoWashing = wh.NoWashing
-      WHERE wd.NoWashing = @NoWashing;
+SELECT
+    ISNULL(dstats.JmlhSak, 0)   AS JmlhSak,
+    ISNULL(dstats.Berat, 0.0)   AS Berat,
+    h.Blok,
+    h.IdLokasi
+FROM dbo.Washing_h AS h
+LEFT JOIN (
+    SELECT
+        NoWashing,
+        COUNT(1) AS JmlhSak,
+        SUM(ISNULL(Berat, 0.0)) AS Berat
+    FROM dbo.Washing_d
+    WHERE NoWashing = @NoWashing
+      AND DateUsage IS NULL
+    GROUP BY NoWashing
+) AS dstats
+    ON dstats.NoWashing = h.NoWashing
+WHERE h.NoWashing = @NoWashing;
     `;
 
   } else if (isBroker) {
@@ -1113,51 +1159,51 @@ async function validateStockOpnameLabel({ noso, label, username, blok, idlokasi 
       WHERE NoSO = @noso AND NoBroker = @NoBroker
     `;
     detailQuery = `
-      SELECT
-          ISNULL(agg.JmlhSak, 0) AS JmlhSak,
-          ISNULL(agg.Berat,   0) AS Berat,
-          h.Blok,
-          h.IdLokasi
-      FROM dbo.Broker_h AS h
-      LEFT JOIN (
-          SELECT
-              d.NoBroker,
-              COUNT(*) AS JmlhSak,
-              SUM(
-                  CASE 
-                      WHEN d.IsPartial = 1 THEN 
-                          CASE 
-                              WHEN ISNULL(d.Berat,0) - ISNULL(p.TotalPartial,0) < 0 
-                                  THEN 0 
-                              ELSE ISNULL(d.Berat,0) - ISNULL(p.TotalPartial,0)
-                          END
-                      ELSE ISNULL(d.Berat,0)
-                  END
-              ) AS Berat
-          FROM dbo.Broker_d AS d
-          LEFT JOIN (
-              SELECT 
-                  NoBroker,
-                  NoSak,
-                  SUM(ISNULL(Berat,0)) AS TotalPartial
-              FROM dbo.BrokerPartial
-              WHERE NoBroker = @NoBroker
-              GROUP BY NoBroker, NoSak
-          ) AS p
-              ON p.NoBroker = d.NoBroker
-            AND p.NoSak    = d.NoSak
-          WHERE d.NoBroker = @NoBroker
-            AND d.DateUsage IS NULL
-          GROUP BY d.NoBroker
-      ) AS agg
-          ON agg.NoBroker = h.NoBroker
-      WHERE h.NoBroker = @NoBroker
-        AND EXISTS (
-              SELECT 1
-              FROM dbo.StockOpnameBroker AS sob
-              WHERE sob.NoSO     = @noso      -- pastikan sesuai SO yang sedang discan
-                AND sob.NoBroker = h.NoBroker -- pastikan broker itu memang dicatat di SO tsb
-        );
+;WITH p AS (
+    SELECT
+        NoBroker,
+        NoSak,
+        SUM(ISNULL(Berat,0)) AS TotalPartial
+    FROM dbo.BrokerPartial
+    WHERE NoBroker = @NoBroker
+    GROUP BY NoBroker, NoSak
+),
+drem AS (
+    SELECT
+        d.NoBroker,
+        CASE
+            WHEN d.IsPartial = 1 THEN
+                CASE
+                    WHEN ISNULL(d.Berat,0) - ISNULL(p.TotalPartial,0) < 0 THEN 0
+                    ELSE ISNULL(d.Berat,0) - ISNULL(p.TotalPartial,0)
+                END
+            ELSE ISNULL(d.Berat,0)
+        END AS SisaBerat
+    FROM dbo.Broker_d d
+    LEFT JOIN p
+        ON p.NoBroker = d.NoBroker
+       AND p.NoSak    = d.NoSak
+    WHERE d.NoBroker  = @NoBroker
+      AND d.DateUsage IS NULL
+),
+agg AS (
+    SELECT
+        NoBroker,
+        SUM(CASE WHEN SisaBerat > 0 THEN 1 ELSE 0 END) AS JmlhSak,
+        SUM(SisaBerat) AS Berat
+    FROM drem
+    GROUP BY NoBroker
+)
+SELECT
+    ISNULL(agg.JmlhSak, 0) AS JmlhSak,
+    ISNULL(agg.Berat,   0) AS Berat,
+    h.Blok,
+    h.IdLokasi
+FROM dbo.Broker_h h
+LEFT JOIN agg
+    ON agg.NoBroker = h.NoBroker
+WHERE h.NoBroker = @NoBroker;
+
     `;
     warehouseQuery = `
       SELECT mb.IdWarehouse
@@ -1167,56 +1213,96 @@ async function validateStockOpnameLabel({ noso, label, username, blok, idlokasi 
       WHERE bh.NoBroker = @NoBroker;
     `;
     fallbackQuery = `
-      SELECT
-        ISNULL(agg.JmlhSak, 0) AS JmlhSak,
-        ISNULL(agg.Berat,   0) AS Berat,
-        h.Blok,
-        h.IdLokasi
-      FROM [dbo].[Broker_h] AS h
-      LEFT JOIN (
-        SELECT
-          d.NoBroker,
-          COUNT(*) AS JmlhSak,
-          SUM(
-            CASE 
-              WHEN d.IsPartial = 1 THEN 
-                CASE 
-                  WHEN ISNULL(d.Berat,0) - ISNULL(p.TotalPartial,0) < 0 
-                    THEN 0 
-                  ELSE ISNULL(d.Berat,0) - ISNULL(p.TotalPartial,0)
+     ;WITH p AS (
+    SELECT
+        NoBroker,
+        NoSak,
+        SUM(ISNULL(Berat,0)) AS TotalPartial
+    FROM dbo.BrokerPartial
+    WHERE NoBroker = @NoBroker
+    GROUP BY NoBroker, NoSak
+),
+drem AS (
+    SELECT
+        d.NoBroker,
+        CASE
+            WHEN d.IsPartial = 1 THEN
+                CASE
+                    WHEN ISNULL(d.Berat,0) - ISNULL(p.TotalPartial,0) < 0 THEN 0
+                    ELSE ISNULL(d.Berat,0) - ISNULL(p.TotalPartial,0)
                 END
-              ELSE ISNULL(d.Berat,0)
-            END
-          ) AS Berat
-        FROM [dbo].[Broker_d] AS d
-        LEFT JOIN (
-          SELECT 
-            NoBroker,
-            NoSak,
-            SUM(ISNULL(Berat,0)) AS TotalPartial
-          FROM [dbo].[BrokerPartial]
-          WHERE NoBroker = @NoBroker
-          GROUP BY NoBroker, NoSak
-        ) AS p
-          ON p.NoBroker = d.NoBroker
-         AND p.NoSak    = d.NoSak
-        WHERE d.NoBroker = @NoBroker
-          AND d.DateUsage IS NULL
-        GROUP BY d.NoBroker
-      ) AS agg
-        ON agg.NoBroker = h.NoBroker
-      WHERE h.NoBroker = @NoBroker;
+            ELSE ISNULL(d.Berat,0)
+        END AS SisaBerat
+    FROM dbo.Broker_d d
+    LEFT JOIN p
+        ON p.NoBroker = d.NoBroker
+       AND p.NoSak    = d.NoSak
+    WHERE d.NoBroker  = @NoBroker
+      AND d.DateUsage IS NULL
+),
+agg AS (
+    SELECT
+        NoBroker,
+        SUM(CASE WHEN SisaBerat > 0 THEN 1 ELSE 0 END) AS JmlhSak,
+        SUM(SisaBerat) AS Berat
+    FROM drem
+    GROUP BY NoBroker
+)
+SELECT
+    ISNULL(agg.JmlhSak, 0) AS JmlhSak,
+    ISNULL(agg.Berat,   0) AS Berat,
+    h.Blok,
+    h.IdLokasi
+FROM dbo.Broker_h h
+LEFT JOIN agg
+    ON agg.NoBroker = h.NoBroker
+WHERE h.NoBroker = @NoBroker;
     `;
     originalDataQuery = `
-      SELECT 
-          COUNT(*) AS JumlahSak,
-          SUM(bd.Berat) AS Berat,
-          MAX(bd.IdLokasi) AS IdLokasi,      -- ganti ke MAX(bh.IdLokasi) kalau lokasinya di header
-          MAX(bh.IdWarehouse) AS IdWarehouse
-      FROM Broker_d AS bd
-      JOIN Broker_h AS bh 
-        ON bd.NoBroker = bh.NoBroker
-      WHERE bd.NoBroker = @NoBroker;
+     ;WITH p AS (
+    SELECT
+        NoBroker,
+        NoSak,
+        SUM(ISNULL(Berat,0)) AS TotalPartial
+    FROM dbo.BrokerPartial
+    WHERE NoBroker = @NoBroker
+    GROUP BY NoBroker, NoSak
+),
+drem AS (
+    SELECT
+        d.NoBroker,
+        CASE
+            WHEN d.IsPartial = 1 THEN
+                CASE
+                    WHEN ISNULL(d.Berat,0) - ISNULL(p.TotalPartial,0) < 0 THEN 0
+                    ELSE ISNULL(d.Berat,0) - ISNULL(p.TotalPartial,0)
+                END
+            ELSE ISNULL(d.Berat,0)
+        END AS SisaBerat
+    FROM dbo.Broker_d d
+    LEFT JOIN p
+        ON p.NoBroker = d.NoBroker
+       AND p.NoSak    = d.NoSak
+    WHERE d.NoBroker  = @NoBroker
+      AND d.DateUsage IS NULL
+),
+agg AS (
+    SELECT
+        NoBroker,
+        SUM(CASE WHEN SisaBerat > 0 THEN 1 ELSE 0 END) AS JmlhSak,
+        SUM(SisaBerat) AS Berat
+    FROM drem
+    GROUP BY NoBroker
+)
+SELECT
+    ISNULL(agg.JmlhSak, 0) AS JmlhSak,
+    ISNULL(agg.Berat,   0) AS Berat,
+    h.Blok,
+    h.IdLokasi
+FROM dbo.Broker_h h
+LEFT JOIN agg
+    ON agg.NoBroker = h.NoBroker
+WHERE h.NoBroker = @NoBroker;
     `;
 
   } else if (isCrusher) {
@@ -1229,20 +1315,14 @@ async function validateStockOpnameLabel({ noso, label, username, blok, idlokasi 
       WHERE NoSO = @noso AND NoCrusher = @NoCrusher
     `;
     detailQuery = `
-      SELECT TOP (1)
-          ISNULL(c.Berat, 0) AS Berat,
-          c.Blok,
-          c.IdLokasi
-      FROM dbo.Crusher AS c
-      WHERE c.NoCrusher = @NoCrusher
-        AND c.DateUsage IS NULL
-        AND EXISTS (
-              SELECT 1
-              FROM dbo.StockOpnameCrusher AS s
-              WHERE s.NoSO = @noso
-                AND s.NoCrusher = c.NoCrusher
-          )
-      ORDER BY c.DateCreate DESC;
+SELECT TOP (1)
+    ISNULL(c.Berat, 0) AS Berat,
+    c.Blok,
+    c.IdLokasi
+FROM dbo.Crusher AS c
+WHERE c.NoCrusher = @NoCrusher
+  AND c.DateUsage IS NULL
+ORDER BY c.DateCreate DESC, c.DateTimeCreate DESC;
     `;
     warehouseQuery = `
       SELECT mb.IdWarehouse
@@ -1252,18 +1332,24 @@ async function validateStockOpnameLabel({ noso, label, username, blok, idlokasi 
       WHERE ch.NoCrusher = @NoCrusher;
     `;
     fallbackQuery = `
-      SELECT TOP (1)
-        ISNULL(c.Berat, 0) AS Berat,
-        c.Blok,
-        c.IdLokasi
-      FROM [dbo].[Crusher] AS c
-      WHERE c.NoCrusher = @NoCrusher AND DateUsage IS NULL
-      ORDER BY c.DateCreate DESC;
+     SELECT TOP (1)
+    ISNULL(c.Berat, 0) AS Berat,
+    c.Blok,
+    c.IdLokasi
+FROM dbo.Crusher AS c
+WHERE c.NoCrusher = @NoCrusher
+  AND c.DateUsage IS NULL
+ORDER BY c.DateCreate DESC, c.DateTimeCreate DESC;
     `;
     originalDataQuery = `
-      SELECT SUM(Berat) AS Berat, MAX(IdLokasi) AS IdLokasi, MAX(IdWarehouse) AS IdWarehouse
-      FROM Crusher
-      WHERE NoCrusher = @NoCrusher
+      SELECT TOP (1)
+    ISNULL(c.Berat, 0) AS Berat,
+    c.Blok,
+    c.IdLokasi
+FROM dbo.Crusher AS c
+WHERE c.NoCrusher = @NoCrusher
+  AND c.DateUsage IS NULL
+ORDER BY c.DateCreate DESC, c.DateTimeCreate DESC;
     `;
 
   } else if (isBonggolan) {
@@ -1276,22 +1362,15 @@ async function validateStockOpnameLabel({ noso, label, username, blok, idlokasi 
       WHERE NoSO = @noso AND NoBonggolan = @NoBonggolan
     `;
     detailQuery = `
-      SELECT TOP (1)
-          CASE 
-              WHEN b.DateUsage IS NOT NULL THEN 0
-              ELSE ISNULL(b.Berat, 0)
-          END AS Berat,
-          b.Blok,
-          b.IdLokasi
-      FROM dbo.Bonggolan AS b
-      WHERE b.NoBonggolan = @NoBonggolan
-        AND EXISTS (
-              SELECT 1
-              FROM dbo.StockOpnameBonggolan AS sob
-              WHERE sob.NoSO        = @NoSO
-                AND sob.NoBonggolan = b.NoBonggolan
-          )
-      ORDER BY b.DateCreate DESC;
+SELECT TOP (1)
+    ISNULL(b.Berat, 0) AS Berat,
+    b.Blok,
+    b.IdLokasi
+FROM dbo.Bonggolan AS b
+WHERE b.NoBonggolan = @NoBonggolan
+  AND b.DateUsage IS NULL
+ORDER BY b.DateCreate DESC, b.DateTimeCreate DESC;
+
     `;
     warehouseQuery = `
       SELECT mb.IdWarehouse
@@ -1301,21 +1380,24 @@ async function validateStockOpnameLabel({ noso, label, username, blok, idlokasi 
       WHERE bh.NoBonggolan = @NoBonggolan;
     `;
     fallbackQuery = `
-      SELECT TOP (1)
-          CASE 
-              WHEN b.DateUsage IS NOT NULL THEN 0
-              ELSE ISNULL(b.Berat, 0)
-          END AS Berat,
-          b.Blok,
-          b.IdLokasi
-      FROM [dbo].[Bonggolan] AS b
-      WHERE b.NoBonggolan = @NoBonggolan
-      ORDER BY b.DateCreate DESC;
+SELECT TOP (1)
+    ISNULL(b.Berat, 0) AS Berat,
+    b.Blok,
+    b.IdLokasi
+FROM dbo.Bonggolan AS b
+WHERE b.NoBonggolan = @NoBonggolan
+  AND b.DateUsage IS NULL
+ORDER BY b.DateCreate DESC, b.DateTimeCreate DESC;
     `;
     originalDataQuery = `
-      SELECT SUM(Berat) AS Berat, MAX(IdLokasi) AS IdLokasi, MAX(IdWarehouse) AS IdWarehouse
-      FROM Bonggolan
-      WHERE NoBonggolan = @NoBonggolan
+SELECT TOP (1)
+    ISNULL(b.Berat, 0) AS Berat,
+    b.Blok,
+    b.IdLokasi
+FROM dbo.Bonggolan AS b
+WHERE b.NoBonggolan = @NoBonggolan
+  AND b.DateUsage IS NULL
+ORDER BY b.DateCreate DESC, b.DateTimeCreate DESC;
     `;
 
     // Info mesin bonggolan
@@ -1470,9 +1552,42 @@ async function validateStockOpnameLabel({ noso, label, username, blok, idlokasi 
       ) AS h;
     `;
     originalDataQuery = `
-      SELECT SUM(Berat) AS Berat, MAX(IdLokasi) AS IdLokasi, MAX(IdWarehouse) AS IdWarehouse
-      FROM Gilingan
-      WHERE NoGilingan = @NoGilingan
+      SELECT
+        agg.JmlhSak,
+        agg.Berat,
+        h.Blok,
+        h.IdLokasi
+      FROM (
+        SELECT
+          COUNT(*) AS JmlhSak,
+          SUM(
+            CASE 
+              WHEN d.IsPartial = 1 
+                THEN ISNULL(d.Berat,0) - ISNULL(p.TotalPartial,0)
+              ELSE ISNULL(d.Berat,0)
+            END
+          ) AS Berat
+        FROM [dbo].[Gilingan] AS d
+        LEFT JOIN (
+          SELECT 
+            NoGilingan,
+            SUM(ISNULL(Berat,0)) AS TotalPartial
+          FROM [dbo].[GilinganPartial]
+          WHERE NoGilingan = @NoGilingan
+          GROUP BY NoGilingan
+        ) AS p
+          ON p.NoGilingan = d.NoGilingan
+        WHERE d.NoGilingan = @NoGilingan
+          AND d.DateUsage IS NULL
+      ) AS agg
+      CROSS APPLY (
+        SELECT TOP (1)
+          g.Blok,
+          g.IdLokasi
+        FROM [dbo].[Gilingan] AS g
+        WHERE g.NoGilingan = @NoGilingan
+        ORDER BY g.DateCreate DESC
+      ) AS h;
     `;
 
   } else if (isMixer) {
@@ -1485,51 +1600,51 @@ async function validateStockOpnameLabel({ noso, label, username, blok, idlokasi 
       WHERE NoSO = @noso AND NoMixer = @NoMixer
     `;
     detailQuery = `
-      SELECT
-        agg.JmlhSak,
-        agg.Berat,
-        h.Blok,
-        h.IdLokasi
-    FROM dbo.Mixer_h AS h
-    LEFT JOIN (
-        SELECT
-            d.NoMixer,
-            COUNT(*) AS JmlhSak,
-            SUM(
+;WITH p AS (
+    SELECT
+        mp.NoMixer,
+        mp.NoSak,
+        SUM(ISNULL(mp.Berat,0)) AS TotalPartial
+    FROM dbo.MixerPartial AS mp
+    WHERE mp.NoMixer = @NoMixer
+    GROUP BY mp.NoMixer, mp.NoSak
+),
+drem AS (
+    SELECT
+        d.NoMixer,
+        CASE
+            WHEN d.IsPartial = 1 THEN
                 CASE
-                    WHEN d.IsPartial = 1 THEN
-                        CASE
-                            WHEN ISNULL(d.Berat,0) - ISNULL(p.TotalPartial,0) < 0
-                                THEN 0
-                            ELSE ISNULL(d.Berat,0) - ISNULL(p.TotalPartial,0)
-                        END
-                    ELSE ISNULL(d.Berat,0)
+                    WHEN ISNULL(d.Berat,0) - ISNULL(p.TotalPartial,0) < 0 THEN 0
+                    ELSE ISNULL(d.Berat,0) - ISNULL(p.TotalPartial,0)
                 END
-            ) AS Berat
-        FROM dbo.Mixer_d AS d
-        LEFT JOIN (
-            SELECT
-                mp.NoMixer,
-                mp.NoSak,
-                SUM(ISNULL(mp.Berat,0)) AS TotalPartial
-            FROM dbo.MixerPartial AS mp
-            WHERE mp.NoMixer = @NoMixer
-            GROUP BY mp.NoMixer, mp.NoSak
-        ) AS p
-            ON p.NoMixer = d.NoMixer
-          AND p.NoSak   = d.NoSak
-        WHERE d.NoMixer = @NoMixer
-          AND d.DateUsage IS NULL
-        GROUP BY d.NoMixer
-    ) AS agg
-        ON agg.NoMixer = h.NoMixer
-    WHERE h.NoMixer = @NoMixer
-      AND EXISTS (
-            SELECT 1
-            FROM dbo.StockOpnameMixer AS som
-            WHERE som.NoSO    = @NoSO
-              AND som.NoMixer = h.NoMixer
-      );
+            ELSE ISNULL(d.Berat,0)
+        END AS SisaBerat
+    FROM dbo.Mixer_d d
+    LEFT JOIN p
+        ON p.NoMixer = d.NoMixer
+       AND p.NoSak   = d.NoSak
+    WHERE d.NoMixer   = @NoMixer
+      AND d.DateUsage IS NULL
+),
+agg AS (
+    SELECT
+        NoMixer,
+        SUM(CASE WHEN SisaBerat > 0 THEN 1 ELSE 0 END) AS JmlhSak,
+        SUM(SisaBerat) AS Berat
+    FROM drem
+    GROUP BY NoMixer
+)
+SELECT
+    ISNULL(agg.JmlhSak,0) AS JmlhSak,
+    ISNULL(agg.Berat,0)   AS Berat,
+    h.Blok,
+    h.IdLokasi
+FROM dbo.Mixer_h AS h
+LEFT JOIN agg
+    ON agg.NoMixer = h.NoMixer
+WHERE h.NoMixer = @NoMixer;
+
     `;
     warehouseQuery = `
       SELECT mb.IdWarehouse
@@ -1539,86 +1654,97 @@ async function validateStockOpnameLabel({ noso, label, username, blok, idlokasi 
       WHERE mh.NoMixer = @NoMixer;
     `;
     fallbackQuery = `
-      SELECT
-        agg.JmlhSak,
-        agg.Berat,
-        h.Blok,
-        h.IdLokasi
-      FROM [dbo].[Mixer_h] AS h
-      LEFT JOIN (
-        SELECT
-          d.NoMixer,
-          COUNT(*) AS JmlhSak,
-          SUM(
-            CASE
-              WHEN d.IsPartial = 1 THEN
+     ;WITH p AS (
+    SELECT
+        mp.NoMixer,
+        mp.NoSak,
+        SUM(ISNULL(mp.Berat,0)) AS TotalPartial
+    FROM dbo.MixerPartial AS mp
+    WHERE mp.NoMixer = @NoMixer
+    GROUP BY mp.NoMixer, mp.NoSak
+),
+drem AS (
+    SELECT
+        d.NoMixer,
+        CASE
+            WHEN d.IsPartial = 1 THEN
                 CASE
-                  WHEN ISNULL(d.Berat,0) - ISNULL(p.TotalPartial,0) < 0
-                    THEN 0
-                  ELSE ISNULL(d.Berat,0) - ISNULL(p.TotalPartial,0)
+                    WHEN ISNULL(d.Berat,0) - ISNULL(p.TotalPartial,0) < 0 THEN 0
+                    ELSE ISNULL(d.Berat,0) - ISNULL(p.TotalPartial,0)
                 END
-              ELSE ISNULL(d.Berat,0)
-            END
-          ) AS Berat
-        FROM [dbo].[Mixer_d] AS d
-        LEFT JOIN (
-          SELECT
-            NoMixer,
-            NoSak,
-            SUM(ISNULL(Berat,0)) AS TotalPartial
-          FROM [dbo].[MixerPartial]
-          WHERE NoMixer = @NoMixer
-          GROUP BY NoMixer, NoSak
-        ) AS p
-            ON p.NoMixer = d.NoMixer
-           AND p.NoSak   = d.NoSak
-        WHERE d.NoMixer = @NoMixer
-          AND d.DateUsage IS NULL
-        GROUP BY d.NoMixer
-      ) AS agg
-        ON agg.NoMixer = h.NoMixer
-      WHERE h.NoMixer = @NoMixer;
+            ELSE ISNULL(d.Berat,0)
+        END AS SisaBerat
+    FROM dbo.Mixer_d d
+    LEFT JOIN p
+        ON p.NoMixer = d.NoMixer
+       AND p.NoSak   = d.NoSak
+    WHERE d.NoMixer   = @NoMixer
+      AND d.DateUsage IS NULL
+),
+agg AS (
+    SELECT
+        NoMixer,
+        SUM(CASE WHEN SisaBerat > 0 THEN 1 ELSE 0 END) AS JmlhSak,
+        SUM(SisaBerat) AS Berat
+    FROM drem
+    GROUP BY NoMixer
+)
+SELECT
+    ISNULL(agg.JmlhSak,0) AS JmlhSak,
+    ISNULL(agg.Berat,0)   AS Berat,
+    h.Blok,
+    h.IdLokasi
+FROM dbo.Mixer_h AS h
+LEFT JOIN agg
+    ON agg.NoMixer = h.NoMixer
+WHERE h.NoMixer = @NoMixer;
+
     `;
     originalDataQuery = `
-  SELECT
-        agg.JmlhSak,
-        agg.Berat,
-        h.Blok,
-        h.IdLokasi
-      FROM [dbo].[Mixer_h] AS h
-      LEFT JOIN (
-        SELECT
-          d.NoMixer,
-          COUNT(*) AS JmlhSak,
-          SUM(
-            CASE
-              WHEN d.IsPartial = 1 THEN
+      ;WITH p AS (
+    SELECT
+        mp.NoMixer,
+        mp.NoSak,
+        SUM(ISNULL(mp.Berat,0)) AS TotalPartial
+    FROM dbo.MixerPartial AS mp
+    WHERE mp.NoMixer = @NoMixer
+    GROUP BY mp.NoMixer, mp.NoSak
+),
+drem AS (
+    SELECT
+        d.NoMixer,
+        CASE
+            WHEN d.IsPartial = 1 THEN
                 CASE
-                  WHEN ISNULL(d.Berat,0) - ISNULL(p.TotalPartial,0) < 0
-                    THEN 0
-                  ELSE ISNULL(d.Berat,0) - ISNULL(p.TotalPartial,0)
+                    WHEN ISNULL(d.Berat,0) - ISNULL(p.TotalPartial,0) < 0 THEN 0
+                    ELSE ISNULL(d.Berat,0) - ISNULL(p.TotalPartial,0)
                 END
-              ELSE ISNULL(d.Berat,0)
-            END
-          ) AS Berat
-        FROM [dbo].[Mixer_d] AS d
-        LEFT JOIN (
-          SELECT
-            NoMixer,
-            NoSak,
-            SUM(ISNULL(Berat,0)) AS TotalPartial
-          FROM [dbo].[MixerPartial]
-          WHERE NoMixer = @NoMixer
-          GROUP BY NoMixer, NoSak
-        ) AS p
-            ON p.NoMixer = d.NoMixer
-           AND p.NoSak   = d.NoSak
-        WHERE d.NoMixer = @NoMixer
-          AND d.DateUsage IS NULL
-        GROUP BY d.NoMixer
-      ) AS agg
-        ON agg.NoMixer = h.NoMixer
-      WHERE h.NoMixer = @NoMixer;
+            ELSE ISNULL(d.Berat,0)
+        END AS SisaBerat
+    FROM dbo.Mixer_d d
+    LEFT JOIN p
+        ON p.NoMixer = d.NoMixer
+       AND p.NoSak   = d.NoSak
+    WHERE d.NoMixer   = @NoMixer
+      AND d.DateUsage IS NULL
+),
+agg AS (
+    SELECT
+        NoMixer,
+        SUM(CASE WHEN SisaBerat > 0 THEN 1 ELSE 0 END) AS JmlhSak,
+        SUM(SisaBerat) AS Berat
+    FROM drem
+    GROUP BY NoMixer
+)
+SELECT
+    ISNULL(agg.JmlhSak,0) AS JmlhSak,
+    ISNULL(agg.Berat,0)   AS Berat,
+    h.Blok,
+    h.IdLokasi
+FROM dbo.Mixer_h AS h
+LEFT JOIN agg
+    ON agg.NoMixer = h.NoMixer
+WHERE h.NoMixer = @NoMixer;
     `;
 
   } else if (isFurnitureWIP) {
@@ -1631,59 +1757,52 @@ async function validateStockOpnameLabel({ noso, label, username, blok, idlokasi 
       WHERE NoSO = @noso AND NoFurnitureWIP = @NoFurnitureWIP
     `;
     detailQuery = `
-      WITH base AS (
-        SELECT
-            d.NoFurnitureWIP, 
-            SUM(CASE WHEN d.IsPartial = 1 THEN 0 ELSE ISNULL(d.Pcs,0) END) AS SumNonPartialPcs,
-            SUM(CASE WHEN d.IsPartial = 1 THEN ISNULL(d.Pcs,0) ELSE 0 END) AS SumPartialPcs,
-            SUM(ISNULL(d.Berat,0)) AS TotalBerat
-        FROM dbo.FurnitureWIP AS d
-        WHERE d.NoFurnitureWIP = @NoFurnitureWIP
-          AND d.DateUsage IS NULL
-        GROUP BY d.NoFurnitureWIP
-    ),
-    p AS (
-        SELECT
-            fp.NoFurnitureWIP,
-            SUM(ISNULL(fp.Pcs,0)) AS TotalPartialPcs
-        FROM dbo.FurnitureWIPPartial AS fp
-        WHERE fp.NoFurnitureWIP = @NoFurnitureWIP
-        GROUP BY fp.NoFurnitureWIP
-    ),
-    agg AS (
-        SELECT
-            b.NoFurnitureWIP,
-            b.SumNonPartialPcs +
-            CASE
-                WHEN ISNULL(b.SumPartialPcs,0) - ISNULL(p.TotalPartialPcs,0) < 0
-                    THEN 0
-                ELSE ISNULL(b.SumPartialPcs,0) - ISNULL(p.TotalPartialPcs,0)
-            END AS JmlhSak,
-            b.TotalBerat AS Berat
-        FROM base AS b
-        LEFT JOIN p
-          ON p.NoFurnitureWIP = b.NoFurnitureWIP
-    )
+     WITH base AS (
     SELECT
-        a.JmlhSak,
-        a.Berat,
-        h.Blok,
-        h.IdLokasi
-    FROM agg AS a
-    CROSS APPLY (
-        SELECT TOP (1)
-            fh.Blok,
-            fh.IdLokasi
-        FROM dbo.FurnitureWIP AS fh
-        WHERE fh.NoFurnitureWIP = a.NoFurnitureWIP
-        ORDER BY fh.DateCreate DESC, fh.DateTimeCreate DESC
-    ) AS h
-    WHERE EXISTS (
-        SELECT 1
-        FROM dbo.StockOpnameFurnitureWIP AS sof
-        WHERE sof.NoSO          = @NoSO
-          AND sof.NoFurnitureWIP = a.NoFurnitureWIP
-    );
+        d.NoFurnitureWIP,
+        SUM(CASE WHEN d.IsPartial = 1 THEN 0 ELSE ISNULL(d.Pcs,0) END) AS SumNonPartialPcs,
+        SUM(CASE WHEN d.IsPartial = 1 THEN ISNULL(d.Pcs,0) ELSE 0 END) AS SumPartialPcs,
+        SUM(ISNULL(d.Berat,0)) AS TotalBerat
+    FROM dbo.FurnitureWIP AS d
+    WHERE d.NoFurnitureWIP = @NoFurnitureWIP
+      AND d.DateUsage IS NULL
+    GROUP BY d.NoFurnitureWIP
+),
+p AS (
+    SELECT
+        fp.NoFurnitureWIP,
+        SUM(ISNULL(fp.Pcs,0)) AS TotalPartialPcs
+    FROM dbo.FurnitureWIPPartial AS fp
+    WHERE fp.NoFurnitureWIP = @NoFurnitureWIP
+    GROUP BY fp.NoFurnitureWIP
+),
+agg AS (
+    SELECT
+        b.NoFurnitureWIP,
+        b.SumNonPartialPcs +
+        CASE
+            WHEN ISNULL(b.SumPartialPcs,0) - ISNULL(p.TotalPartialPcs,0) < 0 THEN 0
+            ELSE ISNULL(b.SumPartialPcs,0) - ISNULL(p.TotalPartialPcs,0)
+        END AS JmlhSak,
+        b.TotalBerat AS Berat
+    FROM base AS b
+    LEFT JOIN p
+      ON p.NoFurnitureWIP = b.NoFurnitureWIP
+)
+SELECT
+    a.JmlhSak,
+    a.Berat,
+    h.Blok,
+    h.IdLokasi
+FROM agg AS a
+CROSS APPLY (
+    SELECT TOP (1)
+        fh.Blok,
+        fh.IdLokasi
+    FROM dbo.FurnitureWIP AS fh
+    WHERE fh.NoFurnitureWIP = a.NoFurnitureWIP
+    ORDER BY fh.DateCreate DESC, fh.DateTimeCreate DESC
+) AS h;
     `;
     warehouseQuery = `
       SELECT mb.IdWarehouse
@@ -1693,57 +1812,101 @@ async function validateStockOpnameLabel({ noso, label, username, blok, idlokasi 
       WHERE fh.NoFurnitureWIP = @NoFurnitureWIP;
     `;
     fallbackQuery = `
-          WITH base AS (
-            SELECT
-              d.NoFurnitureWIP,
-              SUM(CASE WHEN d.IsPartial = 1 THEN 0 ELSE ISNULL(d.Pcs,0) END) AS SumNonPartialPcs,
-              SUM(CASE WHEN d.IsPartial = 1 THEN ISNULL(d.Pcs,0) ELSE 0 END) AS SumPartialPcs,
-              SUM(ISNULL(d.Berat,0)) AS TotalBerat
-            FROM [dbo].[FurnitureWIP] d
-            WHERE d.NoFurnitureWIP = @NoFurnitureWIP
-              AND d.DateUsage IS NULL
-            GROUP BY d.NoFurnitureWIP
-          ),
-          p AS (
-            SELECT
-              fp.NoFurnitureWIP,
-              SUM(ISNULL(fp.Pcs,0)) AS TotalPartialPcs
-            FROM [dbo].[FurnitureWIPPartial] fp
-            WHERE fp.NoFurnitureWIP = @NoFurnitureWIP
-            GROUP BY fp.NoFurnitureWIP
-          ),
-          agg AS (
-            SELECT
-              b.NoFurnitureWIP,
-              b.SumNonPartialPcs +
-              CASE
-                WHEN ISNULL(b.SumPartialPcs,0) - ISNULL(p.TotalPartialPcs,0) < 0
-                  THEN 0
-                ELSE ISNULL(b.SumPartialPcs,0) - ISNULL(p.TotalPartialPcs,0)
-              END AS JmlhSak,
-              b.TotalBerat AS Berat
-            FROM base b
-            LEFT JOIN p ON p.NoFurnitureWIP = b.NoFurnitureWIP
-          )
-          SELECT
-            a.JmlhSak,
-            a.Berat,
-            h.Blok,
-            h.IdLokasi
-          FROM agg a
-          CROSS APPLY (
-            SELECT TOP (1)
-              fh.Blok,
-              fh.IdLokasi
-            FROM [dbo].[FurnitureWIP] AS fh
-            WHERE fh.NoFurnitureWIP = a.NoFurnitureWIP
-            ORDER BY fh.DateCreate DESC, fh.DateTimeCreate DESC
-          ) AS h;
+WITH base AS (
+    SELECT
+        d.NoFurnitureWIP,
+        SUM(CASE WHEN d.IsPartial = 1 THEN 0 ELSE ISNULL(d.Pcs,0) END) AS SumNonPartialPcs,
+        SUM(CASE WHEN d.IsPartial = 1 THEN ISNULL(d.Pcs,0) ELSE 0 END) AS SumPartialPcs,
+        SUM(ISNULL(d.Berat,0)) AS TotalBerat
+    FROM dbo.FurnitureWIP AS d
+    WHERE d.NoFurnitureWIP = @NoFurnitureWIP
+      AND d.DateUsage IS NULL
+    GROUP BY d.NoFurnitureWIP
+),
+p AS (
+    SELECT
+        fp.NoFurnitureWIP,
+        SUM(ISNULL(fp.Pcs,0)) AS TotalPartialPcs
+    FROM dbo.FurnitureWIPPartial AS fp
+    WHERE fp.NoFurnitureWIP = @NoFurnitureWIP
+    GROUP BY fp.NoFurnitureWIP
+),
+agg AS (
+    SELECT
+        b.NoFurnitureWIP,
+        b.SumNonPartialPcs +
+        CASE
+            WHEN ISNULL(b.SumPartialPcs,0) - ISNULL(p.TotalPartialPcs,0) < 0 THEN 0
+            ELSE ISNULL(b.SumPartialPcs,0) - ISNULL(p.TotalPartialPcs,0)
+        END AS JmlhSak,
+        b.TotalBerat AS Berat
+    FROM base AS b
+    LEFT JOIN p
+      ON p.NoFurnitureWIP = b.NoFurnitureWIP
+)
+SELECT
+    a.JmlhSak,
+    a.Berat,
+    h.Blok,
+    h.IdLokasi
+FROM agg AS a
+CROSS APPLY (
+    SELECT TOP (1)
+        fh.Blok,
+        fh.IdLokasi
+    FROM dbo.FurnitureWIP AS fh
+    WHERE fh.NoFurnitureWIP = a.NoFurnitureWIP
+    ORDER BY fh.DateCreate DESC, fh.DateTimeCreate DESC
+) AS h;
+
     `;
     originalDataQuery = `
-      SELECT COUNT(*) AS JumlahSak, SUM(Berat) AS Berat, MAX(IdLokasi) AS IdLokasi, MAX(IdWarehouse) AS IdWarehouse
-      FROM FurnitureWIP
-      WHERE NoFurnitureWIP = @NoFurnitureWIP
+         WITH base AS (
+    SELECT
+        d.NoFurnitureWIP,
+        SUM(CASE WHEN d.IsPartial = 1 THEN 0 ELSE ISNULL(d.Pcs,0) END) AS SumNonPartialPcs,
+        SUM(CASE WHEN d.IsPartial = 1 THEN ISNULL(d.Pcs,0) ELSE 0 END) AS SumPartialPcs,
+        SUM(ISNULL(d.Berat,0)) AS TotalBerat
+    FROM dbo.FurnitureWIP AS d
+    WHERE d.NoFurnitureWIP = @NoFurnitureWIP
+      AND d.DateUsage IS NULL
+    GROUP BY d.NoFurnitureWIP
+),
+p AS (
+    SELECT
+        fp.NoFurnitureWIP,
+        SUM(ISNULL(fp.Pcs,0)) AS TotalPartialPcs
+    FROM dbo.FurnitureWIPPartial AS fp
+    WHERE fp.NoFurnitureWIP = @NoFurnitureWIP
+    GROUP BY fp.NoFurnitureWIP
+),
+agg AS (
+    SELECT
+        b.NoFurnitureWIP,
+        b.SumNonPartialPcs +
+        CASE
+            WHEN ISNULL(b.SumPartialPcs,0) - ISNULL(p.TotalPartialPcs,0) < 0 THEN 0
+            ELSE ISNULL(b.SumPartialPcs,0) - ISNULL(p.TotalPartialPcs,0)
+        END AS JmlhSak,
+        b.TotalBerat AS Berat
+    FROM base AS b
+    LEFT JOIN p
+      ON p.NoFurnitureWIP = b.NoFurnitureWIP
+)
+SELECT
+    a.JmlhSak,
+    a.Berat,
+    h.Blok,
+    h.IdLokasi
+FROM agg AS a
+CROSS APPLY (
+    SELECT TOP (1)
+        fh.Blok,
+        fh.IdLokasi
+    FROM dbo.FurnitureWIP AS fh
+    WHERE fh.NoFurnitureWIP = a.NoFurnitureWIP
+    ORDER BY fh.DateCreate DESC, fh.DateTimeCreate DESC
+) AS h;
     `;
 
   } else if (isBarangJadi) {
@@ -1756,59 +1919,53 @@ async function validateStockOpnameLabel({ noso, label, username, blok, idlokasi 
       WHERE NoSO = @noso AND NoBJ = @NoBJ
     `;
     detailQuery = `
-      ;WITH base AS (
-          SELECT
-              d.NoBJ,
-              SUM(CASE WHEN d.IsPartial = 1 THEN 0 ELSE ISNULL(d.Pcs,0) END) AS SumNonPartialPcs,
-              SUM(CASE WHEN d.IsPartial = 1 THEN ISNULL(d.Pcs,0) ELSE 0 END) AS SumPartialPcs,
-              SUM(ISNULL(d.Berat,0)) AS TotalBerat
-          FROM dbo.BarangJadi AS d
-          WHERE d.NoBJ = @NoBJ
-            AND d.DateUsage IS NULL
-          GROUP BY d.NoBJ
-      ),
-      p AS (
-          SELECT
-              bp.NoBJ,
-              SUM(ISNULL(bp.Pcs,0)) AS TotalPartialPcs
-          FROM dbo.BarangJadiPartial AS bp
-          WHERE bp.NoBJ = @NoBJ
-          GROUP BY bp.NoBJ
-      ),
-      agg AS (
-          SELECT
-              b.NoBJ,
-              b.SumNonPartialPcs +
-              CASE
-                  WHEN ISNULL(b.SumPartialPcs,0) - ISNULL(p.TotalPartialPcs,0) < 0
-                      THEN 0
-                  ELSE ISNULL(b.SumPartialPcs,0) - ISNULL(p.TotalPartialPcs,0)
-              END AS JmlhSak,
-              b.TotalBerat AS Berat
-          FROM base AS b
-          LEFT JOIN p
-            ON p.NoBJ = b.NoBJ
-      )
-      SELECT
-          a.JmlhSak,
-          a.Berat,
-          h.Blok,
-          h.IdLokasi
-      FROM agg AS a
-      CROSS APPLY (
-          SELECT TOP (1)
-              bh.Blok,
-              bh.IdLokasi
-          FROM dbo.BarangJadi AS bh
-          WHERE bh.NoBJ = a.NoBJ
-          ORDER BY bh.DateCreate DESC, bh.DateTimeCreate DESC
-      ) AS h
-      WHERE EXISTS (
-          SELECT 1
-          FROM dbo.StockOpnameBarangJadi AS sobj
-          WHERE sobj.NoSO = @NoSO
-            AND sobj.NoBJ = a.NoBJ
-      );
+     ;WITH base AS (
+    SELECT
+        d.NoBJ,
+        SUM(CASE WHEN d.IsPartial = 1 THEN 0 ELSE ISNULL(d.Pcs,0) END) AS SumNonPartialPcs,
+        SUM(CASE WHEN d.IsPartial = 1 THEN ISNULL(d.Pcs,0) ELSE 0 END) AS SumPartialPcs,
+        SUM(ISNULL(d.Berat,0)) AS TotalBerat
+    FROM dbo.BarangJadi AS d
+    WHERE d.NoBJ = @NoBJ
+      AND d.DateUsage IS NULL
+    GROUP BY d.NoBJ
+),
+p AS (
+    SELECT
+        bp.NoBJ,
+        SUM(ISNULL(bp.Pcs,0)) AS TotalPartialPcs
+    FROM dbo.BarangJadiPartial AS bp
+    WHERE bp.NoBJ = @NoBJ
+    GROUP BY bp.NoBJ
+),
+agg AS (
+    SELECT
+        b.NoBJ,
+        b.SumNonPartialPcs +
+        CASE
+            WHEN ISNULL(b.SumPartialPcs,0) - ISNULL(p.TotalPartialPcs,0) < 0 THEN 0
+            ELSE ISNULL(b.SumPartialPcs,0) - ISNULL(p.TotalPartialPcs,0)
+        END AS JmlhSak,
+        b.TotalBerat AS Berat
+    FROM base AS b
+    LEFT JOIN p
+      ON p.NoBJ = b.NoBJ
+)
+SELECT
+    a.JmlhSak,
+    a.Berat,
+    h.Blok,
+    h.IdLokasi
+FROM agg AS a
+CROSS APPLY (
+    SELECT TOP (1)
+        bh.Blok,
+        bh.IdLokasi
+    FROM dbo.BarangJadi AS bh
+    WHERE bh.NoBJ = a.NoBJ
+    ORDER BY bh.DateCreate DESC, bh.DateTimeCreate DESC
+) AS h;
+
     `;
     warehouseQuery = `
       SELECT mb.IdWarehouse
@@ -1818,57 +1975,100 @@ async function validateStockOpnameLabel({ noso, label, username, blok, idlokasi 
       WHERE bh.NoBJ = @NoBJ;
     `;
     fallbackQuery = `
-       ;WITH base AS (
-        SELECT
-          d.NoBJ,
-          SUM(CASE WHEN d.IsPartial = 1 THEN 0 ELSE ISNULL(d.Pcs,0) END) AS SumNonPartialPcs,
-          SUM(CASE WHEN d.IsPartial = 1 THEN ISNULL(d.Pcs,0) ELSE 0 END) AS SumPartialPcs,
-          SUM(ISNULL(d.Berat,0)) AS TotalBerat
-        FROM [dbo].[BarangJadi] d
-        WHERE d.NoBJ = @NoBJ
-          AND d.DateUsage IS NULL
-        GROUP BY d.NoBJ
-      ),
-      p AS (
-        SELECT
-          NoBJ,
-          SUM(ISNULL(Pcs,0)) AS TotalPartialPcs
-        FROM [dbo].[BarangJadiPartial]
-        WHERE NoBJ = @NoBJ
-        GROUP BY NoBJ
-      ),
-      agg AS (
-        SELECT
-          b.NoBJ,
-          b.SumNonPartialPcs +
-          CASE
-            WHEN ISNULL(b.SumPartialPcs,0) - ISNULL(p.TotalPartialPcs,0) < 0
-              THEN 0
+     ;WITH base AS (
+    SELECT
+        d.NoBJ,
+        SUM(CASE WHEN d.IsPartial = 1 THEN 0 ELSE ISNULL(d.Pcs,0) END) AS SumNonPartialPcs,
+        SUM(CASE WHEN d.IsPartial = 1 THEN ISNULL(d.Pcs,0) ELSE 0 END) AS SumPartialPcs,
+        SUM(ISNULL(d.Berat,0)) AS TotalBerat
+    FROM dbo.BarangJadi AS d
+    WHERE d.NoBJ = @NoBJ
+      AND d.DateUsage IS NULL
+    GROUP BY d.NoBJ
+),
+p AS (
+    SELECT
+        bp.NoBJ,
+        SUM(ISNULL(bp.Pcs,0)) AS TotalPartialPcs
+    FROM dbo.BarangJadiPartial AS bp
+    WHERE bp.NoBJ = @NoBJ
+    GROUP BY bp.NoBJ
+),
+agg AS (
+    SELECT
+        b.NoBJ,
+        b.SumNonPartialPcs +
+        CASE
+            WHEN ISNULL(b.SumPartialPcs,0) - ISNULL(p.TotalPartialPcs,0) < 0 THEN 0
             ELSE ISNULL(b.SumPartialPcs,0) - ISNULL(p.TotalPartialPcs,0)
-          END AS JmlhSak,
-          b.TotalBerat AS Berat
-        FROM base b
-        LEFT JOIN p ON p.NoBJ = b.NoBJ
-      )
-      SELECT
-        a.JmlhSak,
-        a.Berat,
-        h.Blok,
-        h.IdLokasi
-      FROM agg a
-      CROSS APPLY (
-        SELECT TOP (1)
-          bh.Blok,
-          bh.IdLokasi
-        FROM [dbo].[BarangJadi] AS bh
-        WHERE bh.NoBJ = a.NoBJ
-        ORDER BY bh.DateCreate DESC, bh.DateTimeCreate DESC
-      ) AS h;
+        END AS JmlhSak,
+        b.TotalBerat AS Berat
+    FROM base AS b
+    LEFT JOIN p
+      ON p.NoBJ = b.NoBJ
+)
+SELECT
+    a.JmlhSak,
+    a.Berat,
+    h.Blok,
+    h.IdLokasi
+FROM agg AS a
+CROSS APPLY (
+    SELECT TOP (1)
+        bh.Blok,
+        bh.IdLokasi
+    FROM dbo.BarangJadi AS bh
+    WHERE bh.NoBJ = a.NoBJ
+    ORDER BY bh.DateCreate DESC, bh.DateTimeCreate DESC
+) AS h;
     `;
     originalDataQuery = `
-      SELECT COUNT(*) AS JumlahSak, SUM(Berat) AS Berat, MAX(IdLokasi) AS IdLokasi, MAX(IdWarehouse) AS IdWarehouse
-      FROM BarangJadi
-      WHERE NoBJ = @NoBJ
+      ;WITH base AS (
+    SELECT
+        d.NoBJ,
+        SUM(CASE WHEN d.IsPartial = 1 THEN 0 ELSE ISNULL(d.Pcs,0) END) AS SumNonPartialPcs,
+        SUM(CASE WHEN d.IsPartial = 1 THEN ISNULL(d.Pcs,0) ELSE 0 END) AS SumPartialPcs,
+        SUM(ISNULL(d.Berat,0)) AS TotalBerat
+    FROM dbo.BarangJadi AS d
+    WHERE d.NoBJ = @NoBJ
+      AND d.DateUsage IS NULL
+    GROUP BY d.NoBJ
+),
+p AS (
+    SELECT
+        bp.NoBJ,
+        SUM(ISNULL(bp.Pcs,0)) AS TotalPartialPcs
+    FROM dbo.BarangJadiPartial AS bp
+    WHERE bp.NoBJ = @NoBJ
+    GROUP BY bp.NoBJ
+),
+agg AS (
+    SELECT
+        b.NoBJ,
+        b.SumNonPartialPcs +
+        CASE
+            WHEN ISNULL(b.SumPartialPcs,0) - ISNULL(p.TotalPartialPcs,0) < 0 THEN 0
+            ELSE ISNULL(b.SumPartialPcs,0) - ISNULL(p.TotalPartialPcs,0)
+        END AS JmlhSak,
+        b.TotalBerat AS Berat
+    FROM base AS b
+    LEFT JOIN p
+      ON p.NoBJ = b.NoBJ
+)
+SELECT
+    a.JmlhSak,
+    a.Berat,
+    h.Blok,
+    h.IdLokasi
+FROM agg AS a
+CROSS APPLY (
+    SELECT TOP (1)
+        bh.Blok,
+        bh.IdLokasi
+    FROM dbo.BarangJadi AS bh
+    WHERE bh.NoBJ = a.NoBJ
+    ORDER BY bh.DateCreate DESC, bh.DateTimeCreate DESC
+) AS h;
     `;
 
   } else if (isReject) {
@@ -1881,19 +2081,48 @@ async function validateStockOpnameLabel({ noso, label, username, blok, idlokasi 
       WHERE NoSO = @noso AND NoReject = @NoReject
     `;
     detailQuery = `
-      SELECT TOP (1)
-          r.Berat,
-          r.Blok,
-          r.IdLokasi
-      FROM dbo.RejectV2 AS r
-      WHERE r.NoReject = @NoReject
-        AND EXISTS (
-              SELECT 1
-              FROM dbo.StockOpnameReject AS sor
-              WHERE sor.NoSO    = @NoSO
-                AND sor.NoReject = r.NoReject
-        )
-      ORDER BY r.DateCreate DESC, r.DateTimeCreate DESC;
+      ;WITH base AS (
+          SELECT
+              r.NoReject,
+              SUM(CASE WHEN r.IsPartial = 1 THEN 0 ELSE ISNULL(r.Berat,0) END) AS SumNonPartialBerat,
+              SUM(CASE WHEN r.IsPartial = 1 THEN ISNULL(r.Berat,0) ELSE 0 END) AS SumPartialBerat
+          FROM dbo.RejectV2 r
+          WHERE r.NoReject = @NoReject
+            AND r.DateUsage IS NULL
+          GROUP BY r.NoReject
+      ),
+      p AS (
+          SELECT
+              NoReject,
+              SUM(ISNULL(Berat,0)) AS TotalPartialBerat
+          FROM dbo.RejectV2Partial
+          WHERE NoReject = @NoReject
+          GROUP BY NoReject
+      ),
+      agg AS (
+          SELECT
+              b.NoReject,
+              b.SumNonPartialBerat
+              + CASE
+                  WHEN ISNULL(b.SumPartialBerat,0) - ISNULL(p.TotalPartialBerat,0) < 0 THEN 0
+                  ELSE ISNULL(b.SumPartialBerat,0) - ISNULL(p.TotalPartialBerat,0)
+                END AS Berat
+          FROM base b
+          LEFT JOIN p ON p.NoReject = b.NoReject
+      )
+      SELECT
+          a.Berat,
+          h.Blok,
+          h.IdLokasi
+      FROM agg a
+      CROSS APPLY (
+          SELECT TOP (1)
+              rv.Blok,
+              rv.IdLokasi
+          FROM dbo.RejectV2 rv
+          WHERE rv.NoReject = a.NoReject
+          ORDER BY rv.DateCreate DESC, rv.DateTimeCreate DESC
+      ) AS h;
     `;
     warehouseQuery = `
       SELECT mb.IdWarehouse
@@ -1903,20 +2132,94 @@ async function validateStockOpnameLabel({ noso, label, username, blok, idlokasi 
       WHERE rh.NoReject = @NoReject;
     `;
     fallbackQuery = `
-      SELECT TOP (1)
-        r.Berat,
-        r.Blok,
-        r.IdLokasi
-      FROM [dbo].[RejectV2] AS r
-      WHERE r.NoReject = @NoReject AND DateUsage IS NULL
-      ORDER BY r.DateCreate DESC, r.DateTimeCreate DESC;
+      ;WITH base AS (
+          SELECT
+              r.NoReject,
+              SUM(CASE WHEN r.IsPartial = 1 THEN 0 ELSE ISNULL(r.Berat,0) END) AS SumNonPartialBerat,
+              SUM(CASE WHEN r.IsPartial = 1 THEN ISNULL(r.Berat,0) ELSE 0 END) AS SumPartialBerat
+          FROM dbo.RejectV2 r
+          WHERE r.NoReject = @NoReject
+            AND r.DateUsage IS NULL
+          GROUP BY r.NoReject
+      ),
+      p AS (
+          SELECT
+              NoReject,
+              SUM(ISNULL(Berat,0)) AS TotalPartialBerat
+          FROM dbo.RejectV2Partial
+          WHERE NoReject = @NoReject
+          GROUP BY NoReject
+      ),
+      agg AS (
+          SELECT
+              b.NoReject,
+              b.SumNonPartialBerat
+              + CASE
+                  WHEN ISNULL(b.SumPartialBerat,0) - ISNULL(p.TotalPartialBerat,0) < 0 THEN 0
+                  ELSE ISNULL(b.SumPartialBerat,0) - ISNULL(p.TotalPartialBerat,0)
+                END AS Berat
+          FROM base b
+          LEFT JOIN p ON p.NoReject = b.NoReject
+      )
+      SELECT
+          a.Berat,
+          h.Blok,
+          h.IdLokasi
+      FROM agg a
+      CROSS APPLY (
+          SELECT TOP (1)
+              rv.Blok,
+              rv.IdLokasi
+          FROM dbo.RejectV2 rv
+          WHERE rv.NoReject = a.NoReject
+          ORDER BY rv.DateCreate DESC, rv.DateTimeCreate DESC
+      ) AS h;
     `;
     // FIX: originalData dari RejectV2 
     originalDataQuery = `
-      SELECT SUM(Berat) AS Berat, MAX(IdLokasi) AS IdLokasi, MAX(IdWarehouse) AS IdWarehouse
-      FROM RejectV2
-      WHERE NoReject = @NoReject
-    `;
+    ;WITH base AS (
+        SELECT
+            r.NoReject,
+            SUM(CASE WHEN r.IsPartial = 1 THEN 0 ELSE ISNULL(r.Berat,0) END) AS SumNonPartialBerat,
+            SUM(CASE WHEN r.IsPartial = 1 THEN ISNULL(r.Berat,0) ELSE 0 END) AS SumPartialBerat
+        FROM dbo.RejectV2 r
+        WHERE r.NoReject = @NoReject
+          AND r.DateUsage IS NULL
+        GROUP BY r.NoReject
+    ),
+    p AS (
+        SELECT
+            NoReject,
+            SUM(ISNULL(Berat,0)) AS TotalPartialBerat
+        FROM dbo.RejectV2Partial
+        WHERE NoReject = @NoReject
+        GROUP BY NoReject
+    ),
+    agg AS (
+        SELECT
+            b.NoReject,
+            b.SumNonPartialBerat
+            + CASE
+                WHEN ISNULL(b.SumPartialBerat,0) - ISNULL(p.TotalPartialBerat,0) < 0 THEN 0
+                ELSE ISNULL(b.SumPartialBerat,0) - ISNULL(p.TotalPartialBerat,0)
+              END AS Berat
+        FROM base b
+        LEFT JOIN p ON p.NoReject = b.NoReject
+    )
+    SELECT
+        a.Berat,
+        h.Blok,
+        h.IdLokasi
+    FROM agg a
+    CROSS APPLY (
+        SELECT TOP (1)
+            rv.Blok,
+            rv.IdLokasi
+        FROM dbo.RejectV2 rv
+        WHERE rv.NoReject = a.NoReject
+        ORDER BY rv.DateCreate DESC, rv.DateTimeCreate DESC
+    ) AS h;
+  `;
   }
 
   // 3) Early duplicate
@@ -1986,7 +2289,7 @@ async function validateStockOpnameLabel({ noso, label, username, blok, idlokasi 
       parsed,
       idWarehouse,
       detail: originalData ? {
-        JmlhSak: originalData.JumlahSak ?? null,
+        JmlhSak: originalData.JmlhSak ?? null,
         Berat: originalData?.Berat != null ? Number(Number(originalData.Berat).toFixed(2)) : null,
         Blok: originalData.Blok,
         IdLokasi: originalData.IdLokasi

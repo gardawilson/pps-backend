@@ -3102,82 +3102,172 @@ async function saveStockOpnameAscendHasil(noSO, dataList) {
 
 
 
-async function fetchQtyUsage(itemId, tglSO) {
+/**
+ * Mengambil hasil kalkulasi stok lengkap untuk suatu ItemID, tanggal, dan daftar Warehouse.
+ *
+ * @param {number} itemId - ID Item yang dicari.
+ * @param {Date|string} tglSO - Tanggal awal perhitungan stok (akan digunakan sebagai >= tglSO).
+ * @param {string} widsCsv - Daftar ID Warehouse yang dipisahkan koma (misalnya '1,2,3').
+ * @returns {Promise<number>} - Hasil kalkulasi stok bersih.
+ */
+async function fetchQtyUsage(itemId, tglSO, widsCsv) {
   try {
+    // Pastikan widsCsv disediakan dan bukan string kosong
+    if (!widsCsv || typeof widsCsv !== 'string') {
+      throw new Error("Parameter widsCsv (Daftar ID Gudang) harus disediakan.");
+    }
+
     const pool = await poolPromise;
     const request = pool.request();
 
+    // 1. Menambahkan input untuk WIDsCsv (Warehouse IDs)
     const result = await request
-      .input('ItemID', sql.Int, itemId)   // ItemID = INT
-      .input('Tanggal', sql.Date, tglSO) // Tanggal = DATE
+      .input('ItemID', sql.Int, itemId)       // Target Item ID
+      .input('StartDate', sql.Date, tglSO)    // Tanggal awal (>=)
+      .input('WIDsCsv', sql.VarChar, widsCsv) // Daftar Warehouse ID (CSV string)
       .query(`
+        -- Query SQL Lengkap (Sudah Termasuk Filter Gudang dan Perbaikan PackingX)
         SELECT
             Z.ItemID,
-            (0 - ISNULL(Z.QtyUsg,0) + ISNULL(Z.QtyUbb,0)
-              - ISNULL(Z.QtySls,0) - ISNULL(Z.QtyPR,0)) AS Hasil
+            (
+              ISNULL(Z.QtyPrcIn, 0)
+              - ISNULL(Z.QtyUsg, 0)
+              + ISNULL(Z.QtyUbb, 0)
+              - ISNULL(Z.QtySls, 0)
+              - ISNULL(Z.QtyPR, 0)
+              + ISNULL(Z.QtyRTR, 0)
+              - ISNULL(Z.QtyAssm, 0)
+              + ISNULL(Z.TRFIN, 0)
+              - ISNULL(Z.TRFOUT, 0)
+              - ISNULL(Z.GDN, 0)
+            ) AS Hasil
         FROM (
             SELECT AA.ItemID, AA.ItemCode,
-                   ISNULL(BB.QtyPrcIn,0)  AS QtyPrcIn,
-                   ISNULL(CC.QtyUsg,0)    AS QtyUsg,
-                   ISNULL(DD.QtyUsg,0)    AS QtyUbb,
-                   ISNULL(EE.QtySls,0)    AS QtySls,
-                   ISNULL(FF.QtyPrcOut,0) AS QtyPR
+                   ISNULL(BB.QtyPrcIn, 0) AS QtyPrcIn,
+                   ISNULL(CC.QtyUsg, 0) AS QtyUsg,
+                   ISNULL(DD.QtyUsg, 0) AS QtyUbb,
+                   ISNULL(EE.QtySls, 0) AS QtySls,
+                   ISNULL(FF.QtyPrcOut, 0) AS QtyPR,
+                   ISNULL(GG.QtySlsRT, 0) AS QtyRTR,
+                   ISNULL(HH.QtySlsRT, 0) AS QtyAssm,
+                   ISNULL(II.TRFIN, 0) AS TRFIN,
+                   ISNULL(JJ.TRFOUT, 0) AS TRFOUT,
+                   ISNULL(KK.QtySls, 0) AS GDN
             FROM (
                 SELECT I.ItemID, I.ItemCode
                 FROM [AS_GSU_2022].[dbo].[IC_Items] I
-                WHERE I.Disabled = 0
-                  AND I.ItemType = 0
+                WHERE I.Disabled = 0 AND I.ItemType = 0
             ) AA
+            -- Subquery BB: QtyPrcIn (Pembelian Masuk)
             LEFT JOIN (
                 SELECT D.ItemID,
-                       SUM([AS_GSU_2022].[dbo].[UDF_Common_ConvertToSmallestUOMEx](
-                           Packing2,Packing3,Packing4,Quantity,UOMLevel)) AS QtyPrcIn
+                       SUM([AS_GSU_2022].[dbo].[UDF_Common_ConvertToSmallestUOMEx](I.Packing2, I.Packing3, I.Packing4, Quantity, UOMLevel)) AS QtyPrcIn
                 FROM [AS_GSU_2022].[dbo].[AP_PurchaseDetails] D
-                JOIN [AS_GSU_2022].[dbo].[AP_Purchases] P ON P.PurchaseID=D.PurchaseID
+                JOIN [AS_GSU_2022].[dbo].[AP_Purchases] P ON P.PurchaseID = D.PurchaseID
                 INNER JOIN [AS_GSU_2022].[dbo].[IC_Items] I ON I.ItemID = D.ItemID
-                WHERE P.PurchaseDate >= @Tanggal AND P.Void=0 AND IsPurchase=1
+                WHERE P.PurchaseDate >= @StartDate AND P.Void = 0 AND IsPurchase = 1
+                  AND D.WAREHOUSEID IN (SELECT CAST([value] AS INT) FROM STRING_SPLIT(@WIDsCsv, ',')) -- FILTER GUDANG
                 GROUP BY D.ItemID
-            ) BB ON BB.ItemID=AA.ItemID
+            ) BB ON BB.ItemID = AA.ItemID
+            -- Subquery CC: QtyUsg (Penggunaan)
             LEFT JOIN (
                 SELECT U.ItemID,
-                       SUM([AS_GSU_2022].[dbo].[UDF_Common_ConvertToSmallestUOMEx](
-                           Packing2,Packing3,Packing4,Quantity,UOMLevel)) AS QtyUsg
+                       SUM([AS_GSU_2022].[dbo].[UDF_Common_ConvertToSmallestUOMEx](I.Packing2, I.Packing3, I.Packing4, Quantity, UOMLevel)) AS QtyUsg
                 FROM [AS_GSU_2022].[dbo].[IC_UsageDetails] U
-                JOIN [AS_GSU_2022].[dbo].[IC_Usages] UH ON UH.UsageID=U.UsageID
+                JOIN [AS_GSU_2022].[dbo].[IC_Usages] UH ON UH.UsageID = U.UsageID
                 INNER JOIN [AS_GSU_2022].[dbo].[IC_Items] I ON I.ItemID = U.ItemID
-                WHERE UH.UsageDate >= @Tanggal AND UH.Void=0 AND UH.Approved=1
+                WHERE UH.UsageDate >= @StartDate AND UH.Void = 0 AND UH.Approved = 1
+                  AND U.WAREHOUSEID IN (SELECT CAST([value] AS INT) FROM STRING_SPLIT(@WIDsCsv, ',')) -- FILTER GUDANG
                 GROUP BY U.ItemID
-            ) CC ON CC.ItemID=AA.ItemID
+            ) CC ON CC.ItemID = AA.ItemID
+            -- Subquery DD: QtyUbb (Penyesuaian)
             LEFT JOIN (
                 SELECT U.ItemID,
-                       SUM([AS_GSU_2022].[dbo].[UDF_Common_ConvertToSmallestUOMEx](
-                           Packing2,Packing3,Packing4,QtyAdjustBy,UOMLevel)) AS QtyUsg
+                       SUM([AS_GSU_2022].[dbo].[UDF_Common_ConvertToSmallestUOMEx](I.Packing2, I.Packing3, I.Packing4, QtyAdjustBy, UOMLevel)) AS QtyUsg
                 FROM [AS_GSU_2022].[dbo].[IC_AdjustmentDetails] U
-                JOIN [AS_GSU_2022].[dbo].[IC_Adjustments] UH ON UH.AdjustmentID=U.AdjustmentID
+                JOIN [AS_GSU_2022].[dbo].[IC_Adjustments] UH ON UH.AdjustmentID = U.AdjustmentID
                 INNER JOIN [AS_GSU_2022].[dbo].[IC_Items] I ON I.ItemID = U.ItemID
-                WHERE UH.AdjustmentDate >= @Tanggal AND UH.Void=0 AND UH.Approved=1
+                WHERE UH.AdjustmentDate >= @StartDate AND UH.Void = 0 AND UH.Approved = 1
+                  AND U.WAREHOUSEID IN (SELECT CAST([value] AS INT) FROM STRING_SPLIT(@WIDsCsv, ',')) -- FILTER GUDANG
                 GROUP BY U.ItemID
-            ) DD ON DD.ItemID=AA.ItemID
+            ) DD ON DD.ItemID = AA.ItemID
+            -- Subquery EE: QtySls (Penjualan - AR Invoice)
             LEFT JOIN (
                 SELECT U.ItemID,
-                       SUM([AS_GSU_2022].[dbo].[UDF_Common_ConvertToSmallestUOMEx](
-                           Packing2,Packing3,Packing4,Quantity,UOMLevel)) AS QtySls
+                       SUM([AS_GSU_2022].[dbo].[UDF_Common_ConvertToSmallestUOMEx](I.Packing2, I.Packing3, I.Packing4, Quantity, UOMLevel)) AS QtySls
                 FROM [AS_GSU_2022].[dbo].[AR_InvoiceDetails] U
-                JOIN [AS_GSU_2022].[dbo].[AR_Invoices] UH ON UH.InvoiceID=U.InvoiceID
+                JOIN [AS_GSU_2022].[dbo].[AR_Invoices] UH ON UH.InvoiceID = U.InvoiceID
                 INNER JOIN [AS_GSU_2022].[dbo].[IC_Items] I ON I.ItemID = U.ItemID
-                WHERE UH.InvoiceDate >= @Tanggal AND UH.Void=0
+                WHERE UH.InvoiceDate >= @StartDate AND UH.Void = 0 AND IsInvoice = 1 AND IsDO = 0
+                  AND U.WAREHOUSEID IN (SELECT CAST([value] AS INT) FROM STRING_SPLIT(@WIDsCsv, ',')) -- FILTER GUDANG
                 GROUP BY U.ItemID
-            ) EE ON EE.ItemID=AA.ItemID
+            ) EE ON EE.ItemID = AA.ItemID
+            -- Subquery FF: QtyPR (Return Pembelian / Non-Purchase)
             LEFT JOIN (
                 SELECT D.ItemID,
-                       SUM([AS_GSU_2022].[dbo].[UDF_Common_ConvertToSmallestUOMEx](
-                           Packing2,Packing3,Packing4,Quantity,UOMLevel)) AS QtyPrcOut
+                       SUM([AS_GSU_2022].[dbo].[UDF_Common_ConvertToSmallestUOMEx](I.Packing2, I.Packing3, I.Packing4, Quantity, UOMLevel)) AS QtyPrcOut
                 FROM [AS_GSU_2022].[dbo].[AP_PurchaseDetails] D
-                JOIN [AS_GSU_2022].[dbo].[AP_Purchases] P ON P.PurchaseID=D.PurchaseID
+                JOIN [AS_GSU_2022].[dbo].[AP_Purchases] P ON P.PurchaseID = D.PurchaseID
                 INNER JOIN [AS_GSU_2022].[dbo].[IC_Items] I ON I.ItemID = D.ItemID
-                WHERE P.PurchaseDate >= @Tanggal AND P.Void=0 AND IsPurchase=0
+                WHERE P.PurchaseDate >= @StartDate AND P.Void = 0 AND IsPurchase = 0
+                  AND D.WAREHOUSEID IN (SELECT CAST([value] AS INT) FROM STRING_SPLIT(@WIDsCsv, ',')) -- FILTER GUDANG
                 GROUP BY D.ItemID
-            ) FF ON FF.ItemID=AA.ItemID
+            ) FF ON FF.ItemID = AA.ItemID
+            -- Subquery GG: QtyRTR (Return Penjualan / Non-Invoice)
+            LEFT JOIN (
+                SELECT U.ItemID,
+                       SUM([AS_GSU_2022].[dbo].[UDF_Common_ConvertToSmallestUOMEx](I.Packing2, I.Packing3, I.Packing4, Quantity, UOMLevel)) AS QtySlsRT
+                FROM [AS_GSU_2022].[dbo].[AR_InvoiceDetails] U
+                inner JOIN [AS_GSU_2022].[dbo].[AR_Invoices] UH ON UH.InvoiceID = U.InvoiceID
+                INNER JOIN [AS_GSU_2022].[dbo].[IC_Items] I ON I.ItemID = U.ItemID
+                WHERE UH.InvoiceDate >= @StartDate AND UH.Void = 0 AND IsInvoice = 0
+                  AND WAREHOUSEID IN (SELECT CAST([value] AS INT) FROM STRING_SPLIT(@WIDsCsv, ',')) -- FILTER GUDANG
+                GROUP BY U.ItemID
+            ) GG ON GG.ItemID = AA.ItemID
+            -- Subquery HH: QtyAssm (Assembly Material)
+            LEFT JOIN (
+                SELECT U.MaterialItemID,
+                       SUM([AS_GSU_2022].[dbo].[UDF_Common_ConvertToSmallestUOMEx](I.Packing2, I.Packing3, I.Packing4, Quantity, UOMLevel)) AS QtySlsRT
+                FROM [AS_GSU_2022].[dbo].[IC_AssemblyDetails] U
+                inner JOIN [AS_GSU_2022].[dbo].[IC_Assembly] UH ON UH.AssemblyID = U.AssemblyID
+                INNER JOIN [AS_GSU_2022].[dbo].[IC_Items] I ON I.ItemID = U.MaterialItemID
+                WHERE UH.AssemblyDate >= @StartDate AND UH.Void = 0
+                  AND WAREHOUSEID IN (SELECT CAST([value] AS INT) FROM STRING_SPLIT(@WIDsCsv, ',')) -- FILTER GUDANG
+                GROUP BY U.MaterialItemID
+            ) HH ON HH.MaterialItemID = AA.ItemID
+            -- Subquery II: TRFIN (Transfer In)
+            LEFT JOIN (
+                SELECT D.ItemID,
+                       SUM([AS_GSU_2022].[dbo].[UDF_Common_ConvertToSmallestUOMEx](I.Packing2, I.Packing3, I.Packing4, Quantity, UOMLevel)) AS TRFIN
+                FROM [AS_GSU_2022].[dbo].[IC_MutationDetails] D
+                JOIN [AS_GSU_2022].[dbo].[IC_Mutations] P ON P.MutationID = D.MutationID
+                INNER JOIN [AS_GSU_2022].[dbo].[IC_Items] I ON I.ItemID = D.ItemID
+                WHERE P.MutationDate >= @StartDate AND P.Void = 0
+                  AND DestinationWarehouseID IN (SELECT CAST([value] AS INT) FROM STRING_SPLIT(@WIDsCsv, ',')) -- FILTER GUDANG
+                GROUP BY D.ItemID
+            ) II ON II.ItemID = AA.ItemID
+            -- Subquery JJ: TRFOUT (Transfer Out)
+            LEFT JOIN (
+                SELECT D.ItemID,
+                       SUM([AS_GSU_2022].[dbo].[UDF_Common_ConvertToSmallestUOMEx](I.Packing2, I.Packing3, I.Packing4, Quantity, UOMLevel)) AS TRFOUT
+                FROM [AS_GSU_2022].[dbo].[IC_MutationDetails] D
+                JOIN [AS_GSU_2022].[dbo].[IC_Mutations] P ON P.MutationID = D.MutationID
+                INNER JOIN [AS_GSU_2022].[dbo].[IC_Items] I ON I.ItemID = D.ItemID
+                WHERE P.MutationDate >= @StartDate AND P.Void = 0
+                  AND SourceWarehouseID IN (SELECT CAST([value] AS INT) FROM STRING_SPLIT(@WIDsCsv, ',')) -- FILTER GUDANG
+                GROUP BY D.ItemID
+            ) JJ ON JJ.ItemID = AA.ItemID
+            -- Subquery KK: GDN (Goods Delivery Note)
+            LEFT JOIN (
+                SELECT U.ItemID,
+                       SUM([AS_GSU_2022].[dbo].[UDF_Common_ConvertToSmallestUOMEx](I.Packing2, I.Packing3, I.Packing4, u.Quantity, UOMLevel)) AS QtySls
+                FROM [AS_GSU_2022].[dbo].[AR_GoodsDeliveryNoteDetails] U
+                inner JOIN [AS_GSU_2022].[dbo].[AR_GoodsDeliveryNotes] UH ON UH.GoodsDeliveryNoteID = U.GoodsDeliveryNoteID
+                INNER JOIN [AS_GSU_2022].[dbo].[IC_Items] I ON I.ItemID = U.ItemID
+                WHERE UH.GoodsDeliveryNoteDate >= @StartDate AND UH.Void = 0 AND cog <> 0
+                  AND WAREHOUSEID IN (SELECT CAST([value] AS INT) FROM STRING_SPLIT(@WIDsCsv, ',')) -- FILTER GUDANG
+                GROUP BY U.ItemID
+            ) KK ON KK.ItemID = AA.ItemID
         ) Z
         WHERE Z.ItemID = @ItemID
       `);

@@ -37,9 +37,9 @@ router.post(
   verifyToken,
   saveStockOpnameAscendHasilHandler
 );
-// Ambil total QtyUsage untuk item tertentu sejak tanggal SO
+
 router.get(
-  '/no-stock-opname/:itemId/usage',
+  '/no-stock-opname/:itemId/usage/:tglSO/:wids', // Path Parameters
   verifyToken,
   fetchQtyUsageHandler
 );

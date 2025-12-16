@@ -252,43 +252,45 @@ async function stockOpnameHasilHandler(req, res) {
 
 
   async function fetchQtyUsageHandler(req, res) {
-    const { itemId } = req.params;
-    const { tglSO } = req.query;  // dari query string, contoh: "13 Nov 2025"
-  
-    if (!itemId || !tglSO) {
-      return res.status(400).json({ message: 'itemId dan tglSO harus disertakan' });
+    const { itemId, tglSO, wids } = req.params;
+
+    if (!itemId || !tglSO || !wids) {
+        return res.status(400).json({ 
+            message: 'itemId, tglSO, dan wids (Warehouse IDs CSV) harus disertakan' 
+        });
     }
-  
-    // 🔹 convert ke format raw untuk DB/API
-    const tglSoRaw = toApiDate(tglSO);
-  
+
+    // 🔹 convert tglSO ke format raw untuk DB/API (YYYY-MM-DD)
+    // Asumsi 'toApiDate' adalah fungsi yang Anda miliki untuk konversi format tanggal
+    const tglSoRaw = toApiDate(tglSO); 
+
     if (!tglSoRaw) {
-      console.error('[fetchQtyUsageHandler] tglSO tidak valid:', tglSO);
-      return res.status(400).json({ message: 'Format tglSO tidak valid' });
+        console.error('[fetchQtyUsageHandler] tglSO tidak valid:', tglSO);
+        return res.status(400).json({ message: 'Format tglSO tidak valid' });
     }
-  
-    // LOG buat memastikan
+
+    // LOG untuk memastikan
     console.log('--- fetchQtyUsageHandler ---');
-    console.log('[fetchQtyUsageHandler] itemId            :', itemId);
-    console.log('[fetchQtyUsageHandler] tglSO (raw query) :', tglSO);
-    console.log('[fetchQtyUsageHandler] tglSO (API/raw)   :', tglSoRaw);
-  
+    console.log('[fetchQtyUsageHandler] itemId           :', itemId);
+    console.log('[fetchQtyUsageHandler] tglSO (API/raw)  :', tglSoRaw);
+    console.log('[fetchQtyUsageHandler] WIDs (CSV)       :', wids); // LOG baru
+
     try {
-      // 👉 panggil service pakai tglSoRaw (YYYY-MM-DD)
-      const qtyUsage = await fetchQtyUsage(itemId, tglSoRaw);
-  
-      // kalau mau kirim balik dua-duanya juga boleh
-      res.json({
-        itemId,
-        tglSO: tglSoRaw,      // yang dipakai untuk hit DB
-        tglSOOriginal: tglSO, // asal dari Flutter
-        qtyUsage,
-      });
+        // 👉 panggil service, kini TIGA parameter: itemId, tglSoRaw, dan wids
+        const qtyUsage = await fetchQtyUsage(itemId, tglSoRaw, wids);
+
+        res.json({
+            itemId,
+            tglSO: tglSoRaw,
+            wids, // Kirim balik wids untuk konfirmasi
+            qtyUsage,
+        });
     } catch (err) {
-      console.error('❌ Error fetchQtyUsage:', err.message);
-      res.status(500).json({ message: 'Internal Server Error', error: err.message });
+        console.error('❌ Error fetchQtyUsage:', err.message);
+        // Detail error dari service akan dikembalikan ke client
+        res.status(500).json({ message: 'Internal Server Error', error: err.message });
     }
-  }
+}
   
   
 

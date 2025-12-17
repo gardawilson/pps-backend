@@ -4,7 +4,7 @@ const authController = require('./auth-controller');
 
 router.use(express.json()); // Middleware parsing JSON
 
-router.post('/login', authController.login);
+// router.post('/login', authController.login);
 
 //FORCE UPDATE FOR MOBILE
 router.post('/login2', authController.login);

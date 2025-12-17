@@ -199,10 +199,210 @@ async function deleteBongkarSusun(req, res) {
   }
 }
 
+// controllers/bongkarSusunController.js
+async function getInputsByNoBongkarSusun(req, res) {
+  const noBongkarSusun = (req.params.noBongkarSusun || '').trim();
+  if (!noBongkarSusun) {
+    return res
+      .status(400)
+      .json({ success: false, message: 'noBongkarSusun is required' });
+  }
+
+  try {
+    const data = await bongkarSusunService.fetchInputs(noBongkarSusun);
+    return res
+      .status(200)
+      .json({ success: true, message: 'Inputs retrieved', data });
+  } catch (e) {
+    console.error('[getInputsByNoBongkarSusun]', e);
+    return res
+      .status(500)
+      .json({ success: false, message: 'Internal Server Error', error: e.message });
+  }
+}
+
+async function validateLabel(req, res) {
+  const { labelCode } = req.params;
+
+  if (!labelCode || typeof labelCode !== 'string') {
+    return res.status(400).json({
+      success: false,
+      message: 'Label number is required and must be a string',
+    });
+  }
+
+  try {
+    const result = await bongkarSusunService.validateLabel(labelCode);
+
+    if (!result.found) {
+      return res.status(404).json({
+        success: false,
+        message: `Label ${labelCode} not found or already used`,
+        prefix: result.prefix,
+        tableName: result.tableName,
+      });
+    }
+
+    return res.status(200).json({
+      success: true,
+      message: 'Label validated successfully',
+      prefix: result.prefix,
+      tableName: result.tableName,
+      totalRecords: result.count,
+      data: result.data,
+    });
+  } catch (error) {
+    console.error('Error validating label (BongkarSusun):', error);
+    return res.status(500).json({
+      success: false,
+      message: 'Internal Server Error',
+      error: error.message,
+    });
+  }
+}
+
+
+async function upsertInputs(req, res) {
+  const noBongkarSusun = String(req.params.noBongkarSusun || '').trim();
+
+  if (!noBongkarSusun) {
+    return res.status(400).json({
+      success: false,
+      message: 'noBongkarSusun is required',
+      error: { field: 'noBongkarSusun', message: 'Parameter noBongkarSusun tidak boleh kosong' }
+    });
+  }
+
+  const payload = req.body || {};
+
+  const hasInput = [
+    'broker', 'bb', 'washing', 'crusher', 'gilingan', 'mixer', 'reject',
+    'bonggolan', 'furnitureWip', 'barangJadi'
+  ].some(k => Array.isArray(payload[k]) && payload[k].length > 0);
+
+  // kalau mau strict:
+  // if (!hasInput) return res.status(400).json({ success:false, message:'Tidak ada data input' });
+
+  try {
+    const result = await bongkarSusunService.upsertInputs(noBongkarSusun, payload);
+
+    const { success, hasWarnings, data } = result;
+
+    let statusCode = 200;
+    let message = 'Inputs processed successfully';
+
+    if (!success) {
+      if (data.summary.totalInvalid > 0) {
+        statusCode = 422;
+        message = 'Beberapa data tidak valid';
+      } else if (data.summary.totalInserted === 0) {
+        statusCode = 400;
+        message = 'Tidak ada data yang berhasil diproses';
+      }
+    } else if (hasWarnings) {
+      message = 'Inputs processed with warnings';
+    }
+
+    return res.status(statusCode).json({ success, message, data });
+  } catch (e) {
+    console.error('[bongkarSusun.upsertInputs]', e);
+    return res.status(500).json({
+      success: false,
+      message: 'Internal Server Error',
+      error: {
+        message: e.message,
+        details: process.env.NODE_ENV === 'development' ? e.stack : undefined
+      }
+    });
+  }
+}
+
+
+// ======================
+// DELETE /bongkar-susun/:noBongkarSusun/inputs
+// ======================
+async function deleteInputs(req, res) {
+  const noBongkarSusun = String(req.params.noBongkarSusun || '').trim();
+
+  if (!noBongkarSusun) {
+    return res.status(400).json({
+      success: false,
+      message: 'noBongkarSusun is required',
+      error: {
+        field: 'noBongkarSusun',
+        message: 'Parameter noBongkarSusun tidak boleh kosong',
+      },
+    });
+  }
+
+  const payload = req.body || {};
+
+  // wajib minimal ada salah satu input
+  const hasInput = [
+    'broker',
+    'bb',
+    'washing',
+    'crusher',
+    'gilingan',
+    'mixer',
+    'bonggolan',
+    'furnitureWip',
+    'barangJadi',
+  ].some((key) => payload[key] && Array.isArray(payload[key]) && payload[key].length > 0);
+
+  if (!hasInput) {
+    return res.status(400).json({
+      success: false,
+      message: 'Tidak ada data input yang diberikan',
+      error: {
+        message: 'Request body harus berisi minimal satu array input yang tidak kosong',
+      },
+    });
+  }
+
+  try {
+    const result = await bongkarSusunService.deleteInputs(noBongkarSusun, payload);
+
+    const { success, hasWarnings, data } = result;
+
+    let statusCode = 200;
+    let message = 'Inputs deleted successfully';
+
+    if (!success) {
+      statusCode = 404;
+      message = 'Tidak ada data yang berhasil dihapus';
+    } else if (hasWarnings) {
+      message = 'Inputs deleted with warnings';
+    }
+
+    return res.status(statusCode).json({
+      success,
+      message,
+      data,
+    });
+  } catch (e) {
+    console.error('[bongkarSusun.deleteInputs]', e);
+    return res.status(500).json({
+      success: false,
+      message: 'Internal Server Error',
+      error: {
+        message: e.message,
+        details: process.env.NODE_ENV === 'development' ? e.stack : undefined,
+      },
+    });
+  }
+}
+
+
+
 module.exports = {
   getByDate,
   getAllBongkarSusun,
   createBongkarSusun,
   updateBongkarSusun,
   deleteBongkarSusun,
+  getInputsByNoBongkarSusun,
+  validateLabel,
+  upsertInputs,
+  deleteInputs
 };

@@ -40,5 +40,35 @@ router.delete(
 );
 
 
+// routes/bongkar-susun-routes.js
+router.get(
+  '/:noBongkarSusun/inputs',
+  verifyToken,
+  bongkarSusunController.getInputsByNoBongkarSusun
+);
+
+
+router.get(
+  '/validate-label/:labelCode',
+  verifyToken,
+  bongkarSusunController.validateLabel
+);
+
+
+// routes/bongkar-susun-routes.js
+router.post(
+  '/:noBongkarSusun/inputs',
+  verifyToken,
+  bongkarSusunController.upsertInputs
+);
+
+
+// DELETE: delete inputs dari NoBongkarSusun
+router.delete(
+  '/:noBongkarSusun/inputs',
+  verifyToken,
+  bongkarSusunController.deleteInputs
+);
+
 
 module.exports = router;

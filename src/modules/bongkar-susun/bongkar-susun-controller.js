@@ -153,7 +153,7 @@ async function updateBongkarSusun(req, res) {
       payload.note = b.note === '' ? null : b.note;
     }
 
-    const result = await bongkarSusunService.updateBongkarSusun(
+    const result = await bongkarSusunService.updateBongkarSusunCascade(
       noBongkarSusun,
       payload
     );
@@ -232,7 +232,7 @@ async function validateLabel(req, res) {
   }
 
   try {
-    const result = await bongkarSusunService.validateLabel(labelCode);
+    const result = await bongkarSusunService.validateLabelBongkarSusun(labelCode);
 
     if (!result.found) {
       return res.status(404).json({

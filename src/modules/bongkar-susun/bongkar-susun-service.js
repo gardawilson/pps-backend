@@ -200,92 +200,403 @@ async function createBongkarSusun(payload) {
 // ===========================
 //  UPDATE BongkarSusun_h
 // ===========================
-async function updateBongkarSusun(noBongkarSusun, payload) {
-  if (!noBongkarSusun) {
-    throw badReq('noBongkarSusun wajib diisi');
-  }
 
-  // Kumpulkan field yang akan di-update
-  const setClauses = [];
-  const params = [];
-
-  if (Object.prototype.hasOwnProperty.call(payload, 'tanggal')) {
-    setClauses.push('Tanggal = @Tanggal');
-    params.push({ name: 'Tanggal', type: sql.Date, value: payload.tanggal });
-  }
-
-  if (Object.prototype.hasOwnProperty.call(payload, 'idUsername')) {
-    setClauses.push('IdUsername = @IdUsername');
-    params.push({
-      name: 'IdUsername',
-      type: sql.Int,
-      value: payload.idUsername,
-    });
-  }
-
-  if (Object.prototype.hasOwnProperty.call(payload, 'note')) {
-    setClauses.push('Note = @Note');
-    params.push({
-      name: 'Note',
-      type: sql.VarChar(255),
-      value: payload.note ?? null,
-    });
-  }
-
-  if (setClauses.length === 0) {
-    throw badReq('Tidak ada field yang diupdate');
-  }
+async function updateBongkarSusunCascade(noBongkarSusun, headerPayload, inputsPayloadOrNull) {
+  if (!noBongkarSusun) throw badReq('noBongkarSusun wajib diisi');
 
   const pool = await poolPromise;
-  const request = pool.request();
+  const tx = new sql.Transaction(pool);
 
-  params.forEach((p) => {
-    request.input(p.name, p.type, p.value);
-  });
+  try {
+    await tx.begin();
 
-  request.input('NoBongkarSusun', sql.VarChar(50), noBongkarSusun);
+    // 1) pastikan header ada + ambil old tanggal (lock row)
+    {
+      const rq = new sql.Request(tx);
+      rq.input('No', sql.VarChar(50), noBongkarSusun);
+      const ck = await rq.query(`
+        SELECT CAST(Tanggal AS datetime) AS OldTanggal
+        FROM dbo.BongkarSusun_h WITH (UPDLOCK, HOLDLOCK)
+        WHERE NoBongkarSusun = @No;
+      `);
+      if (!ck.recordset.length) throw badReq('BongkarSusun tidak ditemukan');
+    }
 
-  const sqlUpdate = `
+    // 2) update header kalau ada field
+    let headerUpdated = null;
+    if (headerPayload && Object.keys(headerPayload).length) {
+      headerUpdated = await _updateHeaderWithTx(tx, noBongkarSusun, headerPayload);
+    } else {
+      headerUpdated = await _getHeaderWithTx(tx, noBongkarSusun);
+    }
+
+    // 3) kalau user kirim inputs: tambah yang baru (reuse fungsi kamu)
+    //    (fungsi upsert kamu sudah set DateUsage=@tgl untuk yang baru dimasukkan)
+    let attachmentsSummary = null;
+    if (inputsPayloadOrNull) {
+      // pakai upsertInputs versi kamu, tapi pastikan bisa menerima tx.
+      // Jika upsertInputs kamu belum support tx, buat wrapper upsertInputsWithTx.
+      attachmentsSummary = await upsertInputsWithExistingTx(tx, noBongkarSusun, inputsPayloadOrNull);
+    }
+
+    // 4) Kalau tanggal diubah (atau kamu ingin selalu konsisten), refresh DateUsage semua item yang attached
+    //    Ini yang bikin "PUT juga meng-update dateusage berdasarkan bongkarsusuninput"
+    if (headerPayload && Object.prototype.hasOwnProperty.call(headerPayload, 'tanggal')) {
+      await refreshDateUsageByInputsTx(tx, noBongkarSusun);
+      headerUpdated = await _getHeaderWithTx(tx, noBongkarSusun); // ambil lagi biar return terbaru
+    }
+
+    await tx.commit();
+
+    return {
+      header: headerUpdated,
+      inputs: attachmentsSummary, // bisa null kalau tidak ada inputs
+    };
+  } catch (err) {
+    try { await tx.rollback(); } catch {}
+    throw err;
+  }
+}
+
+async function _getHeaderWithTx(tx, no) {
+  const rq = new sql.Request(tx);
+  rq.input('No', sql.VarChar(50), no);
+  const rs = await rq.query(`SELECT * FROM dbo.BongkarSusun_h WITH (NOLOCK) WHERE NoBongkarSusun=@No;`);
+  if (!rs.recordset.length) throw badReq('BongkarSusun tidak ditemukan');
+  return rs.recordset[0];
+}
+
+async function _updateHeaderWithTx(tx, noBongkarSusun, payload) {
+  const setClauses = [];
+  const rq = new sql.Request(tx);
+
+  rq.input('NoBongkarSusun', sql.VarChar(50), noBongkarSusun);
+
+  if (Object.prototype.hasOwnProperty.call(payload, 'tanggal')) {
+    setClauses.push('Tanggal=@Tanggal');
+    rq.input('Tanggal', sql.Date, payload.tanggal);
+  }
+  if (Object.prototype.hasOwnProperty.call(payload, 'idUsername')) {
+    setClauses.push('IdUsername=@IdUsername');
+    rq.input('IdUsername', sql.Int, payload.idUsername);
+  }
+  if (Object.prototype.hasOwnProperty.call(payload, 'note')) {
+    setClauses.push('Note=@Note');
+    rq.input('Note', sql.VarChar(255), payload.note ?? null);
+  }
+  if (!setClauses.length) return _getHeaderWithTx(tx, noBongkarSusun);
+
+  const rs = await rq.query(`
     UPDATE dbo.BongkarSusun_h
     SET ${setClauses.join(', ')}
     OUTPUT INSERTED.*
-    WHERE NoBongkarSusun = @NoBongkarSusun;
-  `;
+    WHERE NoBongkarSusun=@NoBongkarSusun;
+  `);
 
-  const result = await request.query(sqlUpdate);
+  if (!rs.recordset.length) throw badReq('BongkarSusun tidak ditemukan');
+  return rs.recordset[0];
+}
 
-  if (result.recordset.length === 0) {
-    throw badReq('BongkarSusun tidak ditemukan');
-  }
+/**
+ * REFRESH DateUsage jadi Tanggal header untuk SEMUA item yang masih terpasang di input tables
+ * (berdasarkan NoBongkarSusun).
+ */
+async function refreshDateUsageByInputsTx(tx, no) {
+  const rq = new sql.Request(tx);
+  rq.input('No', sql.VarChar(50), no);
 
-  return { header: result.recordset[0] };
+  await rq.query(`
+    SET NOCOUNT ON;
+
+    DECLARE @tgl datetime;
+    SELECT @tgl = CAST(Tanggal AS datetime)
+    FROM dbo.BongkarSusun_h WITH (NOLOCK)
+    WHERE NoBongkarSusun = @No;
+
+    IF @tgl IS NULL
+      RAISERROR('Header BongkarSusun_h tidak ditemukan / Tanggal NULL', 16, 1);
+
+    -- BROKER
+    UPDATE b
+    SET b.DateUsage = @tgl
+    FROM dbo.Broker_d b
+    INNER JOIN dbo.BongkarSusunInputBroker i
+      ON i.NoBroker=b.NoBroker AND i.NoSak=b.NoSak
+    WHERE i.NoBongkarSusun=@No;
+
+    -- BB
+    UPDATE d
+    SET d.DateUsage = @tgl
+    FROM dbo.BahanBaku_d d
+    INNER JOIN dbo.BongkarSusunInputBahanBaku i
+      ON i.NoBahanBaku=d.NoBahanBaku AND i.NoPallet=d.NoPallet AND i.NoSak=d.NoSak
+    WHERE i.NoBongkarSusun=@No;
+
+    -- WASHING
+    UPDATE d
+    SET d.DateUsage = @tgl
+    FROM dbo.Washing_d d
+    INNER JOIN dbo.BongkarSusunInputWashing i
+      ON i.NoWashing=d.NoWashing AND i.NoSak=d.NoSak
+    WHERE i.NoBongkarSusun=@No;
+
+    -- CRUSHER
+    UPDATE c
+    SET c.DateUsage = @tgl
+    FROM dbo.Crusher c
+    INNER JOIN dbo.BongkarSusunInputCrusher i
+      ON i.NoCrusher=c.NoCrusher
+    WHERE i.NoBongkarSusun=@No;
+
+    -- GILINGAN
+    UPDATE g
+    SET g.DateUsage = @tgl
+    FROM dbo.Gilingan g
+    INNER JOIN dbo.BongkarSusunInputGilingan i
+      ON i.NoGilingan=g.NoGilingan
+    WHERE i.NoBongkarSusun=@No;
+
+    -- MIXER
+    UPDATE d
+    SET d.DateUsage = @tgl
+    FROM dbo.Mixer_d d
+    INNER JOIN dbo.BongkarSusunInputMixer i
+      ON i.NoMixer=d.NoMixer AND i.NoSak=d.NoSak
+    WHERE i.NoBongkarSusun=@No;
+
+    -- REJECT (kalau ada tabelnya)
+    -- UPDATE r SET r.DateUsage=@tgl
+    -- FROM dbo.Reject r
+    -- JOIN dbo.BongkarSusunInputReject i ON i.NoReject=r.NoReject
+    -- WHERE i.NoBongkarSusun=@No;
+
+    -- BONGGOLAN
+    UPDATE b
+    SET b.DateUsage = @tgl
+    FROM dbo.Bonggolan b
+    INNER JOIN dbo.BongkarSusunInputBonggolan i
+      ON i.NoBonggolan=b.NoBonggolan
+    WHERE i.NoBongkarSusun=@No;
+
+    -- FURNITURE WIP
+    UPDATE f
+    SET f.DateUsage = @tgl
+    FROM dbo.FurnitureWIP f
+    INNER JOIN dbo.BongkarSusunInputFurnitureWIP i
+      ON i.NoFurnitureWIP=f.NoFurnitureWIP
+    WHERE i.NoBongkarSusun=@No;
+
+    -- BARANG JADI
+    UPDATE b
+    SET b.DateUsage = @tgl
+    FROM dbo.BarangJadi b
+    INNER JOIN dbo.BongkarSusunInputBarangJadi i
+      ON i.NoBJ=b.NoBJ
+    WHERE i.NoBongkarSusun=@No;
+  `);
+}
+
+
+async function upsertInputsWithExistingTx(tx, noBongkarSusun, payload) {
+  const norm = (a) => (Array.isArray(a) ? a : []);
+  const body = {
+    broker: norm(payload.broker),
+    bb: norm(payload.bb),
+    washing: norm(payload.washing),
+    crusher: norm(payload.crusher),
+    gilingan: norm(payload.gilingan),
+    mixer: norm(payload.mixer),
+    reject: norm(payload.reject),
+    bonggolan: norm(payload.bonggolan),
+    furnitureWip: norm(payload.furnitureWip),
+    barangJadi: norm(payload.barangJadi),
+  };
+
+  // ini sudah cocok dengan fungsi kamu:
+  return await _insertInputsWithTx(tx, noBongkarSusun, body);
 }
 
 // ===========================
 //  DELETE BongkarSusun_h
 // ===========================
 async function deleteBongkarSusun(noBongkarSusun) {
-  if (!noBongkarSusun) {
-    throw badReq('noBongkarSusun wajib diisi');
-  }
+  if (!noBongkarSusun) throw badReq('noBongkarSusun wajib diisi');
 
   const pool = await poolPromise;
-  const request = pool.request();
-  request.input('NoBongkarSusun', sql.VarChar(50), noBongkarSusun);
+  const tx = new sql.Transaction(pool);
 
-  const sqlDelete = `
-    DELETE FROM dbo.BongkarSusun_h
-    WHERE NoBongkarSusun = @NoBongkarSusun;
-  `;
+  try {
+    await tx.begin();
 
-  const result = await request.query(sqlDelete);
+    const req = new sql.Request(tx);
+    req.input('No', sql.VarChar(50), noBongkarSusun);
 
-  if (result.rowsAffected[0] === 0) {
-    throw badReq('BongkarSusun tidak ditemukan atau sudah dihapus');
+    // 1) pastikan header ada + lock
+    const ck = await req.query(`
+      SELECT 1
+      FROM dbo.BongkarSusun_h WITH (UPDLOCK, HOLDLOCK)
+      WHERE NoBongkarSusun = @No;
+    `);
+    if (!ck.recordset.length) {
+      throw badReq('BongkarSusun tidak ditemukan atau sudah dihapus');
+    }
+
+    // 2) CEK OUTPUT: kalau ada data -> TOLAK DELETE
+    const out = await req.query(`
+      SET NOCOUNT ON;
+
+      IF EXISTS (SELECT 1 FROM dbo.BongkarSusunOutputBahanBaku     WITH (NOLOCK) WHERE NoBongkarSusun=@No)
+      OR EXISTS (SELECT 1 FROM dbo.BongkarSusunOutputBarangjadi     WITH (NOLOCK) WHERE NoBongkarSusun=@No)
+      OR EXISTS (SELECT 1 FROM dbo.BongkarSusunOutputBonggolan      WITH (NOLOCK) WHERE NoBongkarSusun=@No)
+      OR EXISTS (SELECT 1 FROM dbo.BongkarSusunOutputBroker         WITH (NOLOCK) WHERE NoBongkarSusun=@No)
+      OR EXISTS (SELECT 1 FROM dbo.BongkarSusunOutputCrusher        WITH (NOLOCK) WHERE NoBongkarSusun=@No)
+      OR EXISTS (SELECT 1 FROM dbo.BongkarSusunOutputFurnitureWIP   WITH (NOLOCK) WHERE NoBongkarSusun=@No)
+      OR EXISTS (SELECT 1 FROM dbo.BongkarSusunOutputGilingan       WITH (NOLOCK) WHERE NoBongkarSusun=@No)
+      OR EXISTS (SELECT 1 FROM dbo.BongkarSusunOutputMixer          WITH (NOLOCK) WHERE NoBongkarSusun=@No)
+      OR EXISTS (SELECT 1 FROM dbo.BongkarSusunOutputWashing        WITH (NOLOCK) WHERE NoBongkarSusun=@No)
+      BEGIN
+        SELECT CAST(1 AS bit) AS HasOutput;
+        RETURN;
+      END
+
+      SELECT CAST(0 AS bit) AS HasOutput;
+    `);
+
+    const hasOutput = out.recordset?.[0]?.HasOutput === true;
+    if (hasOutput) {
+      const e = badReq('Nomor Bongkar Susun ini telah menerbitkan label, hapus labelnya kemudian coba kembali');
+      e.statusCode = 400;
+      throw e;
+    }
+
+    // 3) kalau aman, lakukan CASCADE delete inputs + DateUsage NULL + delete header
+    await req.query(`
+      SET NOCOUNT ON;
+
+      /* =========================
+         INPUT BROKER -> DateUsage NULL
+         ========================= */
+      DECLARE @delBroker TABLE(NoBroker varchar(50), NoSak int);
+      DELETE map
+      OUTPUT DELETED.NoBroker, DELETED.NoSak INTO @delBroker(NoBroker, NoSak)
+      FROM dbo.BongkarSusunInputBroker map
+      WHERE map.NoBongkarSusun = @No;
+
+      UPDATE d
+      SET d.DateUsage = NULL
+      FROM dbo.Broker_d d
+      INNER JOIN @delBroker x ON x.NoBroker=d.NoBroker AND x.NoSak=d.NoSak;
+
+      /* BB */
+      DECLARE @delBB TABLE(NoBahanBaku varchar(50), NoPallet int, NoSak int);
+      DELETE map
+      OUTPUT DELETED.NoBahanBaku, DELETED.NoPallet, DELETED.NoSak
+        INTO @delBB(NoBahanBaku, NoPallet, NoSak)
+      FROM dbo.BongkarSusunInputBahanBaku map
+      WHERE map.NoBongkarSusun = @No;
+
+      UPDATE d
+      SET d.DateUsage = NULL
+      FROM dbo.BahanBaku_d d
+      INNER JOIN @delBB x
+        ON x.NoBahanBaku=d.NoBahanBaku AND x.NoPallet=d.NoPallet AND x.NoSak=d.NoSak;
+
+      /* WASHING */
+      DECLARE @delW TABLE(NoWashing varchar(50), NoSak int);
+      DELETE map
+      OUTPUT DELETED.NoWashing, DELETED.NoSak INTO @delW(NoWashing, NoSak)
+      FROM dbo.BongkarSusunInputWashing map
+      WHERE map.NoBongkarSusun = @No;
+
+      UPDATE d
+      SET d.DateUsage = NULL
+      FROM dbo.Washing_d d
+      INNER JOIN @delW x ON x.NoWashing=d.NoWashing AND x.NoSak=d.NoSak;
+
+      /* CRUSHER */
+      DECLARE @delC TABLE(NoCrusher varchar(50));
+      DELETE map
+      OUTPUT DELETED.NoCrusher INTO @delC(NoCrusher)
+      FROM dbo.BongkarSusunInputCrusher map
+      WHERE map.NoBongkarSusun = @No;
+
+      UPDATE c
+      SET c.DateUsage = NULL
+      FROM dbo.Crusher c
+      INNER JOIN @delC x ON x.NoCrusher=c.NoCrusher;
+
+      /* GILINGAN */
+      DECLARE @delG TABLE(NoGilingan varchar(50));
+      DELETE map
+      OUTPUT DELETED.NoGilingan INTO @delG(NoGilingan)
+      FROM dbo.BongkarSusunInputGilingan map
+      WHERE map.NoBongkarSusun = @No;
+
+      UPDATE g
+      SET g.DateUsage = NULL
+      FROM dbo.Gilingan g
+      INNER JOIN @delG x ON x.NoGilingan=g.NoGilingan;
+
+      /* MIXER */
+      DECLARE @delM TABLE(NoMixer varchar(50), NoSak int);
+      DELETE map
+      OUTPUT DELETED.NoMixer, DELETED.NoSak INTO @delM(NoMixer, NoSak)
+      FROM dbo.BongkarSusunInputMixer map
+      WHERE map.NoBongkarSusun = @No;
+
+      UPDATE d
+      SET d.DateUsage = NULL
+      FROM dbo.Mixer_d d
+      INNER JOIN @delM x ON x.NoMixer=d.NoMixer AND x.NoSak=d.NoSak;
+
+      /* BONGGOLAN */
+      DECLARE @delBg TABLE(NoBonggolan varchar(50));
+      DELETE map
+      OUTPUT DELETED.NoBonggolan INTO @delBg(NoBonggolan)
+      FROM dbo.BongkarSusunInputBonggolan map
+      WHERE map.NoBongkarSusun = @No;
+
+      UPDATE b
+      SET b.DateUsage = NULL
+      FROM dbo.Bonggolan b
+      INNER JOIN @delBg x ON x.NoBonggolan=b.NoBonggolan;
+
+      /* FURNITURE WIP */
+      DECLARE @delFW TABLE(NoFurnitureWIP varchar(50));
+      DELETE map
+      OUTPUT DELETED.NoFurnitureWIP INTO @delFW(NoFurnitureWIP)
+      FROM dbo.BongkarSusunInputFurnitureWIP map
+      WHERE map.NoBongkarSusun = @No;
+
+      UPDATE f
+      SET f.DateUsage = NULL
+      FROM dbo.FurnitureWIP f
+      INNER JOIN @delFW x ON x.NoFurnitureWIP=f.NoFurnitureWIP;
+
+      /* BARANG JADI */
+      DECLARE @delBJ TABLE(NoBJ varchar(50));
+      DELETE map
+      OUTPUT DELETED.NoBJ INTO @delBJ(NoBJ)
+      FROM dbo.BongkarSusunInputBarangJadi map
+      WHERE map.NoBongkarSusun = @No;
+
+      UPDATE b
+      SET b.DateUsage = NULL
+      FROM dbo.BarangJadi b
+      INNER JOIN @delBJ x ON x.NoBJ=b.NoBJ;
+
+      /* DELETE HEADER TERAKHIR */
+      DELETE dbo.BongkarSusun_h WHERE NoBongkarSusun = @No;
+    `);
+
+    await tx.commit();
+    return true;
+  } catch (err) {
+    try { await tx.rollback(); } catch {}
+    throw err;
   }
-
-  return true;
 }
+
 
 
 async function fetchInputs(noBongkarSusun) {
@@ -481,11 +792,14 @@ async function fetchInputs(noBongkarSusun) {
         fw.Berat AS Berat,
         CAST(NULL AS decimal(18,3)) AS BeratAct,
         fw.IsPartial AS IsPartial,
-        fw.IDFurnitureWIP AS IdJenis,
-        CAST(NULL AS varchar(100)) AS NamaJenis
+
+        fw.IDFurnitureWIP AS IdJenis,              -- id jenis (mengacu ke master cabinet)
+        mcw.Nama AS NamaJenis                      -- ✅ ambil nama dari master cabinet
       FROM dbo.BongkarSusunInputFurnitureWIP ifw WITH (NOLOCK)
       LEFT JOIN dbo.FurnitureWIP fw WITH (NOLOCK)
         ON fw.NoFurnitureWIP = ifw.NoFurnitureWIP
+      LEFT JOIN dbo.MstCabinetWIP mcw WITH (NOLOCK)
+        ON mcw.IdCabinetWIP = fw.IDFurnitureWIP
       WHERE ifw.NoBongkarSusun = @no
 
       UNION ALL
@@ -625,10 +939,13 @@ async function fetchInputs(noBongkarSusun) {
       p.NoFurnitureWIPPartial,
       p.NoFurnitureWIP,
       p.Pcs,
-      fw.IDFurnitureWIP AS IdJenis
+      fw.IDFurnitureWIP AS IdJenis,
+      mcw.Nama AS NamaJenis
     FROM dbo.FurnitureWIPPartial p WITH (NOLOCK)
     LEFT JOIN dbo.FurnitureWIP fw WITH (NOLOCK)
       ON fw.NoFurnitureWIP = p.NoFurnitureWIP
+    LEFT JOIN dbo.MstCabinetWIP mcw WITH (NOLOCK)
+      ON mcw.IdCabinetWIP = fw.IDFurnitureWIP
     WHERE EXISTS (
       SELECT 1
       FROM dbo.BongkarSusunInputFurnitureWIP ifw WITH (NOLOCK)
@@ -808,16 +1125,19 @@ async function fetchInputs(noBongkarSusun) {
 }
 
 
-
-async function validateLabel(labelCode) {
+/**
+ * Validate label khusus untuk Bongkar Susun
+ * Bedanya dengan validateLabel biasa:
+ * - Filter out items dengan isPartial = 1
+ * - Hanya ambil items yang bisa dibongkar (non-partial only)
+ */
+async function validateLabelBongkarSusun(labelCode) {
   const pool = await poolPromise;
 
   // ---------- helpers ----------
   const toCamel = (s) => {
     if (!s) return s;
-    // handle snake / kebab quickly
     let out = s.replace(/[_-]+([a-zA-Z0-9])/g, (_, c) => c.toUpperCase());
-    // lower-case first char (IdLokasi -> idLokasi)
     out = out.charAt(0).toLowerCase() + out.slice(1);
     return out;
   };
@@ -839,18 +1159,16 @@ async function validateLabel(labelCode) {
   if (!raw) throw new Error('Label code is required');
 
   let prefix = '';
-  const p3 = raw.substring(0, 3).toUpperCase(); // BF. / BB. / BA.
+  const p3 = raw.substring(0, 3).toUpperCase();
   if (p3 === 'BF.' || p3 === 'BB.' || p3 === 'BA.') {
     prefix = p3;
   } else {
-    prefix = raw.substring(0, 2).toUpperCase(); // A. B. D. M. F. V. H. C. dll
+    prefix = raw.substring(0, 2).toUpperCase();
   }
-  
 
   let query = '';
   let tableName = '';
 
-  // Helper eksekusi single-query (untuk semua prefix selain A. yang butuh dua input)
   async function run(label) {
     const req = pool.request();
     req.input('labelCode', sql.VarChar(50), label);
@@ -867,11 +1185,10 @@ async function validateLabel(labelCode) {
 
   switch (prefix) {
     // =========================
-    // A. BahanBaku_d (A.xxxxx-<pallet>)
+    // A. BahanBaku_d
     // =========================
     case 'A.': {
       tableName = 'BahanBaku_d';
-      // Format: A.0000000001-1
       const parts = raw.split('-');
       if (parts.length !== 2) {
         throw new Error('Invalid format for A. prefix. Expected: A.0000000001-1');
@@ -893,29 +1210,29 @@ async function validateLabel(labelCode) {
           d.NoBahanBaku,
           d.NoPallet,
           d.NoSak,
-                    Berat = CASE
-                        WHEN ISNULL(NULLIF(d.BeratAct, 0), d.Berat) - ISNULL(pa.PartialBerat, 0) < 0
-                          THEN 0
-                        ELSE ISNULL(NULLIF(d.BeratAct, 0), d.Berat) - ISNULL(pa.PartialBerat, 0)
-                      END,
+          Berat = CASE
+                    WHEN ISNULL(NULLIF(d.BeratAct, 0), d.Berat) - ISNULL(pa.PartialBerat, 0) < 0
+                      THEN 0
+                    ELSE ISNULL(NULLIF(d.BeratAct, 0), d.Berat) - ISNULL(pa.PartialBerat, 0)
+                  END,
           d.DateUsage,
-          d.IsPartial,
-          ph.IdJenisPlastik      AS idJenis,
-          jp.Jenis               AS namaJenis
-
+          CAST(0 AS bit) AS IsPartial,  -- ✅ ALWAYS 0 for Bongkar Susun
+          ph.IdJenisPlastik AS idJenis,
+          jp.Jenis AS namaJenis
         FROM dbo.BahanBaku_d AS d WITH (NOLOCK)
         LEFT JOIN PartialAgg AS pa
           ON pa.NoBahanBaku = d.NoBahanBaku
-         AND pa.NoPallet    = d.NoPallet
-         AND pa.NoSak       = d.NoSak
+         AND pa.NoPallet = d.NoPallet
+         AND pa.NoSak = d.NoSak
         LEFT JOIN dbo.BahanBakuPallet_h AS ph WITH (NOLOCK)
           ON ph.NoBahanBaku = d.NoBahanBaku
-         AND ph.NoPallet    = d.NoPallet
+         AND ph.NoPallet = d.NoPallet
         LEFT JOIN dbo.MstJenisPlastik AS jp WITH (NOLOCK)
           ON jp.IdJenisPlastik = ph.IdJenisPlastik
         WHERE d.NoBahanBaku = @noBahanBaku
-          AND d.NoPallet    = @noPallet
+          AND d.NoPallet = @noPallet
           AND d.DateUsage IS NULL
+          AND (d.IsPartial IS NULL OR d.IsPartial = 0)  -- ✅ FILTER: non-partial only
         ORDER BY d.NoBahanBaku, d.NoPallet, d.NoSak;
       `;
 
@@ -935,7 +1252,7 @@ async function validateLabel(labelCode) {
     }
 
     // =========================
-    // B. Washing_d
+    // B. Washing_d (no isPartial check needed)
     // =========================
     case 'B.':
       tableName = 'Washing_d';
@@ -947,7 +1264,8 @@ async function validateLabel(labelCode) {
           d.DateUsage,
           d.IdLokasi,
           h.IdJenisPlastik AS idJenis,
-          jp.Jenis         AS namaJenis
+          jp.Jenis AS namaJenis,
+          CAST(0 AS bit) AS IsPartial  -- ✅ ALWAYS 0
         FROM dbo.Washing_d AS d WITH (NOLOCK)
         LEFT JOIN dbo.Washing_h AS h WITH (NOLOCK)
           ON h.NoWashing = d.NoWashing
@@ -965,43 +1283,40 @@ async function validateLabel(labelCode) {
     case 'D.':
       tableName = 'Broker_d';
       query = `
-      ;WITH PartialSum AS (
-        SELECT
+        ;WITH PartialSum AS (
+          SELECT
             bp.NoBroker,
             bp.NoSak,
             SUM(ISNULL(bp.Berat, 0)) AS BeratPartial
-        FROM dbo.BrokerPartial AS bp WITH (NOLOCK)
-        GROUP BY bp.NoBroker, bp.NoSak
-      )
-      SELECT
-          d.NoBroker                    AS noBroker,
-          d.NoSak                       AS noSak,
+          FROM dbo.BrokerPartial AS bp WITH (NOLOCK)
+          GROUP BY bp.NoBroker, bp.NoSak
+        )
+        SELECT
+          d.NoBroker AS noBroker,
+          d.NoSak AS noSak,
           CAST(d.Berat - ISNULL(ps.BeratPartial, 0) AS DECIMAL(18,2)) AS berat,
-          d.DateUsage                   AS dateUsage,
-          CASE 
-            WHEN ISNULL(ps.BeratPartial, 0) > 0 
-              THEN CAST(1 AS bit) 
-            ELSE CAST(0 AS bit) 
-          END                           AS isPartial,
-          h.IdJenisPlastik              AS idJenis,
-          jp.Jenis                      AS namaJenis
-      FROM dbo.Broker_d AS d WITH (NOLOCK)
-      LEFT JOIN PartialSum AS ps
-        ON ps.NoBroker = d.NoBroker
-       AND ps.NoSak    = d.NoSak
-      LEFT JOIN dbo.Broker_h AS h WITH (NOLOCK)
-        ON h.NoBroker = d.NoBroker
-      LEFT JOIN dbo.MstJenisPlastik AS jp WITH (NOLOCK)
-        ON jp.IdJenisPlastik = h.IdJenisPlastik
-      WHERE d.NoBroker = @labelCode
-        AND d.DateUsage IS NULL
-        AND (d.Berat - ISNULL(ps.BeratPartial, 0)) > 0
-      ORDER BY d.NoBroker, d.NoSak;
+          d.DateUsage AS dateUsage,
+          CAST(0 AS bit) AS isPartial,  -- ✅ ALWAYS 0 for Bongkar Susun
+          h.IdJenisPlastik AS idJenis,
+          jp.Jenis AS namaJenis
+        FROM dbo.Broker_d AS d WITH (NOLOCK)
+        LEFT JOIN PartialSum AS ps
+          ON ps.NoBroker = d.NoBroker
+         AND ps.NoSak = d.NoSak
+        LEFT JOIN dbo.Broker_h AS h WITH (NOLOCK)
+          ON h.NoBroker = d.NoBroker
+        LEFT JOIN dbo.MstJenisPlastik AS jp WITH (NOLOCK)
+          ON jp.IdJenisPlastik = h.IdJenisPlastik
+        WHERE d.NoBroker = @labelCode
+          AND d.DateUsage IS NULL
+          AND (d.Berat - ISNULL(ps.BeratPartial, 0)) > 0
+          AND ISNULL(ps.BeratPartial, 0) = 0  -- ✅ FILTER: belum pernah di-partial
+        ORDER BY d.NoBroker, d.NoSak;
       `;
       return await run(raw);
 
     // =========================
-    // M. Bonggolan
+    // M. Bonggolan (no isPartial check needed)
     // =========================
     case 'M.':
       tableName = 'Bonggolan';
@@ -1009,8 +1324,8 @@ async function validateLabel(labelCode) {
         SELECT
           b.NoBonggolan,
           b.DateCreate,
-          b.IdBonggolan      AS idJenis,
-          mb.NamaBonggolan   AS namaJenis,
+          b.IdBonggolan AS idJenis,
+          mb.NamaBonggolan AS namaJenis,
           b.IdWarehouse,
           b.DateUsage,
           b.Berat,
@@ -1018,7 +1333,8 @@ async function validateLabel(labelCode) {
           b.Blok,
           b.IdLokasi,
           b.CreateBy,
-          b.DateTimeCreate
+          b.DateTimeCreate,
+          CAST(0 AS bit) AS IsPartial  -- ✅ ALWAYS 0
         FROM dbo.Bonggolan AS b WITH (NOLOCK)
         LEFT JOIN dbo.MstBonggolan AS mb WITH (NOLOCK)
           ON mb.IdBonggolan = b.IdBonggolan
@@ -1029,7 +1345,7 @@ async function validateLabel(labelCode) {
       return await run(raw);
 
     // =========================
-    // F. Crusher
+    // F. Crusher (no isPartial check needed)
     // =========================
     case 'F.':
       tableName = 'Crusher';
@@ -1037,8 +1353,8 @@ async function validateLabel(labelCode) {
         SELECT
           c.NoCrusher,
           c.DateCreate,
-          c.IdCrusher      AS idJenis,
-          mc.NamaCrusher   AS namaJenis,
+          c.IdCrusher AS idJenis,
+          mc.NamaCrusher AS namaJenis,
           c.IdWarehouse,
           c.DateUsage,
           c.Berat,
@@ -1046,7 +1362,8 @@ async function validateLabel(labelCode) {
           c.Blok,
           c.IdLokasi,
           c.CreateBy,
-          c.DateTimeCreate
+          c.DateTimeCreate,
+          CAST(0 AS bit) AS IsPartial  -- ✅ ALWAYS 0
         FROM dbo.Crusher AS c WITH (NOLOCK)
         LEFT JOIN dbo.MstCrusher AS mc WITH (NOLOCK)
           ON mc.IdCrusher = c.IdCrusher
@@ -1072,15 +1389,14 @@ async function validateLabel(labelCode) {
         SELECT
           g.NoGilingan,
           g.DateCreate,
-          g.IdGilingan      AS idJenis,
-          mg.NamaGilingan   AS namaJenis,
+          g.IdGilingan AS idJenis,
+          mg.NamaGilingan AS namaJenis,
           g.DateUsage,
-          Berat       = CASE
-                              WHEN g.Berat - ISNULL(pa.PartialBerat, 0) < 0 THEN 0
-                              ELSE g.Berat - ISNULL(pa.PartialBerat, 0)
-                            END,
-          g.IsPartial
-
+          Berat = CASE
+                    WHEN g.Berat - ISNULL(pa.PartialBerat, 0) < 0 THEN 0
+                    ELSE g.Berat - ISNULL(pa.PartialBerat, 0)
+                  END,
+          CAST(0 AS bit) AS IsPartial  -- ✅ ALWAYS 0 for Bongkar Susun
         FROM dbo.Gilingan AS g WITH (NOLOCK)
         LEFT JOIN PartialAgg AS pa
           ON pa.NoGilingan = g.NoGilingan
@@ -1088,6 +1404,7 @@ async function validateLabel(labelCode) {
           ON mg.IdGilingan = g.IdGilingan
         WHERE g.NoGilingan = @labelCode
           AND g.DateUsage IS NULL
+          AND (g.IsPartial IS NULL OR g.IsPartial = 0)  -- ✅ FILTER: non-partial only
         ORDER BY g.NoGilingan;
       `;
       return await run(raw);
@@ -1098,132 +1415,127 @@ async function validateLabel(labelCode) {
     case 'H.':
       tableName = 'Mixer_d';
       query = `
-      ;WITH PartialSum AS (
-        SELECT
+        ;WITH PartialSum AS (
+          SELECT
             mp.NoMixer,
             mp.NoSak,
             SUM(ISNULL(mp.Berat, 0)) AS BeratPartial
-        FROM dbo.MixerPartial AS mp WITH (NOLOCK)
-        GROUP BY mp.NoMixer, mp.NoSak
-      )
-      SELECT
-          d.NoMixer                       AS noMixer,
-          d.NoSak                         AS noSak,
+          FROM dbo.MixerPartial AS mp WITH (NOLOCK)
+          GROUP BY mp.NoMixer, mp.NoSak
+        )
+        SELECT
+          d.NoMixer AS noMixer,
+          d.NoSak AS noSak,
           CAST(d.Berat - ISNULL(ps.BeratPartial, 0) AS DECIMAL(18,2)) AS berat,
-          d.DateUsage                     AS dateUsage,
-          CASE WHEN ISNULL(ps.BeratPartial, 0) > 0 THEN CAST(1 AS bit) ELSE CAST(0 AS bit) END AS isPartial,
-          d.IdLokasi                      AS idLokasi,
-          h.IdMixer                       AS idJenis,
-          mm.Jenis                        AS namaJenis
-      FROM dbo.Mixer_d AS d WITH (NOLOCK)
-      LEFT JOIN PartialSum AS ps
-        ON ps.NoMixer = d.NoMixer
-      AND ps.NoSak   = d.NoSak
-      LEFT JOIN dbo.Mixer_h AS h WITH (NOLOCK)
-        ON h.NoMixer = d.NoMixer
-      LEFT JOIN dbo.MstMixer AS mm WITH (NOLOCK)
-        ON mm.IdMixer = h.IdMixer
-      WHERE d.NoMixer = @labelCode
-        AND d.DateUsage IS NULL
-        AND (d.Berat - ISNULL(ps.BeratPartial, 0)) > 0
-      ORDER BY d.NoMixer, d.NoSak;
+          d.DateUsage AS dateUsage,
+          CAST(0 AS bit) AS isPartial,  -- ✅ ALWAYS 0 for Bongkar Susun
+          d.IdLokasi AS idLokasi,
+          h.IdMixer AS idJenis,
+          mm.Jenis AS namaJenis
+        FROM dbo.Mixer_d AS d WITH (NOLOCK)
+        LEFT JOIN PartialSum AS ps
+          ON ps.NoMixer = d.NoMixer
+         AND ps.NoSak = d.NoSak
+        LEFT JOIN dbo.Mixer_h AS h WITH (NOLOCK)
+          ON h.NoMixer = d.NoMixer
+        LEFT JOIN dbo.MstMixer AS mm WITH (NOLOCK)
+          ON mm.IdMixer = h.IdMixer
+        WHERE d.NoMixer = @labelCode
+          AND d.DateUsage IS NULL
+          AND (d.Berat - ISNULL(ps.BeratPartial, 0)) > 0
+          AND ISNULL(ps.BeratPartial, 0) = 0  -- ✅ FILTER: belum pernah di-partial
+        ORDER BY d.NoMixer, d.NoSak;
       `;
       return await run(raw);
 
-      // =========================
-// BB. FurnitureWIP (BB.0000036786)
-// =========================
-case 'BB.':
-  tableName = 'FurnitureWIP';
-  query = `
-    ;WITH PartialAgg AS (
-      SELECT
-        p.NoFurnitureWIP,
-        SUM(ISNULL(p.Pcs, 0)) AS PcsPartial
-      FROM dbo.FurnitureWIPPartial AS p WITH (NOLOCK)
-      GROUP BY p.NoFurnitureWIP
-    )
-    SELECT
-      f.NoFurnitureWIP                 AS noFurnitureWip,
-      f.DateCreate                     AS dateCreate,
-      f.Jam                            AS jam,
-      Pcs = CASE
-              WHEN ISNULL(f.Pcs, 0) - ISNULL(pa.PcsPartial, 0) < 0 THEN 0
-              ELSE ISNULL(f.Pcs, 0) - ISNULL(pa.PcsPartial, 0)
-            END,
-      f.IDFurnitureWIP                 AS idJenis,
-      mc.Nama                          AS namaJenis,
-      f.Berat                          AS berat,
-      f.DateUsage                      AS dateUsage,
-      f.IdWarehouse                    AS idWarehouse,
-      f.IdWarna                        AS idWarna,
-      f.CreateBy                       AS createBy,
-      f.DateTimeCreate                 AS dateTimeCreate,
-      f.Blok                           AS blok,
-      f.IdLokasi                       AS idLokasi,
-      CASE
-        WHEN ISNULL(pa.PcsPartial, 0) > 0 THEN CAST(1 AS bit)
-        ELSE CAST(0 AS bit)
-      END                              AS isPartial
-    FROM dbo.FurnitureWIP AS f WITH (NOLOCK)
-    LEFT JOIN PartialAgg AS pa
-      ON pa.NoFurnitureWIP = f.NoFurnitureWIP
-    LEFT JOIN dbo.MstCabinetWIP AS mc WITH (NOLOCK)
-      ON mc.IdCabinetWIP = f.IDFurnitureWIP
-    WHERE f.NoFurnitureWIP = @labelCode
-      AND f.DateUsage IS NULL
-      AND (ISNULL(f.Pcs, 0) - ISNULL(pa.PcsPartial, 0)) > 0
-    ORDER BY f.NoFurnitureWIP;
-  `;
-  return await run(raw);
-
-
-  // =========================
-// BA. / C. BarangJadi (prefix bisa BA.000... atau BA.000... tergantung sistemmu)
-// =========================
-case 'BA.':
-    tableName = 'BarangJadi';
-    query = `
-      ;WITH PartialAgg AS (
+    // =========================
+    // BB. FurnitureWIP
+    // =========================
+    case 'BB.':
+      tableName = 'FurnitureWIP';
+      query = `
+        ;WITH PartialAgg AS (
+          SELECT
+            p.NoFurnitureWIP,
+            SUM(ISNULL(p.Pcs, 0)) AS PcsPartial
+          FROM dbo.FurnitureWIPPartial AS p WITH (NOLOCK)
+          GROUP BY p.NoFurnitureWIP
+        )
         SELECT
-          p.NoBJ,
-          SUM(ISNULL(p.Pcs, 0)) AS PcsPartial
-        FROM dbo.BarangJadiPartial AS p WITH (NOLOCK)
-        GROUP BY p.NoBJ
-      )
-      SELECT
-        b.NoBJ                           AS noBj,
-        b.IdBJ                           AS idJenis,
-        mb.NamaBJ                        AS namaJenis,
-        b.DateCreate                     AS dateCreate,
-        b.DateUsage                      AS dateUsage,
-        b.Jam                            AS jam,
-        Pcs = CASE
-                WHEN ISNULL(b.Pcs, 0) - ISNULL(pa.PcsPartial, 0) < 0 THEN 0
-                ELSE ISNULL(b.Pcs, 0) - ISNULL(pa.PcsPartial, 0)
-              END,
-        b.Berat                          AS berat,
-        b.IdWarehouse                    AS idWarehouse,
-        b.CreateBy                       AS createBy,
-        b.DateTimeCreate                 AS dateTimeCreate,
-        b.Blok                           AS blok,
-        b.IdLokasi                       AS idLokasi,
-        CASE
-          WHEN ISNULL(pa.PcsPartial, 0) > 0 THEN CAST(1 AS bit)
-          ELSE CAST(0 AS bit)
-        END                              AS isPartial
-      FROM dbo.BarangJadi AS b WITH (NOLOCK)
-      LEFT JOIN PartialAgg AS pa
-        ON pa.NoBJ = b.NoBJ
-      LEFT JOIN dbo.MstBarangJadi AS mb WITH (NOLOCK)
-        ON mb.IdBJ = b.IdBJ
-      WHERE b.NoBJ = @labelCode
-        AND b.DateUsage IS NULL
-        AND (ISNULL(b.Pcs, 0) - ISNULL(pa.PcsPartial, 0)) > 0
-      ORDER BY b.NoBJ;
-    `;
-    return await run(raw);
-  
+          f.NoFurnitureWIP AS noFurnitureWip,
+          f.DateCreate AS dateCreate,
+          f.Jam AS jam,
+          Pcs = CASE
+                  WHEN ISNULL(f.Pcs, 0) - ISNULL(pa.PcsPartial, 0) < 0 THEN 0
+                  ELSE ISNULL(f.Pcs, 0) - ISNULL(pa.PcsPartial, 0)
+                END,
+          f.IDFurnitureWIP AS idJenis,
+          mc.Nama AS namaJenis,
+          f.Berat AS berat,
+          f.DateUsage AS dateUsage,
+          f.IdWarehouse AS idWarehouse,
+          f.IdWarna AS idWarna,
+          f.CreateBy AS createBy,
+          f.DateTimeCreate AS dateTimeCreate,
+          f.Blok AS blok,
+          f.IdLokasi AS idLokasi,
+          CAST(0 AS bit) AS isPartial  -- ✅ ALWAYS 0 for Bongkar Susun
+        FROM dbo.FurnitureWIP AS f WITH (NOLOCK)
+        LEFT JOIN PartialAgg AS pa
+          ON pa.NoFurnitureWIP = f.NoFurnitureWIP
+        LEFT JOIN dbo.MstCabinetWIP AS mc WITH (NOLOCK)
+          ON mc.IdCabinetWIP = f.IDFurnitureWIP
+        WHERE f.NoFurnitureWIP = @labelCode
+          AND f.DateUsage IS NULL
+          AND (ISNULL(f.Pcs, 0) - ISNULL(pa.PcsPartial, 0)) > 0
+          AND ISNULL(pa.PcsPartial, 0) = 0  -- ✅ FILTER: belum pernah di-partial
+        ORDER BY f.NoFurnitureWIP;
+      `;
+      return await run(raw);
+
+    // =========================
+    // BA. BarangJadi
+    // =========================
+    case 'BA.':
+      tableName = 'BarangJadi';
+      query = `
+        ;WITH PartialAgg AS (
+          SELECT
+            p.NoBJ,
+            SUM(ISNULL(p.Pcs, 0)) AS PcsPartial
+          FROM dbo.BarangJadiPartial AS p WITH (NOLOCK)
+          GROUP BY p.NoBJ
+        )
+        SELECT
+          b.NoBJ AS noBj,
+          b.IdBJ AS idJenis,
+          mb.NamaBJ AS namaJenis,
+          b.DateCreate AS dateCreate,
+          b.DateUsage AS dateUsage,
+          b.Jam AS jam,
+          Pcs = CASE
+                  WHEN ISNULL(b.Pcs, 0) - ISNULL(pa.PcsPartial, 0) < 0 THEN 0
+                  ELSE ISNULL(b.Pcs, 0) - ISNULL(pa.PcsPartial, 0)
+                END,
+          b.Berat AS berat,
+          b.IdWarehouse AS idWarehouse,
+          b.CreateBy AS createBy,
+          b.DateTimeCreate AS dateTimeCreate,
+          b.Blok AS blok,
+          b.IdLokasi AS idLokasi,
+          CAST(0 AS bit) AS isPartial  -- ✅ ALWAYS 0 for Bongkar Susun
+        FROM dbo.BarangJadi AS b WITH (NOLOCK)
+        LEFT JOIN PartialAgg AS pa
+          ON pa.NoBJ = b.NoBJ
+        LEFT JOIN dbo.MstBarangJadi AS mb WITH (NOLOCK)
+          ON mb.IdBJ = b.IdBJ
+        WHERE b.NoBJ = @labelCode
+          AND b.DateUsage IS NULL
+          AND (ISNULL(b.Pcs, 0) - ISNULL(pa.PcsPartial, 0)) > 0
+          AND ISNULL(pa.PcsPartial, 0) = 0  -- ✅ FILTER: belum pernah di-partial
+        ORDER BY b.NoBJ;
+      `;
+      return await run(raw);
 
     // =========================
     // BF. RejectV2
@@ -1231,18 +1543,18 @@ case 'BA.':
     case 'BF.':
       tableName = 'RejectV2';
       query = `
-      ;WITH PartialSum AS (
-        SELECT
+        ;WITH PartialSum AS (
+          SELECT
             rp.NoReject,
             SUM(ISNULL(rp.Berat, 0)) AS BeratPartial
-        FROM dbo.RejectV2Partial AS rp WITH (NOLOCK)
-        WHERE rp.NoReject = @labelCode
-        GROUP BY rp.NoReject
-      )
-      SELECT
+          FROM dbo.RejectV2Partial AS rp WITH (NOLOCK)
+          WHERE rp.NoReject = @labelCode
+          GROUP BY rp.NoReject
+        )
+        SELECT
           r.NoReject,
-          r.IdReject       AS idJenis,
-          mr.NamaReject    AS namaJenis,
+          r.IdReject AS idJenis,
+          mr.NamaReject AS namaJenis,
           r.DateCreate,
           r.DateUsage,
           r.IdWarehouse,
@@ -1252,27 +1564,23 @@ case 'BA.':
           r.DateTimeCreate,
           r.Blok,
           r.IdLokasi,
-          CASE 
-            WHEN ISNULL(ps.BeratPartial, 0) > 0 
-              THEN CAST(1 AS bit) 
-            ELSE CAST(0 AS bit) 
-          END              AS isPartial
-      FROM dbo.RejectV2 AS r WITH (NOLOCK)
-      LEFT JOIN PartialSum AS ps
-        ON ps.NoReject = r.NoReject
-      LEFT JOIN dbo.MstReject AS mr WITH (NOLOCK)
-        ON mr.IdReject = r.IdReject
-      WHERE r.NoReject = @labelCode
-        AND r.DateUsage IS NULL
-        AND (r.Berat - ISNULL(ps.BeratPartial, 0)) > 0   -- hanya yang masih ada sisa berat
-      ORDER BY r.NoReject;
+          CAST(0 AS bit) AS isPartial  -- ✅ ALWAYS 0 for Bongkar Susun
+        FROM dbo.RejectV2 AS r WITH (NOLOCK)
+        LEFT JOIN PartialSum AS ps
+          ON ps.NoReject = r.NoReject
+        LEFT JOIN dbo.MstReject AS mr WITH (NOLOCK)
+          ON mr.IdReject = r.IdReject
+        WHERE r.NoReject = @labelCode
+          AND r.DateUsage IS NULL
+          AND (r.Berat - ISNULL(ps.BeratPartial, 0)) > 0
+          AND ISNULL(ps.BeratPartial, 0) = 0  -- ✅ FILTER: belum pernah di-partial
+        ORDER BY r.NoReject;
       `;
       return await run(raw);
 
-
     default:
-      throw new Error(`Invalid prefix: ${prefix}. Valid prefixes: A., B., C., D., M., F., V., H., BB., BA., BF.`);
-    }
+      throw new Error(`Invalid prefix: ${prefix}. Valid prefixes: A., B., D., M., F., V., H., BB., BA., BF.`);
+  }
 }
 
 /**
@@ -1342,7 +1650,6 @@ async function upsertInputs(noBongkarSusun, payload) {
   }
 }
 
-
 async function _insertInputsWithTx(tx, noBongkarSusun, lists) {
   const req = new sql.Request(tx);
   req.input('no', sql.VarChar(50), noBongkarSusun);
@@ -1369,31 +1676,35 @@ async function _insertInputsWithTx(tx, noBongkarSusun, lists) {
   DECLARE @out TABLE(Section sysname, Inserted int, Skipped int, Invalid int);
 
   /* =====================================================================
-     BROKER -> BongkarSusunInputBroker + update Broker_d.DateUsage
+     BROKER
      ===================================================================== */
   DECLARE @brokerInserted int = 0, @brokerSkipped int = 0, @brokerInvalid int = 0;
-  DECLARE @insBroker TABLE(NoBroker varchar(50), NoSak int);
 
-  ;WITH j AS (
-    SELECT noBroker, noSak
-    FROM OPENJSON(@jsInputs, '$.broker')
-    WITH ( noBroker varchar(50) '$.noBroker', noSak int '$.noSak' )
-  ),
-  v AS (
-    SELECT j.* FROM j
-    WHERE EXISTS (
-      SELECT 1 FROM dbo.Broker_d b WITH (NOLOCK)
-      WHERE b.NoBroker=j.noBroker AND b.NoSak=j.noSak
-        AND b.DateUsage IS NULL
-    )
-  )
+  DECLARE @reqBroker TABLE(NoBroker varchar(50), NoSak int);
+  DECLARE @eligBroker TABLE(NoBroker varchar(50), NoSak int);
+  DECLARE @insBroker  TABLE(NoBroker varchar(50), NoSak int);
+
+  INSERT INTO @reqBroker(NoBroker, NoSak)
+  SELECT DISTINCT noBroker, noSak
+  FROM OPENJSON(@jsInputs, '$.broker')
+  WITH ( noBroker varchar(50) '$.noBroker', noSak int '$.noSak' );
+
+  INSERT INTO @eligBroker(NoBroker, NoSak)
+  SELECT r.NoBroker, r.NoSak
+  FROM @reqBroker r
+  WHERE EXISTS (
+    SELECT 1 FROM dbo.Broker_d b WITH (NOLOCK)
+    WHERE b.NoBroker=r.NoBroker AND b.NoSak=r.NoSak
+      AND b.DateUsage IS NULL
+  );
+
   INSERT INTO dbo.BongkarSusunInputBroker (NoBongkarSusun, NoBroker, NoSak)
   OUTPUT INSERTED.NoBroker, INSERTED.NoSak INTO @insBroker(NoBroker, NoSak)
-  SELECT @no, v.noBroker, v.noSak
-  FROM v
+  SELECT @no, e.NoBroker, e.NoSak
+  FROM @eligBroker e
   WHERE NOT EXISTS (
     SELECT 1 FROM dbo.BongkarSusunInputBroker x
-    WHERE x.NoBongkarSusun=@no AND x.NoBroker=v.noBroker AND x.NoSak=v.noSak
+    WHERE x.NoBongkarSusun=@no AND x.NoBroker=e.NoBroker AND x.NoSak=e.NoSak
   );
 
   SET @brokerInserted = @@ROWCOUNT;
@@ -1406,64 +1717,57 @@ async function _insertInputsWithTx(tx, noBongkarSusun, lists) {
     INNER JOIN @insBroker i ON i.NoBroker=b.NoBroker AND i.NoSak=b.NoSak;
   END;
 
-  SELECT @brokerSkipped = COUNT(*) FROM (
-    SELECT noBroker, noSak
-    FROM OPENJSON(@jsInputs, '$.broker')
-    WITH ( noBroker varchar(50) '$.noBroker', noSak int '$.noSak' )
-  ) j
+  SELECT @brokerSkipped = COUNT(*)
+  FROM @eligBroker e
   WHERE EXISTS (
-    SELECT 1 FROM dbo.Broker_d b WITH (NOLOCK)
-    WHERE b.NoBroker=j.noBroker AND b.NoSak=j.noSak AND b.DateUsage IS NULL
-  )
-  AND EXISTS (
     SELECT 1 FROM dbo.BongkarSusunInputBroker x
-    WHERE x.NoBongkarSusun=@no AND x.NoBroker=j.noBroker AND x.NoSak=j.noSak
+    WHERE x.NoBongkarSusun=@no AND x.NoBroker=e.NoBroker AND x.NoSak=e.NoSak
+  )
+  AND NOT EXISTS (
+    SELECT 1 FROM @insBroker i WHERE i.NoBroker=e.NoBroker AND i.NoSak=e.NoSak
   );
 
-  SELECT @brokerInvalid = COUNT(*) FROM (
-    SELECT noBroker, noSak
-    FROM OPENJSON(@jsInputs, '$.broker')
-    WITH ( noBroker varchar(50) '$.noBroker', noSak int '$.noSak' )
-  ) j
-  WHERE NOT EXISTS (
-    SELECT 1 FROM dbo.Broker_d b WITH (NOLOCK)
-    WHERE b.NoBroker=j.noBroker AND b.NoSak=j.noSak AND b.DateUsage IS NULL
-  );
+  SELECT @brokerInvalid =
+    (SELECT COUNT(*) FROM @reqBroker) - (SELECT COUNT(*) FROM @eligBroker);
 
   INSERT INTO @out SELECT 'broker', @brokerInserted, @brokerSkipped, @brokerInvalid;
 
 
   /* =====================================================================
-     BB -> BongkarSusunInputBahanBaku + update BahanBaku_d.DateUsage
+     BB
      ===================================================================== */
   DECLARE @bbInserted int = 0, @bbSkipped int = 0, @bbInvalid int = 0;
-  DECLARE @insBB TABLE(NoBahanBaku varchar(50), NoPallet int, NoSak int);
 
-  ;WITH j AS (
-    SELECT noBahanBaku, noPallet, noSak
-    FROM OPENJSON(@jsInputs, '$.bb')
-    WITH (
-      noBahanBaku varchar(50) '$.noBahanBaku',
-      noPallet    int         '$.noPallet',
-      noSak       int         '$.noSak'
-    )
-  ),
-  v AS (
-    SELECT j.* FROM j
-    WHERE EXISTS (
-      SELECT 1 FROM dbo.BahanBaku_d d WITH (NOLOCK)
-      WHERE d.NoBahanBaku=j.noBahanBaku AND d.NoPallet=j.noPallet AND d.NoSak=j.noSak
-        AND d.DateUsage IS NULL
-    )
-  )
+  DECLARE @reqBB TABLE(NoBahanBaku varchar(50), NoPallet int, NoSak int);
+  DECLARE @eligBB TABLE(NoBahanBaku varchar(50), NoPallet int, NoSak int);
+  DECLARE @insBB  TABLE(NoBahanBaku varchar(50), NoPallet int, NoSak int);
+
+  INSERT INTO @reqBB(NoBahanBaku, NoPallet, NoSak)
+  SELECT DISTINCT noBahanBaku, noPallet, noSak
+  FROM OPENJSON(@jsInputs, '$.bb')
+  WITH (
+    noBahanBaku varchar(50) '$.noBahanBaku',
+    noPallet    int         '$.noPallet',
+    noSak       int         '$.noSak'
+  );
+
+  INSERT INTO @eligBB(NoBahanBaku, NoPallet, NoSak)
+  SELECT r.NoBahanBaku, r.NoPallet, r.NoSak
+  FROM @reqBB r
+  WHERE EXISTS (
+    SELECT 1 FROM dbo.BahanBaku_d d WITH (NOLOCK)
+    WHERE d.NoBahanBaku=r.NoBahanBaku AND d.NoPallet=r.NoPallet AND d.NoSak=r.NoSak
+      AND d.DateUsage IS NULL
+  );
+
   INSERT INTO dbo.BongkarSusunInputBahanBaku (NoBongkarSusun, NoBahanBaku, NoPallet, NoSak)
   OUTPUT INSERTED.NoBahanBaku, INSERTED.NoPallet, INSERTED.NoSak INTO @insBB(NoBahanBaku, NoPallet, NoSak)
-  SELECT @no, v.noBahanBaku, v.noPallet, v.noSak
-  FROM v
+  SELECT @no, e.NoBahanBaku, e.NoPallet, e.NoSak
+  FROM @eligBB e
   WHERE NOT EXISTS (
     SELECT 1 FROM dbo.BongkarSusunInputBahanBaku x
     WHERE x.NoBongkarSusun=@no
-      AND x.NoBahanBaku=v.noBahanBaku AND x.NoPallet=v.noPallet AND x.NoSak=v.noSak
+      AND x.NoBahanBaku=e.NoBahanBaku AND x.NoPallet=e.NoPallet AND x.NoSak=e.NoSak
   );
 
   SET @bbInserted = @@ROWCOUNT;
@@ -1477,58 +1781,53 @@ async function _insertInputsWithTx(tx, noBongkarSusun, lists) {
       ON i.NoBahanBaku=d.NoBahanBaku AND i.NoPallet=d.NoPallet AND i.NoSak=d.NoSak;
   END;
 
-  SELECT @bbSkipped = COUNT(*) FROM (
-    SELECT noBahanBaku, noPallet, noSak
-    FROM OPENJSON(@jsInputs, '$.bb')
-    WITH ( noBahanBaku varchar(50) '$.noBahanBaku', noPallet int '$.noPallet', noSak int '$.noSak' )
-  ) j
+  SELECT @bbSkipped = COUNT(*)
+  FROM @eligBB e
   WHERE EXISTS (
-    SELECT 1 FROM dbo.BahanBaku_d d WITH (NOLOCK)
-    WHERE d.NoBahanBaku=j.noBahanBaku AND d.NoPallet=j.noPallet AND d.NoSak=j.noSak AND d.DateUsage IS NULL
-  )
-  AND EXISTS (
     SELECT 1 FROM dbo.BongkarSusunInputBahanBaku x
-    WHERE x.NoBongkarSusun=@no AND x.NoBahanBaku=j.noBahanBaku AND x.NoPallet=j.noPallet AND x.NoSak=j.noSak
+    WHERE x.NoBongkarSusun=@no
+      AND x.NoBahanBaku=e.NoBahanBaku AND x.NoPallet=e.NoPallet AND x.NoSak=e.NoSak
+  )
+  AND NOT EXISTS (
+    SELECT 1 FROM @insBB i
+    WHERE i.NoBahanBaku=e.NoBahanBaku AND i.NoPallet=e.NoPallet AND i.NoSak=e.NoSak
   );
 
-  SELECT @bbInvalid = COUNT(*) FROM (
-    SELECT noBahanBaku, noPallet, noSak
-    FROM OPENJSON(@jsInputs, '$.bb')
-    WITH ( noBahanBaku varchar(50) '$.noBahanBaku', noPallet int '$.noPallet', noSak int '$.noSak' )
-  ) j
-  WHERE NOT EXISTS (
-    SELECT 1 FROM dbo.BahanBaku_d d WITH (NOLOCK)
-    WHERE d.NoBahanBaku=j.noBahanBaku AND d.NoPallet=j.noPallet AND d.NoSak=j.noSak AND d.DateUsage IS NULL
-  );
+  SELECT @bbInvalid =
+    (SELECT COUNT(*) FROM @reqBB) - (SELECT COUNT(*) FROM @eligBB);
 
   INSERT INTO @out SELECT 'bb', @bbInserted, @bbSkipped, @bbInvalid;
 
 
   /* =====================================================================
-     WASHING -> BongkarSusunInputWashing + update Washing_d.DateUsage
+     WASHING
      ===================================================================== */
   DECLARE @washingInserted int = 0, @washingSkipped int = 0, @washingInvalid int = 0;
-  DECLARE @insWashing TABLE(NoWashing varchar(50), NoSak int);
 
-  ;WITH j AS (
-    SELECT noWashing, noSak
-    FROM OPENJSON(@jsInputs, '$.washing')
-    WITH ( noWashing varchar(50) '$.noWashing', noSak int '$.noSak' )
-  ),
-  v AS (
-    SELECT j.* FROM j
-    WHERE EXISTS (
-      SELECT 1 FROM dbo.Washing_d d WITH (NOLOCK)
-      WHERE d.NoWashing=j.noWashing AND d.NoSak=j.noSak AND d.DateUsage IS NULL
-    )
-  )
+  DECLARE @reqW TABLE(NoWashing varchar(50), NoSak int);
+  DECLARE @eligW TABLE(NoWashing varchar(50), NoSak int);
+  DECLARE @insW  TABLE(NoWashing varchar(50), NoSak int);
+
+  INSERT INTO @reqW(NoWashing, NoSak)
+  SELECT DISTINCT noWashing, noSak
+  FROM OPENJSON(@jsInputs, '$.washing')
+  WITH ( noWashing varchar(50) '$.noWashing', noSak int '$.noSak' );
+
+  INSERT INTO @eligW(NoWashing, NoSak)
+  SELECT r.NoWashing, r.NoSak
+  FROM @reqW r
+  WHERE EXISTS (
+    SELECT 1 FROM dbo.Washing_d d WITH (NOLOCK)
+    WHERE d.NoWashing=r.NoWashing AND d.NoSak=r.NoSak AND d.DateUsage IS NULL
+  );
+
   INSERT INTO dbo.BongkarSusunInputWashing (NoBongkarSusun, NoWashing, NoSak)
-  OUTPUT INSERTED.NoWashing, INSERTED.NoSak INTO @insWashing(NoWashing, NoSak)
-  SELECT @no, v.noWashing, v.noSak
-  FROM v
+  OUTPUT INSERTED.NoWashing, INSERTED.NoSak INTO @insW(NoWashing, NoSak)
+  SELECT @no, e.NoWashing, e.NoSak
+  FROM @eligW e
   WHERE NOT EXISTS (
     SELECT 1 FROM dbo.BongkarSusunInputWashing x
-    WHERE x.NoBongkarSusun=@no AND x.NoWashing=v.noWashing AND x.NoSak=v.noSak
+    WHERE x.NoBongkarSusun=@no AND x.NoWashing=e.NoWashing AND x.NoSak=e.NoSak
   );
 
   SET @washingInserted = @@ROWCOUNT;
@@ -1538,61 +1837,54 @@ async function _insertInputsWithTx(tx, noBongkarSusun, lists) {
     UPDATE d
     SET d.DateUsage = @tgl
     FROM dbo.Washing_d d
-    INNER JOIN @insWashing i ON i.NoWashing=d.NoWashing AND i.NoSak=d.NoSak;
+    INNER JOIN @insW i ON i.NoWashing=d.NoWashing AND i.NoSak=d.NoSak;
   END;
 
-  SELECT @washingSkipped = COUNT(*) FROM (
-    SELECT noWashing, noSak
-    FROM OPENJSON(@jsInputs, '$.washing')
-    WITH ( noWashing varchar(50) '$.noWashing', noSak int '$.noSak' )
-  ) j
+  SELECT @washingSkipped = COUNT(*)
+  FROM @eligW e
   WHERE EXISTS (
-    SELECT 1 FROM dbo.Washing_d d WITH (NOLOCK)
-    WHERE d.NoWashing=j.noWashing AND d.NoSak=j.noSak AND d.DateUsage IS NULL
-  )
-  AND EXISTS (
     SELECT 1 FROM dbo.BongkarSusunInputWashing x
-    WHERE x.NoBongkarSusun=@no AND x.NoWashing=j.noWashing AND x.NoSak=j.noSak
+    WHERE x.NoBongkarSusun=@no AND x.NoWashing=e.NoWashing AND x.NoSak=e.NoSak
+  )
+  AND NOT EXISTS (
+    SELECT 1 FROM @insW i WHERE i.NoWashing=e.NoWashing AND i.NoSak=e.NoSak
   );
 
-  SELECT @washingInvalid = COUNT(*) FROM (
-    SELECT noWashing, noSak
-    FROM OPENJSON(@jsInputs, '$.washing')
-    WITH ( noWashing varchar(50) '$.noWashing', noSak int '$.noSak' )
-  ) j
-  WHERE NOT EXISTS (
-    SELECT 1 FROM dbo.Washing_d d WITH (NOLOCK)
-    WHERE d.NoWashing=j.noWashing AND d.NoSak=j.noSak AND d.DateUsage IS NULL
-  );
+  SELECT @washingInvalid =
+    (SELECT COUNT(*) FROM @reqW) - (SELECT COUNT(*) FROM @eligW);
 
   INSERT INTO @out SELECT 'washing', @washingInserted, @washingSkipped, @washingInvalid;
 
 
   /* =====================================================================
-     CRUSHER -> BongkarSusunInputCrusher + update Crusher.DateUsage
+     CRUSHER
      ===================================================================== */
   DECLARE @crusherInserted int = 0, @crusherSkipped int = 0, @crusherInvalid int = 0;
-  DECLARE @insCrusher TABLE(NoCrusher varchar(50));
 
-  ;WITH j AS (
-    SELECT noCrusher
-    FROM OPENJSON(@jsInputs, '$.crusher')
-    WITH ( noCrusher varchar(50) '$.noCrusher' )
-  ),
-  v AS (
-    SELECT j.* FROM j
-    WHERE EXISTS (
-      SELECT 1 FROM dbo.Crusher c WITH (NOLOCK)
-      WHERE c.NoCrusher=j.noCrusher AND c.DateUsage IS NULL
-    )
-  )
+  DECLARE @reqC TABLE(NoCrusher varchar(50));
+  DECLARE @eligC TABLE(NoCrusher varchar(50));
+  DECLARE @insC  TABLE(NoCrusher varchar(50));
+
+  INSERT INTO @reqC(NoCrusher)
+  SELECT DISTINCT noCrusher
+  FROM OPENJSON(@jsInputs, '$.crusher')
+  WITH ( noCrusher varchar(50) '$.noCrusher' );
+
+  INSERT INTO @eligC(NoCrusher)
+  SELECT r.NoCrusher
+  FROM @reqC r
+  WHERE EXISTS (
+    SELECT 1 FROM dbo.Crusher c WITH (NOLOCK)
+    WHERE c.NoCrusher=r.NoCrusher AND c.DateUsage IS NULL
+  );
+
   INSERT INTO dbo.BongkarSusunInputCrusher (NoBongkarSusun, NoCrusher)
-  OUTPUT INSERTED.NoCrusher INTO @insCrusher(NoCrusher)
-  SELECT @no, v.noCrusher
-  FROM v
+  OUTPUT INSERTED.NoCrusher INTO @insC(NoCrusher)
+  SELECT @no, e.NoCrusher
+  FROM @eligC e
   WHERE NOT EXISTS (
     SELECT 1 FROM dbo.BongkarSusunInputCrusher x
-    WHERE x.NoBongkarSusun=@no AND x.NoCrusher=v.noCrusher
+    WHERE x.NoBongkarSusun=@no AND x.NoCrusher=e.NoCrusher
   );
 
   SET @crusherInserted = @@ROWCOUNT;
@@ -1602,50 +1894,54 @@ async function _insertInputsWithTx(tx, noBongkarSusun, lists) {
     UPDATE c
     SET c.DateUsage = @tgl
     FROM dbo.Crusher c
-    INNER JOIN @insCrusher i ON i.NoCrusher=c.NoCrusher;
+    INNER JOIN @insC i ON i.NoCrusher=c.NoCrusher;
   END;
 
-  SELECT @crusherSkipped = COUNT(*) FROM (
-    SELECT noCrusher FROM OPENJSON(@jsInputs, '$.crusher')
-    WITH ( noCrusher varchar(50) '$.noCrusher' )
-  ) j
-  WHERE EXISTS (SELECT 1 FROM dbo.Crusher c WITH (NOLOCK) WHERE c.NoCrusher=j.noCrusher AND c.DateUsage IS NULL)
-    AND EXISTS (SELECT 1 FROM dbo.BongkarSusunInputCrusher x WHERE x.NoBongkarSusun=@no AND x.NoCrusher=j.noCrusher);
+  SELECT @crusherSkipped = COUNT(*)
+  FROM @eligC e
+  WHERE EXISTS (
+    SELECT 1 FROM dbo.BongkarSusunInputCrusher x
+    WHERE x.NoBongkarSusun=@no AND x.NoCrusher=e.NoCrusher
+  )
+  AND NOT EXISTS (
+    SELECT 1 FROM @insC i WHERE i.NoCrusher=e.NoCrusher
+  );
 
-  SELECT @crusherInvalid = COUNT(*) FROM (
-    SELECT noCrusher FROM OPENJSON(@jsInputs, '$.crusher')
-    WITH ( noCrusher varchar(50) '$.noCrusher' )
-  ) j
-  WHERE NOT EXISTS (SELECT 1 FROM dbo.Crusher c WITH (NOLOCK) WHERE c.NoCrusher=j.noCrusher AND c.DateUsage IS NULL);
+  SELECT @crusherInvalid =
+    (SELECT COUNT(*) FROM @reqC) - (SELECT COUNT(*) FROM @eligC);
 
   INSERT INTO @out SELECT 'crusher', @crusherInserted, @crusherSkipped, @crusherInvalid;
 
 
   /* =====================================================================
-     GILINGAN -> BongkarSusunInputGilingan + update Gilingan.DateUsage
+     GILINGAN
      ===================================================================== */
   DECLARE @gilinganInserted int = 0, @gilinganSkipped int = 0, @gilinganInvalid int = 0;
-  DECLARE @insGilingan TABLE(NoGilingan varchar(50));
 
-  ;WITH j AS (
-    SELECT noGilingan
-    FROM OPENJSON(@jsInputs, '$.gilingan')
-    WITH ( noGilingan varchar(50) '$.noGilingan' )
-  ),
-  v AS (
-    SELECT j.* FROM j
-    WHERE EXISTS (
-      SELECT 1 FROM dbo.Gilingan g WITH (NOLOCK)
-      WHERE g.NoGilingan=j.noGilingan AND g.DateUsage IS NULL
-    )
-  )
+  DECLARE @reqG TABLE(NoGilingan varchar(50));
+  DECLARE @eligG TABLE(NoGilingan varchar(50));
+  DECLARE @insG  TABLE(NoGilingan varchar(50));
+
+  INSERT INTO @reqG(NoGilingan)
+  SELECT DISTINCT noGilingan
+  FROM OPENJSON(@jsInputs, '$.gilingan')
+  WITH ( noGilingan varchar(50) '$.noGilingan' );
+
+  INSERT INTO @eligG(NoGilingan)
+  SELECT r.NoGilingan
+  FROM @reqG r
+  WHERE EXISTS (
+    SELECT 1 FROM dbo.Gilingan g WITH (NOLOCK)
+    WHERE g.NoGilingan=r.NoGilingan AND g.DateUsage IS NULL
+  );
+
   INSERT INTO dbo.BongkarSusunInputGilingan (NoBongkarSusun, NoGilingan)
-  OUTPUT INSERTED.NoGilingan INTO @insGilingan(NoGilingan)
-  SELECT @no, v.noGilingan
-  FROM v
+  OUTPUT INSERTED.NoGilingan INTO @insG(NoGilingan)
+  SELECT @no, e.NoGilingan
+  FROM @eligG e
   WHERE NOT EXISTS (
     SELECT 1 FROM dbo.BongkarSusunInputGilingan x
-    WHERE x.NoBongkarSusun=@no AND x.NoGilingan=v.noGilingan
+    WHERE x.NoBongkarSusun=@no AND x.NoGilingan=e.NoGilingan
   );
 
   SET @gilinganInserted = @@ROWCOUNT;
@@ -1655,50 +1951,54 @@ async function _insertInputsWithTx(tx, noBongkarSusun, lists) {
     UPDATE g
     SET g.DateUsage = @tgl
     FROM dbo.Gilingan g
-    INNER JOIN @insGilingan i ON i.NoGilingan=g.NoGilingan;
+    INNER JOIN @insG i ON i.NoGilingan=g.NoGilingan;
   END;
 
-  SELECT @gilinganSkipped = COUNT(*) FROM (
-    SELECT noGilingan FROM OPENJSON(@jsInputs, '$.gilingan')
-    WITH ( noGilingan varchar(50) '$.noGilingan' )
-  ) j
-  WHERE EXISTS (SELECT 1 FROM dbo.Gilingan g WITH (NOLOCK) WHERE g.NoGilingan=j.noGilingan AND g.DateUsage IS NULL)
-    AND EXISTS (SELECT 1 FROM dbo.BongkarSusunInputGilingan x WHERE x.NoBongkarSusun=@no AND x.NoGilingan=j.noGilingan);
+  SELECT @gilinganSkipped = COUNT(*)
+  FROM @eligG e
+  WHERE EXISTS (
+    SELECT 1 FROM dbo.BongkarSusunInputGilingan x
+    WHERE x.NoBongkarSusun=@no AND x.NoGilingan=e.NoGilingan
+  )
+  AND NOT EXISTS (
+    SELECT 1 FROM @insG i WHERE i.NoGilingan=e.NoGilingan
+  );
 
-  SELECT @gilinganInvalid = COUNT(*) FROM (
-    SELECT noGilingan FROM OPENJSON(@jsInputs, '$.gilingan')
-    WITH ( noGilingan varchar(50) '$.noGilingan' )
-  ) j
-  WHERE NOT EXISTS (SELECT 1 FROM dbo.Gilingan g WITH (NOLOCK) WHERE g.NoGilingan=j.noGilingan AND g.DateUsage IS NULL);
+  SELECT @gilinganInvalid =
+    (SELECT COUNT(*) FROM @reqG) - (SELECT COUNT(*) FROM @eligG);
 
   INSERT INTO @out SELECT 'gilingan', @gilinganInserted, @gilinganSkipped, @gilinganInvalid;
 
 
   /* =====================================================================
-     MIXER -> BongkarSusunInputMixer + update Mixer_d.DateUsage
+     MIXER
      ===================================================================== */
   DECLARE @mixerInserted int = 0, @mixerSkipped int = 0, @mixerInvalid int = 0;
-  DECLARE @insMixer TABLE(NoMixer varchar(50), NoSak int);
 
-  ;WITH j AS (
-    SELECT noMixer, noSak
-    FROM OPENJSON(@jsInputs, '$.mixer')
-    WITH ( noMixer varchar(50) '$.noMixer', noSak int '$.noSak' )
-  ),
-  v AS (
-    SELECT j.* FROM j
-    WHERE EXISTS (
-      SELECT 1 FROM dbo.Mixer_d d WITH (NOLOCK)
-      WHERE d.NoMixer=j.noMixer AND d.NoSak=j.noSak AND d.DateUsage IS NULL
-    )
-  )
+  DECLARE @reqM TABLE(NoMixer varchar(50), NoSak int);
+  DECLARE @eligM TABLE(NoMixer varchar(50), NoSak int);
+  DECLARE @insM  TABLE(NoMixer varchar(50), NoSak int);
+
+  INSERT INTO @reqM(NoMixer, NoSak)
+  SELECT DISTINCT noMixer, noSak
+  FROM OPENJSON(@jsInputs, '$.mixer')
+  WITH ( noMixer varchar(50) '$.noMixer', noSak int '$.noSak' );
+
+  INSERT INTO @eligM(NoMixer, NoSak)
+  SELECT r.NoMixer, r.NoSak
+  FROM @reqM r
+  WHERE EXISTS (
+    SELECT 1 FROM dbo.Mixer_d d WITH (NOLOCK)
+    WHERE d.NoMixer=r.NoMixer AND d.NoSak=r.NoSak AND d.DateUsage IS NULL
+  );
+
   INSERT INTO dbo.BongkarSusunInputMixer (NoBongkarSusun, NoMixer, NoSak)
-  OUTPUT INSERTED.NoMixer, INSERTED.NoSak INTO @insMixer(NoMixer, NoSak)
-  SELECT @no, v.noMixer, v.noSak
-  FROM v
+  OUTPUT INSERTED.NoMixer, INSERTED.NoSak INTO @insM(NoMixer, NoSak)
+  SELECT @no, e.NoMixer, e.NoSak
+  FROM @eligM e
   WHERE NOT EXISTS (
     SELECT 1 FROM dbo.BongkarSusunInputMixer x
-    WHERE x.NoBongkarSusun=@no AND x.NoMixer=v.noMixer AND x.NoSak=v.noSak
+    WHERE x.NoBongkarSusun=@no AND x.NoMixer=e.NoMixer AND x.NoSak=e.NoSak
   );
 
   SET @mixerInserted = @@ROWCOUNT;
@@ -1708,50 +2008,54 @@ async function _insertInputsWithTx(tx, noBongkarSusun, lists) {
     UPDATE d
     SET d.DateUsage = @tgl
     FROM dbo.Mixer_d d
-    INNER JOIN @insMixer i ON i.NoMixer=d.NoMixer AND i.NoSak=d.NoSak;
+    INNER JOIN @insM i ON i.NoMixer=d.NoMixer AND i.NoSak=d.NoSak;
   END;
 
-  SELECT @mixerSkipped = COUNT(*) FROM (
-    SELECT noMixer, noSak FROM OPENJSON(@jsInputs, '$.mixer')
-    WITH ( noMixer varchar(50) '$.noMixer', noSak int '$.noSak' )
-  ) j
-  WHERE EXISTS (SELECT 1 FROM dbo.Mixer_d d WITH (NOLOCK) WHERE d.NoMixer=j.noMixer AND d.NoSak=j.noSak AND d.DateUsage IS NULL)
-    AND EXISTS (SELECT 1 FROM dbo.BongkarSusunInputMixer x WHERE x.NoBongkarSusun=@no AND x.NoMixer=j.noMixer AND x.NoSak=j.noSak);
+  SELECT @mixerSkipped = COUNT(*)
+  FROM @eligM e
+  WHERE EXISTS (
+    SELECT 1 FROM dbo.BongkarSusunInputMixer x
+    WHERE x.NoBongkarSusun=@no AND x.NoMixer=e.NoMixer AND x.NoSak=e.NoSak
+  )
+  AND NOT EXISTS (
+    SELECT 1 FROM @insM i WHERE i.NoMixer=e.NoMixer AND i.NoSak=e.NoSak
+  );
 
-  SELECT @mixerInvalid = COUNT(*) FROM (
-    SELECT noMixer, noSak FROM OPENJSON(@jsInputs, '$.mixer')
-    WITH ( noMixer varchar(50) '$.noMixer', noSak int '$.noSak' )
-  ) j
-  WHERE NOT EXISTS (SELECT 1 FROM dbo.Mixer_d d WITH (NOLOCK) WHERE d.NoMixer=j.noMixer AND d.NoSak=j.noSak AND d.DateUsage IS NULL);
+  SELECT @mixerInvalid =
+    (SELECT COUNT(*) FROM @reqM) - (SELECT COUNT(*) FROM @eligM);
 
   INSERT INTO @out SELECT 'mixer', @mixerInserted, @mixerSkipped, @mixerInvalid;
 
 
   /* =====================================================================
-     BONGGOLAN -> BongkarSusunInputBonggolan + update Bonggolan.DateUsage
+     BONGGOLAN
      ===================================================================== */
   DECLARE @bonggolanInserted int = 0, @bonggolanSkipped int = 0, @bonggolanInvalid int = 0;
-  DECLARE @insBonggolan TABLE(NoBonggolan varchar(50));
 
-  ;WITH j AS (
-    SELECT noBonggolan
-    FROM OPENJSON(@jsInputs, '$.bonggolan')
-    WITH ( noBonggolan varchar(50) '$.noBonggolan' )
-  ),
-  v AS (
-    SELECT j.* FROM j
-    WHERE EXISTS (
-      SELECT 1 FROM dbo.Bonggolan b WITH (NOLOCK)
-      WHERE b.NoBonggolan=j.noBonggolan AND b.DateUsage IS NULL
-    )
-  )
+  DECLARE @reqBg TABLE(NoBonggolan varchar(50));
+  DECLARE @eligBg TABLE(NoBonggolan varchar(50));
+  DECLARE @insBg  TABLE(NoBonggolan varchar(50));
+
+  INSERT INTO @reqBg(NoBonggolan)
+  SELECT DISTINCT noBonggolan
+  FROM OPENJSON(@jsInputs, '$.bonggolan')
+  WITH ( noBonggolan varchar(50) '$.noBonggolan' );
+
+  INSERT INTO @eligBg(NoBonggolan)
+  SELECT r.NoBonggolan
+  FROM @reqBg r
+  WHERE EXISTS (
+    SELECT 1 FROM dbo.Bonggolan b WITH (NOLOCK)
+    WHERE b.NoBonggolan=r.NoBonggolan AND b.DateUsage IS NULL
+  );
+
   INSERT INTO dbo.BongkarSusunInputBonggolan (NoBongkarSusun, NoBonggolan)
-  OUTPUT INSERTED.NoBonggolan INTO @insBonggolan(NoBonggolan)
-  SELECT @no, v.noBonggolan
-  FROM v
+  OUTPUT INSERTED.NoBonggolan INTO @insBg(NoBonggolan)
+  SELECT @no, e.NoBonggolan
+  FROM @eligBg e
   WHERE NOT EXISTS (
     SELECT 1 FROM dbo.BongkarSusunInputBonggolan x
-    WHERE x.NoBongkarSusun=@no AND x.NoBonggolan=v.noBonggolan
+    WHERE x.NoBongkarSusun=@no AND x.NoBonggolan=e.NoBonggolan
   );
 
   SET @bonggolanInserted = @@ROWCOUNT;
@@ -1761,50 +2065,54 @@ async function _insertInputsWithTx(tx, noBongkarSusun, lists) {
     UPDATE b
     SET b.DateUsage = @tgl
     FROM dbo.Bonggolan b
-    INNER JOIN @insBonggolan i ON i.NoBonggolan=b.NoBonggolan;
+    INNER JOIN @insBg i ON i.NoBonggolan=b.NoBonggolan;
   END;
 
-  SELECT @bonggolanSkipped = COUNT(*) FROM (
-    SELECT noBonggolan FROM OPENJSON(@jsInputs, '$.bonggolan')
-    WITH ( noBonggolan varchar(50) '$.noBonggolan' )
-  ) j
-  WHERE EXISTS (SELECT 1 FROM dbo.Bonggolan b WITH (NOLOCK) WHERE b.NoBonggolan=j.noBonggolan AND b.DateUsage IS NULL)
-    AND EXISTS (SELECT 1 FROM dbo.BongkarSusunInputBonggolan x WHERE x.NoBongkarSusun=@no AND x.NoBonggolan=j.noBonggolan);
+  SELECT @bonggolanSkipped = COUNT(*)
+  FROM @eligBg e
+  WHERE EXISTS (
+    SELECT 1 FROM dbo.BongkarSusunInputBonggolan x
+    WHERE x.NoBongkarSusun=@no AND x.NoBonggolan=e.NoBonggolan
+  )
+  AND NOT EXISTS (
+    SELECT 1 FROM @insBg i WHERE i.NoBonggolan=e.NoBonggolan
+  );
 
-  SELECT @bonggolanInvalid = COUNT(*) FROM (
-    SELECT noBonggolan FROM OPENJSON(@jsInputs, '$.bonggolan')
-    WITH ( noBonggolan varchar(50) '$.noBonggolan' )
-  ) j
-  WHERE NOT EXISTS (SELECT 1 FROM dbo.Bonggolan b WITH (NOLOCK) WHERE b.NoBonggolan=j.noBonggolan AND b.DateUsage IS NULL);
+  SELECT @bonggolanInvalid =
+    (SELECT COUNT(*) FROM @reqBg) - (SELECT COUNT(*) FROM @eligBg);
 
   INSERT INTO @out SELECT 'bonggolan', @bonggolanInserted, @bonggolanSkipped, @bonggolanInvalid;
 
 
   /* =====================================================================
-     FURNITURE WIP -> BongkarSusunInputFurnitureWIP + update FurnitureWIP.DateUsage
+     FURNITURE WIP
      ===================================================================== */
   DECLARE @fwInserted int = 0, @fwSkipped int = 0, @fwInvalid int = 0;
-  DECLARE @insFW TABLE(NoFurnitureWIP varchar(50));
 
-  ;WITH j AS (
-    SELECT noFurnitureWip
-    FROM OPENJSON(@jsInputs, '$.furnitureWip')
-    WITH ( noFurnitureWip varchar(50) '$.noFurnitureWip' )
-  ),
-  v AS (
-    SELECT j.* FROM j
-    WHERE EXISTS (
-      SELECT 1 FROM dbo.FurnitureWIP f WITH (NOLOCK)
-      WHERE f.NoFurnitureWIP=j.noFurnitureWip AND f.DateUsage IS NULL
-    )
-  )
+  DECLARE @reqFW TABLE(NoFurnitureWIP varchar(50));
+  DECLARE @eligFW TABLE(NoFurnitureWIP varchar(50));
+  DECLARE @insFW  TABLE(NoFurnitureWIP varchar(50));
+
+  INSERT INTO @reqFW(NoFurnitureWIP)
+  SELECT DISTINCT noFurnitureWip
+  FROM OPENJSON(@jsInputs, '$.furnitureWip')
+  WITH ( noFurnitureWip varchar(50) '$.noFurnitureWip' );
+
+  INSERT INTO @eligFW(NoFurnitureWIP)
+  SELECT r.NoFurnitureWIP
+  FROM @reqFW r
+  WHERE EXISTS (
+    SELECT 1 FROM dbo.FurnitureWIP f WITH (NOLOCK)
+    WHERE f.NoFurnitureWIP=r.NoFurnitureWIP AND f.DateUsage IS NULL
+  );
+
   INSERT INTO dbo.BongkarSusunInputFurnitureWIP (NoBongkarSusun, NoFurnitureWIP)
   OUTPUT INSERTED.NoFurnitureWIP INTO @insFW(NoFurnitureWIP)
-  SELECT @no, v.noFurnitureWip
-  FROM v
+  SELECT @no, e.NoFurnitureWIP
+  FROM @eligFW e
   WHERE NOT EXISTS (
     SELECT 1 FROM dbo.BongkarSusunInputFurnitureWIP x
-    WHERE x.NoBongkarSusun=@no AND x.NoFurnitureWIP=v.noFurnitureWip
+    WHERE x.NoBongkarSusun=@no AND x.NoFurnitureWIP=e.NoFurnitureWIP
   );
 
   SET @fwInserted = @@ROWCOUNT;
@@ -1817,47 +2125,51 @@ async function _insertInputsWithTx(tx, noBongkarSusun, lists) {
     INNER JOIN @insFW i ON i.NoFurnitureWIP=f.NoFurnitureWIP;
   END;
 
-  SELECT @fwSkipped = COUNT(*) FROM (
-    SELECT noFurnitureWip FROM OPENJSON(@jsInputs, '$.furnitureWip')
-    WITH ( noFurnitureWip varchar(50) '$.noFurnitureWip' )
-  ) j
-  WHERE EXISTS (SELECT 1 FROM dbo.FurnitureWIP f WITH (NOLOCK) WHERE f.NoFurnitureWIP=j.noFurnitureWip AND f.DateUsage IS NULL)
-    AND EXISTS (SELECT 1 FROM dbo.BongkarSusunInputFurnitureWIP x WHERE x.NoBongkarSusun=@no AND x.NoFurnitureWIP=j.noFurnitureWip);
+  SELECT @fwSkipped = COUNT(*)
+  FROM @eligFW e
+  WHERE EXISTS (
+    SELECT 1 FROM dbo.BongkarSusunInputFurnitureWIP x
+    WHERE x.NoBongkarSusun=@no AND x.NoFurnitureWIP=e.NoFurnitureWIP
+  )
+  AND NOT EXISTS (
+    SELECT 1 FROM @insFW i WHERE i.NoFurnitureWIP=e.NoFurnitureWIP
+  );
 
-  SELECT @fwInvalid = COUNT(*) FROM (
-    SELECT noFurnitureWip FROM OPENJSON(@jsInputs, '$.furnitureWip')
-    WITH ( noFurnitureWip varchar(50) '$.noFurnitureWip' )
-  ) j
-  WHERE NOT EXISTS (SELECT 1 FROM dbo.FurnitureWIP f WITH (NOLOCK) WHERE f.NoFurnitureWIP=j.noFurnitureWip AND f.DateUsage IS NULL);
+  SELECT @fwInvalid =
+    (SELECT COUNT(*) FROM @reqFW) - (SELECT COUNT(*) FROM @eligFW);
 
   INSERT INTO @out SELECT 'furnitureWip', @fwInserted, @fwSkipped, @fwInvalid;
 
 
   /* =====================================================================
-     BARANG JADI -> BongkarSusunInputBarangJadi + update BarangJadi.DateUsage
+     BARANG JADI
      ===================================================================== */
   DECLARE @bjInserted int = 0, @bjSkipped int = 0, @bjInvalid int = 0;
-  DECLARE @insBJ TABLE(NoBJ varchar(50));
 
-  ;WITH j AS (
-    SELECT noBj
-    FROM OPENJSON(@jsInputs, '$.barangJadi')
-    WITH ( noBj varchar(50) '$.noBj' )
-  ),
-  v AS (
-    SELECT j.* FROM j
-    WHERE EXISTS (
-      SELECT 1 FROM dbo.BarangJadi b WITH (NOLOCK)
-      WHERE b.NoBJ=j.noBj AND b.DateUsage IS NULL
-    )
-  )
+  DECLARE @reqBJ TABLE(NoBJ varchar(50));
+  DECLARE @eligBJ TABLE(NoBJ varchar(50));
+  DECLARE @insBJ  TABLE(NoBJ varchar(50));
+
+  INSERT INTO @reqBJ(NoBJ)
+  SELECT DISTINCT noBj
+  FROM OPENJSON(@jsInputs, '$.barangJadi')
+  WITH ( noBj varchar(50) '$.noBj' );
+
+  INSERT INTO @eligBJ(NoBJ)
+  SELECT r.NoBJ
+  FROM @reqBJ r
+  WHERE EXISTS (
+    SELECT 1 FROM dbo.BarangJadi b WITH (NOLOCK)
+    WHERE b.NoBJ=r.NoBJ AND b.DateUsage IS NULL
+  );
+
   INSERT INTO dbo.BongkarSusunInputBarangJadi (NoBongkarSusun, NoBJ)
   OUTPUT INSERTED.NoBJ INTO @insBJ(NoBJ)
-  SELECT @no, v.noBj
-  FROM v
+  SELECT @no, e.NoBJ
+  FROM @eligBJ e
   WHERE NOT EXISTS (
     SELECT 1 FROM dbo.BongkarSusunInputBarangJadi x
-    WHERE x.NoBongkarSusun=@no AND x.NoBJ=v.noBj
+    WHERE x.NoBongkarSusun=@no AND x.NoBJ=e.NoBJ
   );
 
   SET @bjInserted = @@ROWCOUNT;
@@ -1870,18 +2182,18 @@ async function _insertInputsWithTx(tx, noBongkarSusun, lists) {
     INNER JOIN @insBJ i ON i.NoBJ=b.NoBJ;
   END;
 
-  SELECT @bjSkipped = COUNT(*) FROM (
-    SELECT noBj FROM OPENJSON(@jsInputs, '$.barangJadi')
-    WITH ( noBj varchar(50) '$.noBj' )
-  ) j
-  WHERE EXISTS (SELECT 1 FROM dbo.BarangJadi b WITH (NOLOCK) WHERE b.NoBJ=j.noBj AND b.DateUsage IS NULL)
-    AND EXISTS (SELECT 1 FROM dbo.BongkarSusunInputBarangJadi x WHERE x.NoBongkarSusun=@no AND x.NoBJ=j.noBj);
+  SELECT @bjSkipped = COUNT(*)
+  FROM @eligBJ e
+  WHERE EXISTS (
+    SELECT 1 FROM dbo.BongkarSusunInputBarangJadi x
+    WHERE x.NoBongkarSusun=@no AND x.NoBJ=e.NoBJ
+  )
+  AND NOT EXISTS (
+    SELECT 1 FROM @insBJ i WHERE i.NoBJ=e.NoBJ
+  );
 
-  SELECT @bjInvalid = COUNT(*) FROM (
-    SELECT noBj FROM OPENJSON(@jsInputs, '$.barangJadi')
-    WITH ( noBj varchar(50) '$.noBj' )
-  ) j
-  WHERE NOT EXISTS (SELECT 1 FROM dbo.BarangJadi b WITH (NOLOCK) WHERE b.NoBJ=j.noBj AND b.DateUsage IS NULL);
+  SELECT @bjInvalid =
+    (SELECT COUNT(*) FROM @reqBJ) - (SELECT COUNT(*) FROM @eligBJ);
 
   INSERT INTO @out SELECT 'barangJadi', @bjInserted, @bjSkipped, @bjInvalid;
 
@@ -1900,6 +2212,7 @@ async function _insertInputsWithTx(tx, noBongkarSusun, lists) {
   }
   return out;
 }
+
 
 
 
@@ -2301,10 +2614,10 @@ module.exports = {
   getByDate,
   getAllBongkarSusun,
   createBongkarSusun,
-  updateBongkarSusun,
+  updateBongkarSusunCascade,
   deleteBongkarSusun,
   fetchInputs,
-  validateLabel,
+  validateLabelBongkarSusun,
   upsertInputs,
   deleteInputs,
 };

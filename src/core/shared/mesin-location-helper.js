@@ -12,7 +12,7 @@ async function getRequest(runner) {
   return pool.request();
 }
 
-// Cari config berdasarkan prefix kode
+// Cari config berdasarkan prefix kode (pilih prefix terpanjang yang cocok)
 function resolveProduksiSourceByPrefix(kode) {
   if (!kode) return null;
 
@@ -20,7 +20,6 @@ function resolveProduksiSourceByPrefix(kode) {
 
   for (const s of PRODUKSI_MESIN_SOURCES) {
     if (kode.startsWith(s.prefix)) {
-      // pilih prefix terpanjang yang cocok
       if (!match || s.prefix.length > match.prefix.length) {
         match = s;
       }
@@ -43,6 +42,11 @@ async function getIdMesinFromKodeProduksi({ kode, runner } = {}) {
   const source = resolveProduksiSourceByPrefix(kode);
   if (!source) {
     console.warn('[mesin-location] prefix tidak dikenal untuk kode:', kode);
+    return null;
+  }
+
+  // SOURCE STATIC → tidak punya IdMesin
+  if (source.staticBlok != null || source.staticIdLokasi != null) {
     return null;
   }
 
@@ -101,6 +105,22 @@ async function getBlokLokasiFromMesin({ idMesin, runner } = {}) {
  * @returns {Promise<{Blok: string|null, IdLokasi: number|null}|null>}
  */
 async function getBlokLokasiFromKodeProduksi({ kode, runner } = {}) {
+  if (!kode) return null;
+
+  const source = resolveProduksiSourceByPrefix(kode);
+  if (!source) {
+    console.warn('[mesin-location] prefix tidak dikenal untuk kode:', kode);
+    return null;
+  }
+
+  // ✅ STATIC mapping: BG. → langsung return tanpa DB
+  if (source.staticBlok != null || source.staticIdLokasi != null) {
+    return {
+      Blok: source.staticBlok ?? null,
+      IdLokasi: source.staticIdLokasi ?? null,
+    };
+  }
+
   const idMesin = await getIdMesinFromKodeProduksi({ kode, runner });
   if (!idMesin) return null;
 

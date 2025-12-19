@@ -43,5 +43,27 @@ router.delete(
 );
 
 
+// routes/gilingan-produksi.js
+router.get(
+  '/gilingan/:noProduksi/inputs',
+  verifyToken,
+  gilinganProduksiController.getInputsByNoProduksi
+);
+
+// Add this route after your existing routes
+router.get('/gilingan/validate-label/:labelCode', verifyToken, gilinganProduksiController.validateLabel);
+
+router.post(
+  '/gilingan/:noProduksi/inputs',
+  verifyToken,
+  gilinganProduksiController.upsertInputsAndPartials
+);
+
+
+router.delete(
+  '/gilingan/:noProduksi/inputs',
+  verifyToken,
+  gilinganProduksiController.deleteInputsAndPartials
+);
 
 module.exports = router;

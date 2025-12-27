@@ -80,7 +80,7 @@ async function fetchInputs(noProduksi) {
 
   const q = `
     /* ===================== [1] MAIN INPUTS (UNION) ===================== */
-    SELECT 
+    SELECT
       'broker'  AS Src,
       ib.NoProduksi,
       ib.NoBroker AS Ref1,

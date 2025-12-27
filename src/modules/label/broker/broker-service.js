@@ -4,6 +4,14 @@ const {
   getBlokLokasiFromKodeProduksi,
 } = require('../../../core/shared/mesin-location-helper'); 
 
+const {
+  resolveEffectiveDateForCreate,
+  toDateOnly,
+  assertNotLocked,     // ✅ sekarang sudah lastClosed-based
+  formatYMD,
+} = require('../../../core/shared/tutup-transaksi-guard');
+
+
 
 // GET all header Broker with pagination & search (mirror of Washing.getAll)
 exports.getAll = async ({ page, limit, search }) => {
@@ -166,7 +174,6 @@ exports.getBrokerDetailByNoBroker = async (nobroker) => {
         d.IdLokasi
       FROM dbo.Broker_d d
       WHERE d.NoBroker = @NoBroker
-        AND d.DateUsage IS NULL
       ORDER BY d.NoSak
     `);
 
@@ -230,7 +237,6 @@ exports.createBrokerCascade = async (payload) => {
   const NoProduksi = payload?.NoProduksi?.toString().trim() || null;
   const NoBongkarSusun = payload?.NoBongkarSusun?.toString().trim() || null;
 
-  // ---- validation
   const badReq = (msg) => { const e = new Error(msg); e.statusCode = 400; return e; };
   if (!header.IdJenisPlastik) throw badReq('IdJenisPlastik is required');
   if (!header.IdWarehouse) throw badReq('IdWarehouse is required');
@@ -243,36 +249,40 @@ exports.createBrokerCascade = async (payload) => {
 
   try {
     await tx.begin(sql.ISOLATION_LEVEL.SERIALIZABLE);
-    
-    // 0) Auto-isi Blok & IdLokasi dari kode produksi / bongkar susun (jika header belum isi)
+
+    // [A] TUTUP TRANSAKSI CHECK (CREATE)
+    const effectiveDateCreate = resolveEffectiveDateForCreate(header.DateCreate);
+    await assertNotLocked({
+      date: effectiveDateCreate,
+      runner: tx,
+      action: 'create broker',
+      useLock: true,
+    });
+
+    // 0) Auto-isi Blok & IdLokasi dari kode produksi
     if (!header.Blok || !header.IdLokasi) {
       if (hasProduksi) {
-        const lokasi = await getBlokLokasiFromKodeProduksi({
-          kode: NoProduksi,
-          runner: tx,
-        });
-
+        const lokasi = await getBlokLokasiFromKodeProduksi({ kode: NoProduksi, runner: tx });
         if (lokasi) {
           if (!header.Blok) header.Blok = lokasi.Blok;
           if (!header.IdLokasi) header.IdLokasi = lokasi.IdLokasi;
         }
-      } 
+      }
     }
 
-    // 1) Generate NoBroker (ignore client-provided NoBroker if any)
-    const generatedNo = await generateNextNoBroker(tx, { prefix: 'D.', width: 10 }); // adjust width if you prefer
-    // Double-check uniqueness
-    const rqCheck = new sql.Request(tx);
-    const exist = await rqCheck
+    // 1) Generate NoBroker
+    const generatedNo = await generateNextNoBroker(tx, { prefix: 'D.', width: 10 });
+
+    const exist = await new sql.Request(tx)
       .input('NoBroker', sql.VarChar, generatedNo)
       .query(`SELECT 1 FROM dbo.Broker_h WITH (UPDLOCK, HOLDLOCK) WHERE NoBroker = @NoBroker`);
+
     header.NoBroker = (exist.recordset.length > 0)
       ? await generateNextNoBroker(tx, { prefix: 'E.', width: 6 })
       : generatedNo;
 
     // 2) Insert header
-    const nowDateOnly = header.DateCreate || null; // if null -> use GETDATE() (date only)
-    const nowDateTime = new Date();               // DateTimeCreate
+    const nowDateTime = new Date();
 
     const insertHeaderSql = `
       INSERT INTO dbo.Broker_h (
@@ -281,19 +291,19 @@ exports.createBrokerCascade = async (payload) => {
         Density2, Density3, Moisture2, Moisture3, Blok, IdLokasi
       ) VALUES (
         @NoBroker, @IdJenisPlastik, @IdWarehouse,
-        ${nowDateOnly ? '@DateCreate' : 'CONVERT(date, GETDATE())'},
+        @DateCreate,
         @IdStatus, @CreateBy, @DateTimeCreate,
         @Density, @Moisture, @MaxMeltTemp, @MinMeltTemp, @MFI, @VisualNote,
         @Density2, @Density3, @Moisture2, @Moisture3, @Blok, @IdLokasi
       )
     `;
 
-    const rqHeader = new sql.Request(tx);
-    rqHeader
+    await new sql.Request(tx)
       .input('NoBroker', sql.VarChar, header.NoBroker)
       .input('IdJenisPlastik', sql.Int, header.IdJenisPlastik)
       .input('IdWarehouse', sql.Int, header.IdWarehouse)
-      .input('IdStatus', sql.Int, header.IdStatus ?? 1) // default PASS=1
+      .input('DateCreate', sql.Date, effectiveDateCreate) // ✅ checked date == saved date
+      .input('IdStatus', sql.Int, header.IdStatus ?? 1)
       .input('CreateBy', sql.VarChar, header.CreateBy)
       .input('DateTimeCreate', sql.DateTime, nowDateTime)
       .input('Density', sql.Decimal(10, 3), header.Density ?? null)
@@ -307,29 +317,27 @@ exports.createBrokerCascade = async (payload) => {
       .input('Moisture2', sql.Decimal(10, 3), header.Moisture2 ?? null)
       .input('Moisture3', sql.Decimal(10, 3), header.Moisture3 ?? null)
       .input('Blok', sql.VarChar, header.Blok ?? null)
-      .input('IdLokasi', sql.Int, header.IdLokasi ?? null);
-
-    if (nowDateOnly) rqHeader.input('DateCreate', sql.Date, new Date(nowDateOnly));
-    await rqHeader.query(insertHeaderSql);
+      .input('IdLokasi', sql.Int, header.IdLokasi ?? null)
+      .query(insertHeaderSql);
 
     // 3) Insert details
     const insertDetailSql = `
       INSERT INTO dbo.Broker_d (NoBroker, NoSak, Berat, DateUsage, IsPartial)
       VALUES (@NoBroker, @NoSak, @Berat, NULL, @IsPartial)
     `;
+
     let detailCount = 0;
     for (const d of details) {
-      const rqDet = new sql.Request(tx);
-      await rqDet
+      await new sql.Request(tx)
         .input('NoBroker', sql.VarChar, header.NoBroker)
         .input('NoSak', sql.Int, d.NoSak)
         .input('Berat', sql.Decimal(18, 3), d.Berat ?? 0)
-        .input('IsPartial', sql.Int, d.IsPartial ?? 0) // default 0 if not provided
+        .input('IsPartial', sql.Int, d.IsPartial ?? 0)
         .query(insertDetailSql);
       detailCount++;
     }
 
-    // 4) Optional outputs (mutually exclusive)
+    // 4) Optional outputs
     let outputTarget = null;
     let outputCount = 0;
 
@@ -339,8 +347,7 @@ exports.createBrokerCascade = async (payload) => {
         VALUES (@NoProduksi, @NoBroker, @NoSak)
       `;
       for (const d of details) {
-        const rqProd = new sql.Request(tx);
-        await rqProd
+        await new sql.Request(tx)
           .input('NoProduksi', sql.VarChar, NoProduksi)
           .input('NoBroker', sql.VarChar, header.NoBroker)
           .input('NoSak', sql.Int, d.NoSak)
@@ -354,8 +361,7 @@ exports.createBrokerCascade = async (payload) => {
         VALUES (@NoBongkarSusun, @NoBroker, @NoSak)
       `;
       for (const d of details) {
-        const rqBso = new sql.Request(tx);
-        await rqBso
+        await new sql.Request(tx)
           .input('NoBongkarSusun', sql.VarChar, NoBongkarSusun)
           .input('NoBroker', sql.VarChar, header.NoBroker)
           .input('NoSak', sql.Int, d.NoSak)
@@ -374,26 +380,13 @@ exports.createBrokerCascade = async (payload) => {
         IdWarehouse: header.IdWarehouse,
         IdStatus: header.IdStatus ?? 1,
         CreateBy: header.CreateBy,
-        DateCreate: nowDateOnly || 'GETDATE()',
+        DateCreate: formatYMD(effectiveDateCreate),
         DateTimeCreate: nowDateTime,
-        Density: header.Density ?? null,
-        Moisture: header.Moisture ?? null,
-        MaxMeltTemp: header.MaxMeltTemp ?? null,
-        MinMeltTemp: header.MinMeltTemp ?? null,
-        MFI: header.MFI ?? null,
-        VisualNote: header.VisualNote ?? null,
-        Density2: header.Density2 ?? null,
-        Density3: header.Density3 ?? null,
-        Moisture2: header.Moisture2 ?? null,
-        Moisture3: header.Moisture3 ?? null,
         Blok: header.Blok ?? null,
-        IdLokasi: header.IdLokasi ?? null
+        IdLokasi: header.IdLokasi ?? null,
       },
-      counts: {
-        detailsInserted: detailCount,
-        outputInserted: outputCount
-      },
-      outputTarget
+      counts: { detailsInserted: detailCount, outputInserted: outputCount },
+      outputTarget,
     };
   } catch (e) {
     try { await tx.rollback(); } catch (_) {}
@@ -413,7 +406,7 @@ exports.updateBrokerCascade = async (payload) => {
   }
 
   const header = payload?.header || {};
-  const details = Array.isArray(payload?.details) ? payload.details : null; // null => don’t touch details
+  const details = Array.isArray(payload?.details) ? payload.details : null;
 
   const NoProduksi = payload?.NoProduksi?.toString().trim() || null;
   const NoBongkarSusun = payload?.NoBongkarSusun?.toString().trim() || null;
@@ -428,17 +421,71 @@ exports.updateBrokerCascade = async (payload) => {
   try {
     await tx.begin(sql.ISOLATION_LEVEL.SERIALIZABLE);
 
-    // 0) Ensure header exists
-    const rqCheck = new sql.Request(tx);
-    const exist = await rqCheck
+    // ===============================
+    // [A] Ambil DateCreate existing + lock header row
+    // ===============================
+    const rqHead = new sql.Request(tx);
+    const headRes = await rqHead
       .input('NoBroker', sql.VarChar, NoBroker)
-      .query(`SELECT 1 FROM dbo.Broker_h WITH (UPDLOCK, HOLDLOCK) WHERE NoBroker = @NoBroker`);
-    if (exist.recordset.length === 0) {
+      .query(`
+        SELECT TOP 1 NoBroker, CONVERT(date, DateCreate) AS DateCreate
+        FROM dbo.Broker_h WITH (UPDLOCK, HOLDLOCK)
+        WHERE NoBroker = @NoBroker
+      `);
+
+    if (headRes.recordset.length === 0) {
       const e = new Error(`NoBroker ${NoBroker} not found`);
       e.statusCode = 404; throw e;
     }
 
-    // 1) Update header (partial/dynamic)
+    const dbDateCreate = headRes.recordset[0].DateCreate; // Date object (date-only from SQL)
+    const oldDate = toDateOnly(dbDateCreate);
+
+    // ===============================
+    // [B] Tutup transaksi check untuk UPDATE
+    // 1) Selalu cek tanggal data lama (oldDate) -> boleh diedit?
+    // 2) Kalau user mengubah DateCreate -> cek juga tanggal baru (newDate)
+    // ===============================
+    await assertNotLocked({
+      date: oldDate,
+      runner: tx,
+      action: `update broker ${NoBroker} (tanggal lama ${formatYMD(oldDate)})`,
+      useLock: true,
+    });
+
+    // Determine apakah user request ubah DateCreate
+    // - header.DateCreate === undefined : tidak ubah
+    // - header.DateCreate === null      : minta set ke "today"
+    // - header.DateCreate adalah string : minta set ke tanggal itu
+    let newDate = null;
+    let willUpdateDateCreate = false;
+
+    if (Object.prototype.hasOwnProperty.call(header, 'DateCreate')) {
+      willUpdateDateCreate = true;
+
+      if (header.DateCreate === null) {
+        // "set to today" (date-only)
+        newDate = resolveEffectiveDateForCreate(null); // today date-only
+      } else {
+        newDate = toDateOnly(header.DateCreate);
+        if (!newDate) {
+          const e = new Error('DateCreate invalid');
+          e.statusCode = 400; throw e;
+        }
+      }
+
+      // cek tanggal baru juga (target)
+      await assertNotLocked({
+        date: newDate,
+        runner: tx,
+        action: `update broker ${NoBroker} (tanggal baru ${formatYMD(newDate)})`,
+        useLock: true,
+      });
+    }
+
+    // ===============================
+    // [C] Update header (partial/dynamic)
+    // ===============================
     const setParts = [];
     const reqHeader = new sql.Request(tx).input('NoBroker', sql.VarChar, NoBroker);
 
@@ -451,13 +498,13 @@ exports.updateBrokerCascade = async (payload) => {
 
     setIf('IdJenisPlastik', 'IdJenisPlastik', sql.Int, header.IdJenisPlastik);
     setIf('IdWarehouse',    'IdWarehouse',    sql.Int, header.IdWarehouse);
-    if (header.DateCreate !== undefined) {
-      if (header.DateCreate === null) {
-        setParts.push('DateCreate = CONVERT(date, GETDATE())');
-      } else {
-        setIf('DateCreate', 'DateCreate', sql.Date, new Date(header.DateCreate));
-      }
+
+    // DateCreate handling (tanpa GETDATE() langsung)
+    if (willUpdateDateCreate) {
+      setParts.push('DateCreate = @DateCreate');
+      reqHeader.input('DateCreate', sql.Date, newDate); // ✅ sudah lolos tutup transaksi
     }
+
     setIf('IdStatus',     'IdStatus',     sql.Int, header.IdStatus);
     setIf('Density',      'Density',      sql.Decimal(10,3), header.Density ?? null);
     setIf('Moisture',     'Moisture',     sql.Decimal(10,3), header.Moisture ?? null);
@@ -472,14 +519,6 @@ exports.updateBrokerCascade = async (payload) => {
     setIf('Blok',         'Blok',         sql.VarChar, header.Blok ?? null);
     setIf('IdLokasi',     'IdLokasi',     sql.VarChar, header.IdLokasi ?? null);
 
-    // Optional audit:
-    // if (payload.UpdateBy) {
-    //   setParts.push('UpdateBy = @UpdateBy');
-    //   setParts.push('DateTimeUpdate = @DateTimeUpdate');
-    //   reqHeader.input('UpdateBy', sql.VarChar, payload.UpdateBy);
-    //   reqHeader.input('DateTimeUpdate', sql.DateTime, new Date());
-    // }
-
     if (setParts.length > 0) {
       const sqlUpdateHeader = `
         UPDATE dbo.Broker_h SET ${setParts.join(', ')}
@@ -488,11 +527,12 @@ exports.updateBrokerCascade = async (payload) => {
       await reqHeader.query(sqlUpdateHeader);
     }
 
-    // 2) Replace details (only if details sent) for rows with DateUsage IS NULL
+    // ===============================
+    // [D] Replace details (only if details sent) for rows with DateUsage IS NULL
+    // ===============================
     let detailAffected = 0;
     if (details) {
-      const rqDel = new sql.Request(tx);
-      await rqDel
+      await new sql.Request(tx)
         .input('NoBroker', sql.VarChar, NoBroker)
         .query(`
           DELETE FROM dbo.Broker_d
@@ -503,37 +543,39 @@ exports.updateBrokerCascade = async (payload) => {
         INSERT INTO dbo.Broker_d (NoBroker, NoSak, Berat, DateUsage, IsPartial, IdLokasi)
         VALUES (@NoBroker, @NoSak, @Berat, NULL, @IsPartial, @IdLokasi)
       `;
+
       for (const d of details) {
-        const rqDet = new sql.Request(tx);
-        await rqDet
+        await new sql.Request(tx)
           .input('NoBroker', sql.VarChar, NoBroker)
           .input('NoSak', sql.Int, d.NoSak)
           .input('Berat', sql.Decimal(18,3), d.Berat ?? 0)
           .input('IsPartial', sql.Int, d.IsPartial ?? 0)
           .input('IdLokasi', sql.VarChar, d.IdLokasi ?? header.IdLokasi ?? null)
           .query(insertDetailSql);
+
         detailAffected++;
       }
     }
 
-    // 3) Conditional outputs
-    // Only touch outputs if client sends either NoProduksi or NoBongkarSusun.
+    // ===============================
+    // [E] Conditional outputs
+    // ===============================
     let outputTarget = null;
     let outputCount = 0;
-    const sentAnyOutputField = (payload.hasOwnProperty('NoProduksi') || payload.hasOwnProperty('NoBongkarSusun'));
+    const sentAnyOutputField =
+      (Object.prototype.hasOwnProperty.call(payload, 'NoProduksi') ||
+       Object.prototype.hasOwnProperty.call(payload, 'NoBongkarSusun'));
 
     if (sentAnyOutputField) {
-      // Clear both first
       await new sql.Request(tx)
         .input('NoBroker', sql.VarChar, NoBroker)
         .query(`DELETE FROM dbo.BrokerProduksiOutput WHERE NoBroker = @NoBroker`);
+
       await new sql.Request(tx)
         .input('NoBroker', sql.VarChar, NoBroker)
         .query(`DELETE FROM dbo.BongkarSusunOutputBroker WHERE NoBroker = @NoBroker`);
 
-      // Re-insert depending on which field was sent
       if (hasProduksi) {
-        // Insert per current details with DateUsage IS NULL (consistent with create)
         const dets = await new sql.Request(tx)
           .input('NoBroker', sql.VarChar, NoBroker)
           .query(`SELECT NoSak FROM dbo.Broker_d WHERE NoBroker = @NoBroker AND DateUsage IS NULL ORDER BY NoSak`);
@@ -542,6 +584,7 @@ exports.updateBrokerCascade = async (payload) => {
           INSERT INTO dbo.BrokerProduksiOutput (NoProduksi, NoBroker, NoSak)
           VALUES (@NoProduksi, @NoBroker, @NoSak)
         `;
+
         for (const row of dets.recordset) {
           await new sql.Request(tx)
             .input('NoProduksi', sql.VarChar, NoProduksi)
@@ -560,6 +603,7 @@ exports.updateBrokerCascade = async (payload) => {
           INSERT INTO dbo.BongkarSusunOutputBroker (NoBongkarSusun, NoBroker, NoSak)
           VALUES (@NoBongkarSusun, @NoBroker, @NoSak)
         `;
+
         for (const row of dets.recordset) {
           await new sql.Request(tx)
             .input('NoBongkarSusun', sql.VarChar, NoBongkarSusun)
@@ -575,21 +619,27 @@ exports.updateBrokerCascade = async (payload) => {
     await tx.commit();
 
     return {
-      header: { NoBroker, ...header },
+      header: {
+        NoBroker,
+        ...header,
+        // optional: return effective DateCreate if changed
+        ...(willUpdateDateCreate ? { DateCreate: formatYMD(newDate) } : {}),
+      },
       counts: {
         detailsAffected: detailAffected,
-        outputInserted: outputCount
+        outputInserted: outputCount,
       },
       outputTarget,
       note: details
         ? 'Details with DateUsage IS NULL were replaced according to payload.'
-        : 'Details were not modified.'
+        : 'Details were not modified.',
     };
   } catch (e) {
     try { await tx.rollback(); } catch (_) {}
     throw e;
   }
 };
+
 
 
 // Delete 1 header + outputs + details (safe)
@@ -608,25 +658,43 @@ exports.deleteBrokerCascade = async (nobroker) => {
   try {
     await tx.begin(sql.ISOLATION_LEVEL.SERIALIZABLE);
 
-    // 0) Ensure header exists + lock
-    const rqCheck = new sql.Request(tx);
-    const exist = await rqCheck
+    // ===============================
+    // [A] Ambil header + DateCreate + lock row
+    // ===============================
+    const rqHead = new sql.Request(tx);
+    const headRes = await rqHead
       .input('NoBroker', sql.VarChar, NoBroker)
       .query(`
-        SELECT 1
+        SELECT TOP 1
+          NoBroker,
+          CONVERT(date, DateCreate) AS DateCreate
         FROM dbo.Broker_h WITH (UPDLOCK, HOLDLOCK)
         WHERE NoBroker = @NoBroker
       `);
 
-    if (exist.recordset.length === 0) {
+    if (headRes.recordset.length === 0) {
       const e = new Error(`NoBroker ${NoBroker} not found`);
       e.statusCode = 404;
       throw e;
     }
 
-    // 1) Block if any detail is already used
-    const rqUsed = new sql.Request(tx);
-    const used = await rqUsed
+    const oldDate = toDateOnly(headRes.recordset[0].DateCreate);
+
+    // ===============================
+    // [B] TUTUP TRANSAKSI CHECK (DELETE)
+    // RULE: trxDate <= lastClosed => reject
+    // ===============================
+    await assertNotLocked({
+      date: oldDate,
+      runner: tx,
+      action: `delete broker ${NoBroker} (tanggal ${formatYMD(oldDate)})`,
+      useLock: true,
+    });
+
+    // ===============================
+    // [C] Block if any detail is already used
+    // ===============================
+    const used = await new sql.Request(tx)
       .input('NoBroker', sql.VarChar, NoBroker)
       .query(`
         SELECT TOP 1 1
@@ -642,7 +710,9 @@ exports.deleteBrokerCascade = async (nobroker) => {
       throw e;
     }
 
-    // 2) Delete outputs first (avoid FK)
+    // ===============================
+    // [D] Delete outputs first (avoid FK)
+    // ===============================
     await new sql.Request(tx)
       .input('NoBroker', sql.VarChar, NoBroker)
       .query(`
@@ -657,7 +727,9 @@ exports.deleteBrokerCascade = async (nobroker) => {
         WHERE NoBroker = @NoBroker
       `);
 
-    // 3) Delete partial INPUT usages that reference BrokerPartial for this NoBroker
+    // ===============================
+    // [E] Delete partial INPUT usages that reference BrokerPartial for this NoBroker
+    // ===============================
     const delBrokerInputPartial = await new sql.Request(tx)
       .input('NoBroker', sql.VarChar, NoBroker)
       .query(`
@@ -678,7 +750,9 @@ exports.deleteBrokerCascade = async (nobroker) => {
         WHERE bp.NoBroker = @NoBroker
       `);
 
-    // 4) Delete partial rows themselves
+    // ===============================
+    // [F] Delete partial rows themselves
+    // ===============================
     const delPartial = await new sql.Request(tx)
       .input('NoBroker', sql.VarChar, NoBroker)
       .query(`
@@ -686,7 +760,9 @@ exports.deleteBrokerCascade = async (nobroker) => {
         WHERE NoBroker = @NoBroker
       `);
 
-    // 5) Delete details (only the ones not used)
+    // ===============================
+    // [G] Delete details (only the ones not used)
+    // ===============================
     const delDet = await new sql.Request(tx)
       .input('NoBroker', sql.VarChar, NoBroker)
       .query(`
@@ -694,7 +770,9 @@ exports.deleteBrokerCascade = async (nobroker) => {
         WHERE NoBroker = @NoBroker AND DateUsage IS NULL
       `);
 
-    // 6) Delete header
+    // ===============================
+    // [H] Delete header
+    // ===============================
     const delHead = await new sql.Request(tx)
       .input('NoBroker', sql.VarChar, NoBroker)
       .query(`
@@ -716,11 +794,10 @@ exports.deleteBrokerCascade = async (nobroker) => {
           mixerInputPartial: delMixerInputPartial.rowsAffected?.[0] ?? 0,
         },
       },
+      period: formatYMD(oldDate),
     };
   } catch (e) {
-    try {
-      await tx.rollback();
-    } catch (_) {}
+    try { await tx.rollback(); } catch (_) {}
 
     // Map FK constraint error
     if (e.number === 547) {
@@ -730,6 +807,7 @@ exports.deleteBrokerCascade = async (nobroker) => {
     throw e;
   }
 };
+
 
 
 

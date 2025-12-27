@@ -11,4 +11,24 @@ router.get(
   mixerProduksiController.getProduksiByDate
 );
 
+// GET /mixer?page=1&pageSize=20&search=M.0000...
+router.get('/mixer', verifyToken, mixerProduksiController.getAllProduksi);
+
+router.post('/mixer', verifyToken, mixerProduksiController.createProduksi);
+
+router.put('/mixer/:noProduksi', verifyToken, mixerProduksiController.updateProduksi);
+
+router.delete('/mixer/:noProduksi', verifyToken, mixerProduksiController.deleteProduksi);
+
+
+router.get('/mixer/:noProduksi/inputs', verifyToken, mixerProduksiController.getInputsByNoProduksi);
+
+router.get('/mixer/validate-label/:labelCode', verifyToken, mixerProduksiController.validateLabel);
+
+router.post('/mixer/:noProduksi/inputs', verifyToken, mixerProduksiController.upsertInputsAndPartials);
+
+router.delete('/mixer/:noProduksi/inputs', verifyToken, mixerProduksiController.deleteInputsAndPartials);
+
+
+
 module.exports = router;

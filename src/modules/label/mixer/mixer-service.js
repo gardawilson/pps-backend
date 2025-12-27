@@ -4,6 +4,14 @@ const {
   getBlokLokasiFromKodeProduksi,
 } = require('../../../core/shared/mesin-location-helper'); 
 
+const {
+  resolveEffectiveDateForCreate,
+  toDateOnly,
+  assertNotLocked,     
+  formatYMD,
+} = require('../../../core/shared/tutup-transaksi-guard');
+
+
 
 // GET all header Mixer dengan pagination & search (mirror of Broker.getAll)
 exports.getAll = async ({ page, limit, search }) => {
@@ -226,7 +234,6 @@ exports.getMixerDetailByNoMixer = async (nomixer) => {
           -- ⬆️ IdLokasi dihapus dari SELECT
         FROM dbo.Mixer_d d
         WHERE d.NoMixer = @NoMixer
-          AND d.DateUsage IS NULL
         ORDER BY d.NoSak;
       `);
   
@@ -286,57 +293,64 @@ exports.getMixerDetailByNoMixer = async (nomixer) => {
    * - "S.******"  → InjectProduksiOutputMixer  ⬅️ (inject production output)
    */
   exports.createMixerCascade = async (payload) => {
-    const pool = await poolPromise;
-    const tx = new sql.Transaction(pool);
-  
-    const header = payload?.header || {};
-    const details = Array.isArray(payload?.details) ? payload.details : [];
-  
-    const badReq = (msg) => {
-      const e = new Error(msg);
-      e.statusCode = 400;
-      return e;
-    };
-  
-    // ---- basic validation
-    if (!header.IdMixer) throw badReq('IdMixer is required');
-    if (!header.CreateBy) throw badReq('CreateBy is required');
-    if (!Array.isArray(details) || details.length === 0) {
-      throw badReq('Details must contain at least 1 item');
-    }
-  
-    // ---- outputCode → NoProduksi / NoBongkarSusun / NoInjectProduksi
-    const rawOutputCode = payload?.outputCode?.toString().trim() || '';
-  
-    let NoProduksi = null;        // untuk MixerProduksiOutput
-    let NoBongkarSusun = null;    // untuk BongkarSusunOutputMixer
-    let NoInjectProduksi = null;  // untuk InjectProduksiOutputMixer
-    let outputKind = null;        // 'PRODUKSI' | 'BONGKAR' | 'INJECT' | null
-  
-    if (rawOutputCode) {
-      const upper = rawOutputCode.toUpperCase();
-  
-      if (upper.startsWith('BG.')) {
-        // BG.* → BongkarSusunOutputMixer
-        NoBongkarSusun = rawOutputCode;
-        outputKind = 'BONGKAR';
-      } else if (upper.startsWith('I.')) {
-        // I.* → MixerProduksiOutput
-        NoProduksi = rawOutputCode;
-        outputKind = 'PRODUKSI';
-      } else if (upper.startsWith('S.')) {
-        // S.* → InjectProduksiOutputMixer (inject production output)
-        NoInjectProduksi = rawOutputCode;
-        outputKind = 'INJECT';
-      } else {
-        throw badReq('outputCode must start with "BG.", "I." or "S."');
-      }
-    }
-  
-    try {
-      await tx.begin(sql.ISOLATION_LEVEL.SERIALIZABLE);
+  const pool = await poolPromise;
+  const tx = new sql.Transaction(pool);
 
-      
+  const header = payload?.header || {};
+  const details = Array.isArray(payload?.details) ? payload.details : [];
+
+  const badReq = (msg) => {
+    const e = new Error(msg);
+    e.statusCode = 400;
+    return e;
+  };
+
+  // ---- basic validation
+  if (!header.IdMixer) throw badReq('IdMixer is required');
+  if (!header.CreateBy) throw badReq('CreateBy is required');
+  if (!Array.isArray(details) || details.length === 0) {
+    throw badReq('Details must contain at least 1 item');
+  }
+
+  // ---- outputCode → NoProduksi / NoBongkarSusun / NoInjectProduksi
+  const rawOutputCode = payload?.outputCode?.toString().trim() || '';
+
+  let NoProduksi = null;        // MixerProduksiOutput
+  let NoBongkarSusun = null;    // BongkarSusunOutputMixer
+  let NoInjectProduksi = null;  // InjectProduksiOutputMixer
+  let outputKind = null;        // 'PRODUKSI' | 'BONGKAR' | 'INJECT' | null
+
+  if (rawOutputCode) {
+    const upper = rawOutputCode.toUpperCase();
+
+    if (upper.startsWith('BG.')) {
+      NoBongkarSusun = rawOutputCode;
+      outputKind = 'BONGKAR';
+    } else if (upper.startsWith('I.')) {
+      NoProduksi = rawOutputCode;
+      outputKind = 'PRODUKSI';
+    } else if (upper.startsWith('S.')) {
+      NoInjectProduksi = rawOutputCode;
+      outputKind = 'INJECT';
+    } else {
+      throw badReq('outputCode must start with "BG.", "I." or "S."');
+    }
+  }
+
+  try {
+    await tx.begin(sql.ISOLATION_LEVEL.SERIALIZABLE);
+
+    // ===============================
+    // [A] TUTUP TRANSAKSI CHECK (CREATE) - UTC
+    // ===============================
+    const nowDateOnly = resolveEffectiveDateForCreate(header.DateCreate); // ✅ UTC date-only
+    await assertNotLocked({
+      date: nowDateOnly,
+      runner: tx,
+      action: 'create mixer',
+      useLock: true,
+    });
+
     // 0) Auto-isi Blok & IdLokasi dari kode produksi / bongkar susun (jika header belum isi)
     if (!header.Blok || !header.IdLokasi) {
       if (rawOutputCode) {
@@ -349,182 +363,167 @@ exports.getMixerDetailByNoMixer = async (nomixer) => {
           if (!header.Blok) header.Blok = lokasi.Blok;
           if (!header.IdLokasi) header.IdLokasi = lokasi.IdLokasi;
         }
-      } 
-    }
-  
-      // 1) Generate NoMixer
-      const generatedNo = await generateNextNoMixer(tx, { prefix: 'H.', width: 10 });
-  
-      // Double-check uniqueness (very defensive, like your broker code)
-      const rqCheck = new sql.Request(tx);
-      const exist = await rqCheck
-        .input('NoMixer', sql.VarChar, generatedNo)
-        .query(`
-          SELECT 1 FROM dbo.Mixer_h WITH (UPDLOCK, HOLDLOCK)
-          WHERE NoMixer = @NoMixer
-        `);
-  
-      header.NoMixer = (exist.recordset.length > 0)
-        ? await generateNextNoMixer(tx, { prefix: 'H.', width: 10 })
-        : generatedNo;
-  
-      // 2) Insert Mixer_h (header)
-      const nowDateOnly = header.DateCreate || null; // if null → GETDATE()
-      const nowDateTime = new Date();                // DateTimeCreate
-  
-      const insertHeaderSql = `
-          INSERT INTO dbo.Mixer_h (
-            NoMixer, IdMixer, DateCreate, IdStatus, CreateBy, DateTimeCreate,
-            Moisture, MaxMeltTemp, MinMeltTemp, MFI,
-            Moisture2, Moisture3,
-            Blok, IdLokasi
-          ) VALUES (
-            @NoMixer, @IdMixer,
-            ${nowDateOnly ? '@DateCreate' : 'CONVERT(date, GETDATE())'},
-            @IdStatus, @CreateBy, @DateTimeCreate,
-            @Moisture, @MaxMeltTemp, @MinMeltTemp, @MFI,
-            @Moisture2, @Moisture3,
-            @Blok, @IdLokasi
-          )
-        `;
-  
-      const rqHeader = new sql.Request(tx);
-      rqHeader
-        .input('NoMixer', sql.VarChar, header.NoMixer)
-        .input('IdMixer', sql.Int, header.IdMixer)
-        .input('IdStatus', sql.Int, header.IdStatus ?? 1) // default PASS=1
-        .input('CreateBy', sql.VarChar, header.CreateBy)
-        .input('DateTimeCreate', sql.DateTime, nowDateTime)
-        .input('Moisture', sql.Decimal(10, 3), header.Moisture ?? null)
-        .input('MaxMeltTemp', sql.Decimal(10, 3), header.MaxMeltTemp ?? null)
-        .input('MinMeltTemp', sql.Decimal(10, 3), header.MinMeltTemp ?? null)
-        .input('MFI', sql.Decimal(10, 3), header.MFI ?? null)
-        .input('Moisture2', sql.Decimal(10, 3), header.Moisture2 ?? null)
-        .input('Moisture3', sql.Decimal(10, 3), header.Moisture3 ?? null)
-        .input('Blok', sql.VarChar, header.Blok ?? null)
-        .input(
-          'IdLokasi',
-          sql.Int,
-          header.IdLokasi != null ? Number(header.IdLokasi) : null
-        );
-  
-      if (nowDateOnly) {
-        rqHeader.input('DateCreate', sql.Date, new Date(nowDateOnly));
       }
-  
-      await rqHeader.query(insertHeaderSql);
-  
-      // 3) Insert Mixer_d (details)
-      const insertDetailSql = `
-        INSERT INTO dbo.Mixer_d (
-          NoMixer, NoSak, Berat, DateUsage, IsPartial
-        ) VALUES (
-          @NoMixer, @NoSak, @Berat, NULL, 0
-        )
+    }
+
+    // 1) Generate NoMixer
+    const generatedNo = await generateNextNoMixer(tx, { prefix: 'H.', width: 10 });
+
+    // Double-check uniqueness
+    const exist = await new sql.Request(tx)
+      .input('NoMixer', sql.VarChar, generatedNo)
+      .query(`
+        SELECT 1 FROM dbo.Mixer_h WITH (UPDLOCK, HOLDLOCK)
+        WHERE NoMixer = @NoMixer
+      `);
+
+    header.NoMixer = (exist.recordset.length > 0)
+      ? await generateNextNoMixer(tx, { prefix: 'H.', width: 10 })
+      : generatedNo;
+
+    // 2) Insert Mixer_h (header)
+    const nowDateTime = new Date(); // DateTimeCreate (UTC internally; SQL Server bisa simpan sebagai local tergantung kolom)
+    const insertHeaderSql = `
+      INSERT INTO dbo.Mixer_h (
+        NoMixer, IdMixer, DateCreate, IdStatus, CreateBy, DateTimeCreate,
+        Moisture, MaxMeltTemp, MinMeltTemp, MFI,
+        Moisture2, Moisture3,
+        Blok, IdLokasi
+      ) VALUES (
+        @NoMixer, @IdMixer,
+        @DateCreate,
+        @IdStatus, @CreateBy, @DateTimeCreate,
+        @Moisture, @MaxMeltTemp, @MinMeltTemp, @MFI,
+        @Moisture2, @Moisture3,
+        @Blok, @IdLokasi
+      )
+    `;
+
+    // normalize IdLokasi int
+    let idLokasiVal = null;
+    if (header.IdLokasi !== undefined && header.IdLokasi !== null && String(header.IdLokasi).trim() !== '') {
+      idLokasiVal = Number(header.IdLokasi);
+      if (Number.isNaN(idLokasiVal)) throw badReq('IdLokasi must be a number');
+    }
+
+    const rqHeader = new sql.Request(tx);
+    rqHeader
+      .input('NoMixer', sql.VarChar, header.NoMixer)
+      .input('IdMixer', sql.Int, header.IdMixer)
+      .input('DateCreate', sql.Date, nowDateOnly) // ✅ UTC date-only
+      .input('IdStatus', sql.Int, header.IdStatus ?? 1)
+      .input('CreateBy', sql.VarChar, header.CreateBy)
+      .input('DateTimeCreate', sql.DateTime, nowDateTime)
+      .input('Moisture', sql.Decimal(10, 3), header.Moisture ?? null)
+      .input('MaxMeltTemp', sql.Decimal(10, 3), header.MaxMeltTemp ?? null)
+      .input('MinMeltTemp', sql.Decimal(10, 3), header.MinMeltTemp ?? null)
+      .input('MFI', sql.Decimal(10, 3), header.MFI ?? null)
+      .input('Moisture2', sql.Decimal(10, 3), header.Moisture2 ?? null)
+      .input('Moisture3', sql.Decimal(10, 3), header.Moisture3 ?? null)
+      .input('Blok', sql.VarChar, header.Blok ?? null)
+      .input('IdLokasi', sql.Int, idLokasiVal);
+
+    await rqHeader.query(insertHeaderSql);
+
+    // 3) Insert Mixer_d (details)
+    const insertDetailSql = `
+      INSERT INTO dbo.Mixer_d (
+        NoMixer, NoSak, Berat, DateUsage, IsPartial
+      ) VALUES (
+        @NoMixer, @NoSak, @Berat, NULL, 0
+      )
+    `;
+
+    let detailCount = 0;
+    for (const d of details) {
+      await new sql.Request(tx)
+        .input('NoMixer', sql.VarChar, header.NoMixer)
+        .input('NoSak', sql.Int, d.NoSak)
+        .input('Berat', sql.Decimal(18, 3), d.Berat ?? 0)
+        .query(insertDetailSql);
+      detailCount++;
+    }
+
+    // 4) Optional outputs (based on outputCode)
+    let outputTarget = null;
+    let outputCount = 0;
+
+    if (NoProduksi) {
+      const insertProdSql = `
+        INSERT INTO dbo.MixerProduksiOutput (NoProduksi, NoMixer, NoSak)
+        VALUES (@NoProduksi, @NoMixer, @NoSak)
       `;
-  
-      let detailCount = 0;
       for (const d of details) {
-        const rqDet = new sql.Request(tx);
-  
-        await rqDet
+        await new sql.Request(tx)
+          .input('NoProduksi', sql.VarChar, NoProduksi)
           .input('NoMixer', sql.VarChar, header.NoMixer)
           .input('NoSak', sql.Int, d.NoSak)
-          .input('Berat', sql.Decimal(18, 3), d.Berat ?? 0)
-          .query(insertDetailSql);
-  
-        detailCount++;
+          .query(insertProdSql);
+        outputCount++;
       }
-  
-      // 4) Optional outputs (based on outputCode)
-      let outputTarget = null;
-      let outputCount = 0;
-  
-      if (NoProduksi) {
-        // Insert into MixerProduksiOutput
-        const insertProdSql = `
-          INSERT INTO dbo.MixerProduksiOutput (NoProduksi, NoMixer, NoSak)
-          VALUES (@NoProduksi, @NoMixer, @NoSak)
-        `;
-        for (const d of details) {
-          const rqProd = new sql.Request(tx);
-          await rqProd
-            .input('NoProduksi', sql.VarChar, NoProduksi)
-            .input('NoMixer', sql.VarChar, header.NoMixer)
-            .input('NoSak', sql.Int, d.NoSak)
-            .query(insertProdSql);
-          outputCount++;
-        }
-        outputTarget = 'MixerProduksiOutput';
-      } else if (NoBongkarSusun) {
-        // Insert into BongkarSusunOutputMixer
-        const insertBsoSql = `
-          INSERT INTO dbo.BongkarSusunOutputMixer (NoBongkarSusun, NoMixer, NoSak)
-          VALUES (@NoBongkarSusun, @NoMixer, @NoSak)
-        `;
-        for (const d of details) {
-          const rqBso = new sql.Request(tx);
-          await rqBso
-            .input('NoBongkarSusun', sql.VarChar, NoBongkarSusun)
-            .input('NoMixer', sql.VarChar, header.NoMixer)
-            .input('NoSak', sql.Int, d.NoSak)
-            .query(insertBsoSql);
-          outputCount++;
-        }
-        outputTarget = 'BongkarSusunOutputMixer';
-      } else if (NoInjectProduksi) {
-        // Insert into InjectProduksiOutputMixer  ⬅️ inject production output
-        const insertInjectSql = `
-          INSERT INTO dbo.InjectProduksiOutputMixer (NoProduksi, NoMixer, NoSak)
-          VALUES (@NoProduksi, @NoMixer, @NoSak)
-        `;
-        for (const d of details) {
-          const rqInject = new sql.Request(tx);
-          await rqInject
-            .input('NoProduksi', sql.VarChar, NoInjectProduksi)
-            .input('NoMixer', sql.VarChar, header.NoMixer)
-            .input('NoSak', sql.Int, d.NoSak)
-            .query(insertInjectSql);
-          outputCount++;
-        }
-        outputTarget = 'InjectProduksiOutputMixer';
+      outputTarget = 'MixerProduksiOutput';
+    } else if (NoBongkarSusun) {
+      const insertBsoSql = `
+        INSERT INTO dbo.BongkarSusunOutputMixer (NoBongkarSusun, NoMixer, NoSak)
+        VALUES (@NoBongkarSusun, @NoMixer, @NoSak)
+      `;
+      for (const d of details) {
+        await new sql.Request(tx)
+          .input('NoBongkarSusun', sql.VarChar, NoBongkarSusun)
+          .input('NoMixer', sql.VarChar, header.NoMixer)
+          .input('NoSak', sql.Int, d.NoSak)
+          .query(insertBsoSql);
+        outputCount++;
       }
-  
-      await tx.commit();
-  
-      return {
-        header: {
-          NoMixer: header.NoMixer,
-          IdMixer: header.IdMixer,
-          IdStatus: header.IdStatus ?? 1,
-          CreateBy: header.CreateBy,
-          DateCreate: nowDateOnly || 'GETDATE()',
-          DateTimeCreate: nowDateTime,
-          Moisture: header.Moisture ?? null,
-          MaxMeltTemp: header.MaxMeltTemp ?? null,
-          MinMeltTemp: header.MinMeltTemp ?? null,
-          MFI: header.MFI ?? null,
-          Moisture2: header.Moisture2 ?? null,
-          Moisture3: header.Moisture3 ?? null,
-          Blok: header.Blok ?? null,
-          IdLokasi: header.IdLokasi ?? null,
-        },
-        counts: {
-          detailsInserted: detailCount,
-          outputInserted: outputCount,
-        },
-        outputKind,   // 'PRODUKSI' | 'BONGKAR' | 'INJECT' | null
-        outputTarget, // nama tabel output yang kena insert
-        outputCode: rawOutputCode || null,
-      };
-    } catch (e) {
-      try {
-        await tx.rollback();
-      } catch (_) {}
-      throw e;
+      outputTarget = 'BongkarSusunOutputMixer';
+    } else if (NoInjectProduksi) {
+      const insertInjectSql = `
+        INSERT INTO dbo.InjectProduksiOutputMixer (NoProduksi, NoMixer, NoSak)
+        VALUES (@NoProduksi, @NoMixer, @NoSak)
+      `;
+      for (const d of details) {
+        await new sql.Request(tx)
+          .input('NoProduksi', sql.VarChar, NoInjectProduksi)
+          .input('NoMixer', sql.VarChar, header.NoMixer)
+          .input('NoSak', sql.Int, d.NoSak)
+          .query(insertInjectSql);
+        outputCount++;
+      }
+      outputTarget = 'InjectProduksiOutputMixer';
     }
-  };
-  
+
+    await tx.commit();
+
+    return {
+      header: {
+        NoMixer: header.NoMixer,
+        IdMixer: header.IdMixer,
+        IdStatus: header.IdStatus ?? 1,
+        CreateBy: header.CreateBy,
+        DateCreate: formatYMD(nowDateOnly), // ✅ konsisten UTC string
+        DateTimeCreate: nowDateTime,
+        Moisture: header.Moisture ?? null,
+        MaxMeltTemp: header.MaxMeltTemp ?? null,
+        MinMeltTemp: header.MinMeltTemp ?? null,
+        MFI: header.MFI ?? null,
+        Moisture2: header.Moisture2 ?? null,
+        Moisture3: header.Moisture3 ?? null,
+        Blok: header.Blok ?? null,
+        IdLokasi: header.IdLokasi ?? null,
+      },
+      counts: {
+        detailsInserted: detailCount,
+        outputInserted: outputCount,
+      },
+      outputKind,
+      outputTarget,
+      outputCode: rawOutputCode || null,
+    };
+  } catch (e) {
+    try { await tx.rollback(); } catch (_) {}
+    throw e;
+  }
+};
 
 
 exports.updateMixerCascade = async (payload) => {
@@ -539,24 +538,15 @@ exports.updateMixerCascade = async (payload) => {
   }
 
   const header = payload?.header || {};
-  // details = null → do not touch details
   const details = Array.isArray(payload?.details) ? payload.details : null;
 
-  // ----- outputCode handling (BG.* / I.* / S.*) -----
-  const hasOutputCodeField = Object.prototype.hasOwnProperty.call(
-    payload,
-    'outputCode'
-  );
+  const hasOutputCodeField = Object.prototype.hasOwnProperty.call(payload, 'outputCode');
 
   let rawOutputCode = null;
-
-  // Untuk 3 jenis output:
-  let NoProduksiMixer = null;   // I.*  -> MixerProduksiOutput
-  let NoBongkarSusun = null;    // BG.* -> BongkarSusunOutputMixer
-  let NoProduksiInject = null;  // S.*  -> InjectProduksiOutputMixer
-
-  // Info jenis mapping (opsional, hanya untuk return)
-  let outputKind = null; // 'MIXER_PRODUKSI' | 'BONGKAR' | 'INJECT' | null
+  let NoProduksiMixer = null;
+  let NoBongkarSusun = null;
+  let NoProduksiInject = null;
+  let outputKind = null;
 
   if (hasOutputCodeField) {
     rawOutputCode = payload.outputCode?.toString().trim() || '';
@@ -574,14 +564,11 @@ exports.updateMixerCascade = async (payload) => {
         NoProduksiInject = rawOutputCode;
         outputKind = 'INJECT';
       } else {
-        const e = new Error(
-          'outputCode must start with "BG.", "I." or "S." if provided'
-        );
+        const e = new Error('outputCode must start with "BG.", "I." or "S." if provided');
         e.statusCode = 400;
         throw e;
       }
     } else {
-      // field ada tapi kosong/null -> clear outputs saja
       rawOutputCode = '';
     }
   }
@@ -589,19 +576,36 @@ exports.updateMixerCascade = async (payload) => {
   try {
     await tx.begin(sql.ISOLATION_LEVEL.SERIALIZABLE);
 
-    // 0) Pastikan header ada
-    const rqCheck = new sql.Request(tx);
-    const exist = await rqCheck
+    // ===============================
+    // 0) Pastikan header ada + lock + ambil DateCreate
+    // ===============================
+    const head = await new sql.Request(tx)
       .input('NoMixer', sql.VarChar, NoMixer)
-      .query(
-        `SELECT 1 FROM dbo.Mixer_h WITH (UPDLOCK, HOLDLOCK) WHERE NoMixer = @NoMixer`
-      );
+      .query(`
+        SELECT TOP 1 NoMixer, CONVERT(date, DateCreate) AS DateCreate
+        FROM dbo.Mixer_h WITH (UPDLOCK, HOLDLOCK)
+        WHERE NoMixer = @NoMixer
+      `);
 
-    if (exist.recordset.length === 0) {
+    if (head.recordset.length === 0) {
       const e = new Error(`NoMixer ${NoMixer} not found`);
       e.statusCode = 404;
       throw e;
     }
+
+    const existingDateCreate = head.recordset[0]?.DateCreate
+      ? toDateOnly(head.recordset[0].DateCreate)
+      : null;
+
+    // ===============================
+    // 0b) TUTUP TRANSAKSI CHECK (UPDATE) - selalu cek tanggal existing
+    // ===============================
+    await assertNotLocked({
+      date: existingDateCreate,
+      runner: tx,
+      action: 'update mixer',
+      useLock: true,
+    });
 
     // 1) Dynamic header update
     const setParts = [];
@@ -617,49 +621,49 @@ exports.updateMixerCascade = async (payload) => {
     // IdMixer
     setIf('IdMixer', 'IdMixer', sql.Int, header.IdMixer);
 
-    // DateCreate
+    // ✅ DateCreate (UTC + tutup transaksi) - jika user mengubah tanggal, cek tanggal baru juga
     if (header.DateCreate !== undefined) {
-      if (header.DateCreate === null) {
-        // null means reset to today (like Broker)
-        setParts.push('DateCreate = CONVERT(date, GETDATE())');
+      if (header.DateCreate === null || header.DateCreate === '') {
+        const utcToday = toDateOnly(new Date());
+
+        await assertNotLocked({
+          date: utcToday,
+          runner: tx,
+          action: 'update mixer (DateCreate reset)',
+          useLock: true,
+        });
+
+        setParts.push('DateCreate = @DateCreate');
+        reqHeader.input('DateCreate', sql.Date, utcToday);
       } else {
-        setIf('DateCreate', 'DateCreate', sql.Date, new Date(header.DateCreate));
+        const d = toDateOnly(header.DateCreate);
+        if (!d) {
+          const e = new Error('Invalid DateCreate');
+          e.statusCode = 400;
+          e.meta = { field: 'DateCreate', value: header.DateCreate };
+          throw e;
+        }
+
+        await assertNotLocked({
+          date: d,
+          runner: tx,
+          action: 'update mixer (DateCreate)',
+          useLock: true,
+        });
+
+        setParts.push('DateCreate = @DateCreate');
+        reqHeader.input('DateCreate', sql.Date, d);
       }
     }
 
     // basic numeric fields
     setIf('IdStatus', 'IdStatus', sql.Int, header.IdStatus);
-    setIf(
-      'Moisture',
-      'Moisture',
-      sql.Decimal(10, 3),
-      header.Moisture ?? null
-    );
-    setIf(
-      'MaxMeltTemp',
-      'MaxMeltTemp',
-      sql.Decimal(10, 3),
-      header.MaxMeltTemp ?? null
-    );
-    setIf(
-      'MinMeltTemp',
-      'MinMeltTemp',
-      sql.Decimal(10, 3),
-      header.MinMeltTemp ?? null
-    );
+    setIf('Moisture', 'Moisture', sql.Decimal(10, 3), header.Moisture ?? null);
+    setIf('MaxMeltTemp', 'MaxMeltTemp', sql.Decimal(10, 3), header.MaxMeltTemp ?? null);
+    setIf('MinMeltTemp', 'MinMeltTemp', sql.Decimal(10, 3), header.MinMeltTemp ?? null);
     setIf('MFI', 'MFI', sql.Decimal(10, 3), header.MFI ?? null);
-    setIf(
-      'Moisture2',
-      'Moisture2',
-      sql.Decimal(10, 3),
-      header.Moisture2 ?? null
-    );
-    setIf(
-      'Moisture3',
-      'Moisture3',
-      sql.Decimal(10, 3),
-      header.Moisture3 ?? null
-    );
+    setIf('Moisture2', 'Moisture2', sql.Decimal(10, 3), header.Moisture2 ?? null);
+    setIf('Moisture3', 'Moisture3', sql.Decimal(10, 3), header.Moisture3 ?? null);
     setIf('Blok', 'Blok', sql.VarChar, header.Blok ?? null);
 
     // IdLokasi is INT
@@ -668,30 +672,22 @@ exports.updateMixerCascade = async (payload) => {
       reqHeader.input(
         'IdLokasi',
         sql.Int,
-        header.IdLokasi != null ? Number(header.IdLokasi) : null
+        header.IdLokasi != null && String(header.IdLokasi).trim() !== ''
+          ? Number(header.IdLokasi)
+          : null
       );
     }
 
-    // Optional audit (contoh, kalau mau)
-    // if (payload.UpdateBy) {
-    //   setParts.push('UpdateBy = @UpdateBy');
-    //   setParts.push('DateTimeUpdate = @DateTimeUpdate');
-    //   reqHeader.input('UpdateBy', sql.VarChar, payload.UpdateBy);
-    //   reqHeader.input('DateTimeUpdate', sql.DateTime, new Date());
-    // }
-
     if (setParts.length > 0) {
-      const sqlUpdateHeader = `
+      await reqHeader.query(`
         UPDATE dbo.Mixer_h SET ${setParts.join(', ')}
         WHERE NoMixer = @NoMixer
-      `;
-      await reqHeader.query(sqlUpdateHeader);
+      `);
     }
 
     // 2) Replace details (only if details is provided)
     let detailsAffected = 0;
     if (details) {
-      // delete only rows that are still unused
       await new sql.Request(tx)
         .input('NoMixer', sql.VarChar, NoMixer)
         .query(`
@@ -708,8 +704,7 @@ exports.updateMixerCascade = async (payload) => {
       `;
 
       for (const d of details) {
-        const rqDet = new sql.Request(tx);
-        await rqDet
+        await new sql.Request(tx)
           .input('NoMixer', sql.VarChar, NoMixer)
           .input('NoSak', sql.Int, d.NoSak)
           .input('Berat', sql.Decimal(18, 3), d.Berat ?? 0)
@@ -718,31 +713,24 @@ exports.updateMixerCascade = async (payload) => {
       }
     }
 
-    // 3) Outputs (MixerProduksiOutput / BongkarSusunOutputMixer / InjectProduksiOutputMixer)
+    // 3) Outputs handling (unchanged)
     let outputTarget = null;
     let outputCount = 0;
 
     if (hasOutputCodeField) {
-      // Clear SEMUA mapping output dulu
       await new sql.Request(tx)
         .input('NoMixer', sql.VarChar, NoMixer)
         .query(`DELETE FROM dbo.MixerProduksiOutput WHERE NoMixer = @NoMixer`);
 
       await new sql.Request(tx)
         .input('NoMixer', sql.VarChar, NoMixer)
-        .query(
-          `DELETE FROM dbo.BongkarSusunOutputMixer WHERE NoMixer = @NoMixer`
-        );
+        .query(`DELETE FROM dbo.BongkarSusunOutputMixer WHERE NoMixer = @NoMixer`);
 
       await new sql.Request(tx)
         .input('NoMixer', sql.VarChar, NoMixer)
-        .query(
-          `DELETE FROM dbo.InjectProduksiOutputMixer WHERE NoMixer = @NoMixer`
-        );
+        .query(`DELETE FROM dbo.InjectProduksiOutputMixer WHERE NoMixer = @NoMixer`);
 
-      // Kalau rawOutputCode kosong → hanya clear outputs, selesai
       if (rawOutputCode) {
-        // Ambil details aktif (DateUsage IS NULL)
         const dets = await new sql.Request(tx)
           .input('NoMixer', sql.VarChar, NoMixer)
           .query(`
@@ -753,7 +741,6 @@ exports.updateMixerCascade = async (payload) => {
           `);
 
         if (NoProduksiMixer) {
-          // 3a) Mapping ke MixerProduksiOutput (I.*)
           const insertProdSql = `
             INSERT INTO dbo.MixerProduksiOutput (NoProduksi, NoMixer, NoSak)
             VALUES (@NoProduksi, @NoMixer, @NoSak)
@@ -768,7 +755,6 @@ exports.updateMixerCascade = async (payload) => {
           }
           outputTarget = 'MixerProduksiOutput';
         } else if (NoBongkarSusun) {
-          // 3b) Mapping ke BongkarSusunOutputMixer (BG.*)
           const insertBsoSql = `
             INSERT INTO dbo.BongkarSusunOutputMixer (NoBongkarSusun, NoMixer, NoSak)
             VALUES (@NoBongkarSusun, @NoMixer, @NoSak)
@@ -783,7 +769,6 @@ exports.updateMixerCascade = async (payload) => {
           }
           outputTarget = 'BongkarSusunOutputMixer';
         } else if (NoProduksiInject) {
-          // 3c) Mapping ke InjectProduksiOutputMixer (S.*)
           const insertInjectSql = `
             INSERT INTO dbo.InjectProduksiOutputMixer (NoProduksi, NoMixer, NoSak)
             VALUES (@NoProduksi, @NoMixer, @NoSak)
@@ -804,14 +789,8 @@ exports.updateMixerCascade = async (payload) => {
     await tx.commit();
 
     return {
-      header: {
-        NoMixer,
-        ...header,
-      },
-      counts: {
-        detailsAffected,
-        outputInserted: outputCount,
-      },
+      header: { NoMixer, ...header },
+      counts: { detailsAffected, outputInserted: outputCount },
       outputTarget,
       outputKind,
       outputCode: hasOutputCodeField ? rawOutputCode : undefined,
@@ -820,12 +799,11 @@ exports.updateMixerCascade = async (payload) => {
         : 'Details were not modified.',
     };
   } catch (e) {
-    try {
-      await tx.rollback();
-    } catch (_) {}
+    try { await tx.rollback(); } catch (_) {}
     throw e;
   }
 };
+
 
   
 
@@ -844,25 +822,41 @@ exports.deleteMixerCascade = async (nomixer) => {
   try {
     await tx.begin(sql.ISOLATION_LEVEL.SERIALIZABLE);
 
-    // 0) Ensure header exists + lock it
-    const rqCheck = new sql.Request(tx);
-    const exist = await rqCheck
+    // ===============================
+    // 0) Ensure header exists + lock it + ambil DateCreate
+    // ===============================
+    const head = await new sql.Request(tx)
       .input('NoMixer', sql.VarChar, NoMixer)
       .query(`
-        SELECT 1
+        SELECT TOP 1 NoMixer, CONVERT(date, DateCreate) AS DateCreate
         FROM dbo.Mixer_h WITH (UPDLOCK, HOLDLOCK)
         WHERE NoMixer = @NoMixer
       `);
 
-    if (exist.recordset.length === 0) {
+    if (head.recordset.length === 0) {
       const e = new Error(`NoMixer ${NoMixer} not found`);
       e.statusCode = 404;
       throw e;
     }
 
+    const trxDate = head.recordset[0]?.DateCreate
+      ? toDateOnly(head.recordset[0].DateCreate)
+      : null;
+
+    // ===============================
+    // 0b) TUTUP TRANSAKSI CHECK (DELETE)
+    // ===============================
+    await assertNotLocked({
+      date: trxDate,
+      runner: tx,
+      action: 'delete mixer',
+      useLock: true,
+    });
+
+    // ===============================
     // 1) Block if any detail is already used (DateUsage IS NOT NULL)
-    const rqUsed = new sql.Request(tx);
-    const used = await rqUsed
+    // ===============================
+    const used = await new sql.Request(tx)
       .input('NoMixer', sql.VarChar, NoMixer)
       .query(`
         SELECT TOP 1 1
@@ -871,40 +865,29 @@ exports.deleteMixerCascade = async (nomixer) => {
       `);
 
     if (used.recordset.length > 0) {
-      const e = new Error(
-        'Cannot delete: some details are already used (DateUsage IS NOT NULL).'
-      );
+      const e = new Error('Cannot delete: some details are already used (DateUsage IS NOT NULL).');
       e.statusCode = 409;
       throw e;
     }
 
+    // ===============================
     // 2) Delete outputs first (avoid FK problems)
-
-    // 2a) MixerProduksiOutput
+    // ===============================
     const delMixerProduksiOutput = await new sql.Request(tx)
       .input('NoMixer', sql.VarChar, NoMixer)
-      .query(`
-        DELETE FROM dbo.MixerProduksiOutput
-        WHERE NoMixer = @NoMixer
-      `);
+      .query(`DELETE FROM dbo.MixerProduksiOutput WHERE NoMixer = @NoMixer`);
 
-    // 2b) BongkarSusunOutputMixer
     const delBongkarSusunOutput = await new sql.Request(tx)
       .input('NoMixer', sql.VarChar, NoMixer)
-      .query(`
-        DELETE FROM dbo.BongkarSusunOutputMixer
-        WHERE NoMixer = @NoMixer
-      `);
+      .query(`DELETE FROM dbo.BongkarSusunOutputMixer WHERE NoMixer = @NoMixer`);
 
-    // 2c) InjectProduksiOutputMixer  ⬅️ TAMBAHAN BARU
     const delInjectOutput = await new sql.Request(tx)
       .input('NoMixer', sql.VarChar, NoMixer)
-      .query(`
-        DELETE FROM dbo.InjectProduksiOutputMixer
-        WHERE NoMixer = @NoMixer
-      `);
+      .query(`DELETE FROM dbo.InjectProduksiOutputMixer WHERE NoMixer = @NoMixer`);
 
+    // ===============================
     // 3) Delete partial INPUT usages that reference MixerPartial for this NoMixer
+    // ===============================
     const delBrokerPartialInput = await new sql.Request(tx)
       .input('NoMixer', sql.VarChar, NoMixer)
       .query(`
@@ -935,15 +918,16 @@ exports.deleteMixerCascade = async (nomixer) => {
         WHERE mp.NoMixer = @NoMixer
       `);
 
+    // ===============================
     // 4) Delete partial rows themselves
+    // ===============================
     const delPartial = await new sql.Request(tx)
       .input('NoMixer', sql.VarChar, NoMixer)
-      .query(`
-        DELETE FROM dbo.MixerPartial
-        WHERE NoMixer = @NoMixer
-      `);
+      .query(`DELETE FROM dbo.MixerPartial WHERE NoMixer = @NoMixer`);
 
+    // ===============================
     // 5) Delete details (only those not used)
+    // ===============================
     const delDet = await new sql.Request(tx)
       .input('NoMixer', sql.VarChar, NoMixer)
       .query(`
@@ -951,13 +935,20 @@ exports.deleteMixerCascade = async (nomixer) => {
         WHERE NoMixer = @NoMixer AND DateUsage IS NULL
       `);
 
+    // ===============================
     // 6) Delete header
+    // ===============================
     const delHead = await new sql.Request(tx)
       .input('NoMixer', sql.VarChar, NoMixer)
-      .query(`
-        DELETE FROM dbo.Mixer_h
-        WHERE NoMixer = @NoMixer
-      `);
+      .query(`DELETE FROM dbo.Mixer_h WHERE NoMixer = @NoMixer`);
+
+    // Safety: kalau 0 berarti ada race/terhapus di tengah (harusnya tidak karena HOLDLOCK)
+    if ((delHead.rowsAffected?.[0] ?? 0) === 0) {
+      await tx.rollback();
+      const e = new Error(`NoMixer ${NoMixer} not found`);
+      e.statusCode = 404;
+      throw e;
+    }
 
     await tx.commit();
 
@@ -967,12 +958,9 @@ exports.deleteMixerCascade = async (nomixer) => {
         header: delHead.rowsAffected?.[0] ?? 0,
         details: delDet.rowsAffected?.[0] ?? 0,
         outputs: {
-          mixerProduksiOutput:
-            delMixerProduksiOutput.rowsAffected?.[0] ?? 0,
-          bongkarSusunOutputMixer:
-            delBongkarSusunOutput.rowsAffected?.[0] ?? 0,
-          injectProduksiOutputMixer:
-            delInjectOutput.rowsAffected?.[0] ?? 0,
+          mixerProduksiOutput: delMixerProduksiOutput.rowsAffected?.[0] ?? 0,
+          bongkarSusunOutputMixer: delBongkarSusunOutput.rowsAffected?.[0] ?? 0,
+          injectProduksiOutputMixer: delInjectOutput.rowsAffected?.[0] ?? 0,
         },
         partials: {
           mixerPartial: delPartial.rowsAffected?.[0] ?? 0,
@@ -983,11 +971,9 @@ exports.deleteMixerCascade = async (nomixer) => {
       },
     };
   } catch (e) {
-    try {
-      await tx.rollback();
-    } catch (_) {}
+    try { await tx.rollback(); } catch (_) {}
 
-    // Map FK constraint error, same pattern as Broker
+    // FK constraint
     if (e.number === 547) {
       e.statusCode = 409;
       e.message = e.message || 'Delete failed due to foreign key constraint.';

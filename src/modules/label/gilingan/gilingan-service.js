@@ -4,6 +4,13 @@ const {
   getBlokLokasiFromKodeProduksi,
 } = require('../../../core/shared/mesin-location-helper'); 
 
+const {
+  resolveEffectiveDateForCreate,
+  toDateOnly,
+  assertNotLocked,     
+  formatYMD,
+} = require('../../../core/shared/tutup-transaksi-guard');
+
 
 exports.getAll = async ({ page, limit, search }) => {
   const pool = await poolPromise;
@@ -192,51 +199,50 @@ exports.createGilingan = async (payload) => {
     return e;
   };
 
-  if (!header.IdGilingan) {
-    throw badReq('IdGilingan is required');
-  }
+  if (!header.IdGilingan) throw badReq('IdGilingan is required');
 
-  // ❗ NOW REQUIRED: must link to either production or bongkar
-  if (!outputCode) {
-    throw badReq('outputCode is required (must be W. or BG. prefix)');
-  }
+  // must link to either production or bongkar
+  if (!outputCode) throw badReq('outputCode is required (must be W. or BG. prefix)');
 
   let outputType = null; // 'PRODUKSI' | 'BONGKAR'
-  if (outputCode.startsWith('W.')) {
-    outputType = 'PRODUKSI'; // GilinganProduksiOutput
-  } else if (outputCode.startsWith('BG.')) {
-    outputType = 'BONGKAR';  // BongkarSusunOutputGilingan
-  } else {
-    throw badReq('outputCode prefix not recognized (use W. or BG.)');
-  }
+  if (outputCode.startsWith('W.')) outputType = 'PRODUKSI';
+  else if (outputCode.startsWith('BG.')) outputType = 'BONGKAR';
+  else throw badReq('outputCode prefix not recognized (use W. or BG.)');
 
   try {
     await tx.begin(sql.ISOLATION_LEVEL.SERIALIZABLE);
 
-        // 0) Auto-isi Blok & IdLokasi dari kode produksi / bongkar susun (jika header belum isi)
-        if (!header.Blok || !header.IdLokasi) {
-          if (outputCode) {
-            const lokasi = await getBlokLokasiFromKodeProduksi({
-              kode: outputCode,
-              runner: tx,
-            });
-    
-            if (lokasi) {
-              if (!header.Blok) header.Blok = lokasi.Blok;
-              if (!header.IdLokasi) header.IdLokasi = lokasi.IdLokasi;
-            }
-          } 
-        }
-
-    // 1) Generate NoGilingan
-    const generatedNo = await generateNextNoGilingan(tx, {
-      prefix: 'V.',
-      width: 10,
+    // ===============================
+    // [A] TUTUP TRANSAKSI CHECK (CREATE) - UTC
+    // ===============================
+    const nowDateOnly = resolveEffectiveDateForCreate(header.DateCreate); // ✅ UTC date-only
+    await assertNotLocked({
+      date: nowDateOnly,
+      runner: tx,
+      action: 'create gilingan',
+      useLock: true,
     });
 
+    // 0) Auto-isi Blok & IdLokasi dari kode produksi / bongkar susun (jika header belum isi)
+    if (!header.Blok || !header.IdLokasi) {
+      if (outputCode) {
+        const lokasi = await getBlokLokasiFromKodeProduksi({
+          kode: outputCode,
+          runner: tx,
+        });
+
+        if (lokasi) {
+          if (!header.Blok) header.Blok = lokasi.Blok;
+          if (!header.IdLokasi) header.IdLokasi = lokasi.IdLokasi;
+        }
+      }
+    }
+
+    // 1) Generate NoGilingan
+    const generatedNo = await generateNextNoGilingan(tx, { prefix: 'V.', width: 10 });
+
     // Double-check uniqueness (very rare)
-    const rqCheck = new sql.Request(tx);
-    const exist = await rqCheck
+    const exist = await new sql.Request(tx)
       .input('NoGilingan', sql.VarChar, generatedNo)
       .query(`
         SELECT 1
@@ -244,69 +250,68 @@ exports.createGilingan = async (payload) => {
         WHERE NoGilingan = @NoGilingan
       `);
 
-    const noGilingan =
-      exist.recordset.length > 0
-        ? await generateNextNoGilingan(tx, { prefix: 'V.', width: 10 })
-        : generatedNo;
+    const noGilingan = (exist.recordset.length > 0)
+      ? await generateNextNoGilingan(tx, { prefix: 'V.', width: 10 })
+      : generatedNo;
 
-   // 2) Insert header into dbo.Gilingan
-const nowDateOnly = header.DateCreate || null; // if null -> GETDATE() (date)
-const insertHeaderSql = `
-  INSERT INTO [dbo].[Gilingan] (
-    NoGilingan,
-    DateCreate,
-    IdGilingan,
-    DateUsage,
-    Berat,
-    IsPartial,
-    IdStatus,
-    Blok,
-    IdLokasi
-  )
-  VALUES (
-    @NoGilingan,
-    ${nowDateOnly ? '@DateCreate' : 'CONVERT(date, GETDATE())'},
-    @IdGilingan,
-    NULL,
-    @Berat,
-    @IsPartial,
-    @IdStatus,
-    @Blok,
-    @IdLokasi
-  );
-`;
+    // 2) Insert header into dbo.Gilingan
+    // ✅ selalu pakai @DateCreate (UTC) agar tidak shift -1 hari
+    const insertHeaderSql = `
+      INSERT INTO [dbo].[Gilingan] (
+        NoGilingan,
+        DateCreate,
+        IdGilingan,
+        DateUsage,
+        Berat,
+        IsPartial,
+        IdStatus,
+        Blok,
+        IdLokasi
+      )
+      VALUES (
+        @NoGilingan,
+        @DateCreate,
+        @IdGilingan,
+        NULL,
+        @Berat,
+        @IsPartial,
+        @IdStatus,
+        @Blok,
+        @IdLokasi
+      );
+    `;
 
-const rqHeader = new sql.Request(tx);
+    // normalize IdLokasi safely
+    const rawIdLokasi = header.IdLokasi;
+    let idLokasiVal = null;
+    if (rawIdLokasi !== undefined && rawIdLokasi !== null) {
+      const s = String(rawIdLokasi).trim();
+      idLokasiVal = s.length ? Number(s) : null;
+      if (s.length && Number.isNaN(idLokasiVal)) {
+        const e = new Error('IdLokasi must be a number');
+        e.statusCode = 400;
+        e.meta = { field: 'IdLokasi', value: rawIdLokasi };
+        throw e;
+      }
+    }
 
-// normalize IdLokasi safely
-const rawIdLokasi = header.IdLokasi;
-let idLokasiVal = null;
-if (rawIdLokasi !== undefined && rawIdLokasi !== null) {
-  idLokasiVal = String(rawIdLokasi).trim();
-  if (idLokasiVal.length === 0) {
-    idLokasiVal = null;
-  }
-}
+    const rqHeader = new sql.Request(tx);
+    rqHeader
+      .input('NoGilingan', sql.VarChar, noGilingan)
+      .input('DateCreate', sql.Date, nowDateOnly) // ✅ UTC date-only
+      .input('IdGilingan', sql.Int, header.IdGilingan)
+      .input('Berat', sql.Decimal(18, 3), header.Berat ?? null)
+      .input('IsPartial', sql.Bit, header.IsPartial ?? 0)
+      .input('IdStatus', sql.Int, header.IdStatus ?? 1)
+      .input('Blok', sql.VarChar, header.Blok ?? null)
+      .input('IdLokasi', sql.Int, idLokasiVal);
 
-rqHeader
-  .input('NoGilingan', sql.VarChar, noGilingan)
-  .input('IdGilingan', sql.Int, header.IdGilingan)
-  .input('Berat', sql.Decimal(18, 3), header.Berat ?? null)
-  .input('IsPartial', sql.Bit, header.IsPartial ?? 0)
-  .input('IdStatus', sql.Int, header.IdStatus ?? 1)
-  .input('Blok', sql.VarChar, header.Blok ?? null)
-  .input('IdLokasi', sql.Int, idLokasiVal);
-
-if (nowDateOnly) {
-  rqHeader.input('DateCreate', sql.Date, new Date(nowDateOnly));
-}
-
-await rqHeader.query(insertHeaderSql);
+    await rqHeader.query(insertHeaderSql);
 
     // 3) REQUIRED mapping based on outputType
     let mappingTable = null;
+
     if (outputType === 'PRODUKSI') {
-      // W. → GilinganProduksiOutput (NoProduksi, NoGilingan, Berat)
       const q = `
         INSERT INTO [dbo].[GilinganProduksiOutput] (NoProduksi, NoGilingan, Berat)
         VALUES (@OutputCode, @NoGilingan, @Berat);
@@ -318,7 +323,6 @@ await rqHeader.query(insertHeaderSql);
         .query(q);
       mappingTable = 'GilinganProduksiOutput';
     } else if (outputType === 'BONGKAR') {
-      // BG. → BongkarSusunOutputGilingan (NoBongkarSusun, NoGilingan)
       const q = `
         INSERT INTO [dbo].[BongkarSusunOutputGilingan] (NoBongkarSusun, NoGilingan)
         VALUES (@OutputCode, @NoGilingan);
@@ -335,7 +339,7 @@ await rqHeader.query(insertHeaderSql);
     return {
       header: {
         NoGilingan: noGilingan,
-        DateCreate: nowDateOnly || 'GETDATE()',
+        DateCreate: formatYMD(nowDateOnly), // ✅ konsisten UTC string
         IdGilingan: header.IdGilingan,
         Berat: header.Berat ?? null,
         IsPartial: header.IsPartial ?? 0,
@@ -345,14 +349,12 @@ await rqHeader.query(insertHeaderSql);
       },
       output: {
         code: outputCode,
-        type: outputType,   // 'PRODUKSI' / 'BONGKAR'
-        mappingTable,       // table used
+        type: outputType,
+        mappingTable,
       },
     };
   } catch (e) {
-    try {
-      await tx.rollback();
-    } catch (_) {}
+    try { await tx.rollback(); } catch (_) {}
     throw e;
   }
 };
@@ -365,14 +367,14 @@ exports.updateGilingan = async (noGilingan, payload = {}) => {
 
   // Whitelist fields allowed to update
   const fields = [
-    { key: 'DateCreate', type: sql.Date },
+    { key: 'DateCreate', type: sql.Date, isDateOnly: true },
     { key: 'IdGilingan', type: sql.Int },
-    { key: 'DateUsage', type: sql.Date },
-    { key: 'Berat', type: sql.Decimal(18, 3) },
-    { key: 'IsPartial', type: sql.Bit },
-    { key: 'IdStatus', type: sql.Int },
-    { key: 'Blok', type: sql.VarChar },
-    { key: 'IdLokasi', type: sql.VarChar }, // ✅ now VarChar, not Int
+    { key: 'DateUsage',  type: sql.Date, isDateOnly: true },
+    { key: 'Berat',      type: sql.Decimal(18, 3) },
+    { key: 'IsPartial',  type: sql.Bit },
+    { key: 'IdStatus',   type: sql.Int },
+    { key: 'Blok',       type: sql.VarChar },
+    { key: 'IdLokasi',   type: sql.VarChar }, // ✅ VarChar sesuai kode kamu
   ];
 
   const toUpdate = fields.filter((f) => payload[f.key] !== undefined);
@@ -385,20 +387,54 @@ exports.updateGilingan = async (noGilingan, payload = {}) => {
   try {
     await tx.begin(sql.ISOLATION_LEVEL.READ_COMMITTED);
 
-    // Ensure row exists and lock it
-    const exists = await new sql.Request(tx)
+    // Lock row + ambil DateCreate existing (optional, tapi bagus untuk audit/rule lain)
+    const head = await new sql.Request(tx)
       .input('NoGilingan', sql.VarChar, noGilingan)
       .query(`
-        SELECT 1
+        SELECT TOP 1 NoGilingan, CONVERT(date, DateCreate) AS DateCreate
         FROM [dbo].[Gilingan] WITH (UPDLOCK, HOLDLOCK)
         WHERE NoGilingan = @NoGilingan
       `);
 
-    if (exists.recordset.length === 0) {
+    if (head.recordset.length === 0) {
       await tx.rollback();
       const e = new Error(`Gilingan not found: ${noGilingan}`);
       e.statusCode = 404;
       throw e;
+    }
+
+    // ===============================
+    // [A] TUTUP TRANSAKSI CHECK (UPDATE)
+    // ===============================
+    if (payload.DateCreate !== undefined) {
+      const d = (payload.DateCreate === null || payload.DateCreate === '')
+        ? null
+        : toDateOnly(payload.DateCreate);
+
+      if (d) {
+        await assertNotLocked({
+          date: d,
+          runner: tx,
+          action: 'update gilingan (DateCreate)',
+          useLock: true,
+        });
+      }
+      // kalau kamu tidak mau DateCreate jadi null, bisa throw di sini.
+    }
+
+    if (payload.DateUsage !== undefined) {
+      const d = (payload.DateUsage === null || payload.DateUsage === '')
+        ? null
+        : toDateOnly(payload.DateUsage);
+
+      if (d) {
+        await assertNotLocked({
+          date: d,
+          runner: tx,
+          action: 'update gilingan (DateUsage)',
+          useLock: true,
+        });
+      }
     }
 
     // Build SET clause and bind params
@@ -412,30 +448,53 @@ exports.updateGilingan = async (noGilingan, payload = {}) => {
 
       const val = payload[f.key];
 
-      if (f.type === sql.Date) {
-        // allow null to clear date
-        if (val === null) {
+      // DATE fields -> UTC date-only (anti shift -1)
+      if (f.isDateOnly) {
+        if (val === null || val === '') {
           rq.input(param, f.type, null);
         } else {
-          rq.input(param, f.type, new Date(val));
+          const d = toDateOnly(val);
+          if (!d) {
+            const e = new Error(`Invalid date for ${f.key}`);
+            e.statusCode = 400;
+            e.meta = { field: f.key, value: val };
+            throw e;
+          }
+          rq.input(param, f.type, d); // ✅ UTC date-only
         }
-      } else if (f.type.declaration?.startsWith('decimal')) {
-        rq.input(
-          param,
-          f.type,
-          val === null ? null : Number(val)
-        );
-      } else if (f.key === 'IdLokasi') {
-        // ✅ normalize IdLokasi as VarChar
+        continue;
+      }
+
+      // DECIMAL
+      if (f.type?.declaration?.startsWith('decimal')) {
+        if (val === null || val === '') {
+          rq.input(param, f.type, null);
+        } else {
+          const num = Number(val);
+          if (Number.isNaN(num)) {
+            const e = new Error(`Invalid number for ${f.key}`);
+            e.statusCode = 400;
+            e.meta = { field: f.key, value: val };
+            throw e;
+          }
+          rq.input(param, f.type, num);
+        }
+        continue;
+      }
+
+      // IdLokasi as VarChar normalization
+      if (f.key === 'IdLokasi') {
         let idLokasiVal = null;
         if (val !== undefined && val !== null) {
           const s = String(val).trim();
           idLokasiVal = s.length === 0 ? null : s;
         }
         rq.input(param, f.type, idLokasiVal);
-      } else {
-        rq.input(param, f.type, val);
+        continue;
       }
+
+      // default
+      rq.input(param, f.type, val);
     }
 
     await rq.query(`
@@ -445,97 +504,104 @@ exports.updateGilingan = async (noGilingan, payload = {}) => {
     `);
 
     await tx.commit();
-
     return { updated: true, updatedFields: toUpdate.map((f) => f.key) };
   } catch (err) {
-    try {
-      await tx.rollback();
-    } catch (_) {}
+    try { await tx.rollback(); } catch (_) {}
     throw err;
   }
 };
 
 
+
   exports.deleteGilinganCascade = async (noGilingan) => {
-    const pool = await poolPromise;
-    const tx = new sql.Transaction(pool);
-  
-    try {
-      await tx.begin(sql.ISOLATION_LEVEL.READ_COMMITTED);
-  
-      // Step 0: ensure header exists + lock it
-      const exist = await new sql.Request(tx)
-        .input('NoGilingan', sql.VarChar, noGilingan)
-        .query(`
-          SELECT 1
-          FROM [dbo].[Gilingan] WITH (UPDLOCK, HOLDLOCK)
-          WHERE NoGilingan = @NoGilingan
-        `);
-  
-      if (exist.recordset.length === 0) {
-        await tx.rollback();
-        const e = new Error(`Gilingan not found: ${noGilingan}`);
-        e.statusCode = 404;
-        throw e;
-      }
-  
-      // Step 1: delete PARTIALS first
-      const delPartial = `
+  const pool = await poolPromise;
+  const tx = new sql.Transaction(pool);
+
+  const badReq = (msg) => { const e = new Error(msg); e.statusCode = 400; return e; };
+  if (!noGilingan || !String(noGilingan).trim()) throw badReq('noGilingan wajib');
+
+  try {
+    await tx.begin(sql.ISOLATION_LEVEL.READ_COMMITTED);
+
+    // ===============================
+    // 0) Lock + ambil DateCreate untuk rule tutup transaksi
+    // ===============================
+    const head = await new sql.Request(tx)
+      .input('NoGilingan', sql.VarChar, noGilingan)
+      .query(`
+        SELECT TOP 1 NoGilingan, CONVERT(date, DateCreate) AS DateCreate
+        FROM [dbo].[Gilingan] WITH (UPDLOCK, HOLDLOCK)
+        WHERE NoGilingan = @NoGilingan
+      `);
+
+    if (head.recordset.length === 0) {
+      await tx.rollback();
+      const e = new Error(`Gilingan not found: ${noGilingan}`);
+      e.statusCode = 404;
+      throw e;
+    }
+
+    const trxDate = head.recordset[0]?.DateCreate ? toDateOnly(head.recordset[0].DateCreate) : null;
+
+    // ===============================
+    // 1) TUTUP TRANSAKSI CHECK (DELETE)
+    // ===============================
+    await assertNotLocked({
+      date: trxDate,
+      runner: tx,
+      action: 'delete gilingan',
+      useLock: true,
+    });
+
+    // ===============================
+    // 2) delete PARTIALS first
+    // ===============================
+    await new sql.Request(tx)
+      .input('NoGilingan', sql.VarChar, noGilingan)
+      .query(`
         DELETE FROM [dbo].[GilinganPartial]
         WHERE NoGilingan = @NoGilingan;
-      `;
+      `);
+
+    // ===============================
+    // 3) delete OUTPUT mappings
+    // ===============================
+    const mappingQueries = [
+      `DELETE FROM [dbo].[BongkarSusunOutputGilingan] WHERE NoGilingan = @NoGilingan`,
+      `DELETE FROM [dbo].[GilinganProduksiOutput]       WHERE NoGilingan = @NoGilingan`,
+    ];
+
+    for (const q of mappingQueries) {
       await new sql.Request(tx)
         .input('NoGilingan', sql.VarChar, noGilingan)
-        .query(delPartial);
-  
-      // Step 2: delete OUTPUT mappings
-      const mappingQueries = [
-        // From Bongkar Susun → Gilingan
-        `
-          DELETE FROM [dbo].[BongkarSusunOutputGilingan]
-          WHERE NoGilingan = @NoGilingan
-        `,
-        // From Produksi → Gilingan
-        `
-          DELETE FROM [dbo].[GilinganProduksiOutput]
-          WHERE NoGilingan = @NoGilingan
-        `,
-      ];
-  
-      for (const q of mappingQueries) {
-        await new sql.Request(tx)
-          .input('NoGilingan', sql.VarChar, noGilingan)
-          .query(q);
-      }
-  
-      // Step 3: delete header
-      const delHeader = `
+        .query(q);
+    }
+
+    // ===============================
+    // 4) delete header
+    // ===============================
+    const result = await new sql.Request(tx)
+      .input('NoGilingan', sql.VarChar, noGilingan)
+      .query(`
         DELETE FROM [dbo].[Gilingan]
         WHERE NoGilingan = @NoGilingan;
-      `;
-      const result = await new sql.Request(tx)
-        .input('NoGilingan', sql.VarChar, noGilingan)
-        .query(delHeader);
-  
-      await tx.commit();
-  
-      if ((result.rowsAffected?.[0] ?? 0) === 0) {
-        const e = new Error(`Gilingan not found: ${noGilingan}`);
-        e.statusCode = 404;
-        throw e;
-      }
-  
-      return {
-        deleted: true,
-        noGilingan,
-      };
-    } catch (err) {
-      try {
-        await tx.rollback();
-      } catch (_) {}
-      throw err;
+      `);
+
+    if ((result.rowsAffected?.[0] ?? 0) === 0) {
+      await tx.rollback();
+      const e = new Error(`Gilingan not found: ${noGilingan}`);
+      e.statusCode = 404;
+      throw e;
     }
-  };
+
+    await tx.commit();
+    return { deleted: true, noGilingan };
+  } catch (err) {
+    try { await tx.rollback(); } catch (_) {}
+    throw err;
+  }
+};
+
 
 
   exports.getPartialInfoByGilingan = async (nogilingan) => {

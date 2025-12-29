@@ -1,6 +1,14 @@
 // services/bongkar-susun-service.js
 const { sql, poolPromise } = require('../../core/config/db');
 
+const {
+  resolveEffectiveDateForCreate,
+  toDateOnly,
+  assertNotLocked,     
+  formatYMD,
+  loadDocDateOnlyFromConfig
+} = require('../../core/shared/tutup-transaksi-guard');
+
 async function getByDate(date /* 'YYYY-MM-DD' */) {
   const pool = await poolPromise;
   const request = pool.request();
@@ -29,7 +37,11 @@ async function getByDate(date /* 'YYYY-MM-DD' */) {
  */
 async function getAllBongkarSusun(page = 1, pageSize = 20, search = '') {
   const pool = await poolPromise;
-  const offset = (page - 1) * pageSize;
+
+  const p = Math.max(1, Number(page) || 1);
+  const ps = Math.max(1, Math.min(200, Number(pageSize) || 20));
+  const offset = (p - 1) * ps;
+
   const searchTerm = (search || '').trim();
 
   const whereClause = `
@@ -45,33 +57,58 @@ async function getAllBongkarSusun(page = 1, pageSize = 20, search = '') {
 
   const countReq = pool.request();
   countReq.input('search', sql.VarChar(100), searchTerm);
+
   const countRes = await countReq.query(countQry);
-
   const total = countRes.recordset?.[0]?.total || 0;
-  if (total === 0) {
-    return { data: [], total };
-  }
 
-  // 2) Ambil page data (JOIN ke MstUsername)
+  if (total === 0) return { data: [], total: 0 };
+
+  // 2) Data + LastClosedDate + IsLocked
   const dataQry = `
+    ;WITH LastClosed AS (
+      SELECT TOP 1
+        CONVERT(date, PeriodHarian) AS LastClosedDate
+      FROM dbo.MstTutupTransaksiHarian WITH (NOLOCK)
+      WHERE [Lock] = 1
+      ORDER BY CONVERT(date, PeriodHarian) DESC, Id DESC
+    )
     SELECT
       h.NoBongkarSusun,
       h.Tanggal,
       h.IdUsername,
       u.Username,
-      h.Note
+      h.Note,
+
+      -- (opsional utk FE)
+      lc.LastClosedDate AS LastClosedDate,
+
+      -- ✅ flag tutup transaksi
+      CASE
+        WHEN lc.LastClosedDate IS NOT NULL
+         AND CONVERT(date, h.Tanggal) <= lc.LastClosedDate
+        THEN CAST(1 AS bit)
+        ELSE CAST(0 AS bit)
+      END AS IsLocked
+
     FROM dbo.BongkarSusun_h h WITH (NOLOCK)
     LEFT JOIN dbo.MstUsername u WITH (NOLOCK)
       ON u.IdUsername = h.IdUsername
+
+    OUTER APPLY (
+      SELECT TOP 1 LastClosedDate
+      FROM LastClosed
+    ) lc
+
     ${whereClause}
-    ORDER BY h.NoBongkarSusun DESC
+
+    ORDER BY h.Tanggal DESC, h.NoBongkarSusun DESC
     OFFSET @offset ROWS FETCH NEXT @limit ROWS ONLY;
   `;
 
   const dataReq = pool.request();
   dataReq.input('search', sql.VarChar(100), searchTerm);
   dataReq.input('offset', sql.Int, offset);
-  dataReq.input('limit', sql.Int, pageSize);
+  dataReq.input('limit', sql.Int, ps);
 
   const dataRes = await dataReq.query(dataQry);
 
@@ -132,10 +169,21 @@ async function createBongkarSusun(payload) {
   await tx.begin(sql.ISOLATION_LEVEL.SERIALIZABLE);
 
   try {
-    // 1) Resolve Username -> IdUsername
+    // ✅ 1) tanggal “date-only UTC” (stabil, anti timezone shift)
+    const effectiveDate = resolveEffectiveDateForCreate(payload.tanggal);
+
+    // ✅ 2) guard tutup transaksi (CREATE = write)
+    await assertNotLocked({
+      date: effectiveDate,
+      runner: tx,                  // wajib tx
+      action: 'create BongkarSusun',
+      useLock: true,               // create/update/delete = true
+    });
+
+    // 3) Resolve Username -> IdUsername
     const rqUser = new sql.Request(tx);
     const userRes = await rqUser
-      .input('Username', sql.VarChar(100), payload.username)
+      .input('Username', sql.VarChar(100), String(payload.username).trim())
       .query(`
         SELECT TOP 1 IdUsername
         FROM dbo.MstUsername WITH (NOLOCK)
@@ -148,15 +196,13 @@ async function createBongkarSusun(payload) {
 
     const idUsername = userRes.recordset[0].IdUsername;
 
-    // 2) Generate nomor baru BG.XXXXXXXXXX
-    const no1 = await generateNextNoBongkarSusun(tx, {
-      prefix: 'BG.',
-      width: 10,
-    });
+    // 4) Generate nomor baru BG.XXXXXXXXXX (pakai tx biar aman)
+    const no1 = await generateNextNoBongkarSusun(tx, { prefix: 'BG.', width: 10 });
 
+    // 5) Double-check exist + lock untuk cegah race
     const rqCheck = new sql.Request(tx);
     const exist = await rqCheck
-      .input('NoBongkarSusun', sql.VarChar, no1)
+      .input('NoBongkarSusun', sql.VarChar(50), no1)
       .query(`
         SELECT 1
         FROM dbo.BongkarSusun_h WITH (UPDLOCK, HOLDLOCK)
@@ -167,22 +213,18 @@ async function createBongkarSusun(payload) {
       ? await generateNextNoBongkarSusun(tx, { prefix: 'BG.', width: 10 })
       : no1;
 
-    // 3) Insert header
+    // 6) Insert header (pakai effectiveDate, bukan payload.tanggal mentah)
     const rqIns = new sql.Request(tx);
     rqIns
       .input('NoBongkarSusun', sql.VarChar(50), noBongkarSusun)
-      .input('Tanggal', sql.Date, payload.tanggal) // 'YYYY-MM-DD'
+      .input('Tanggal', sql.Date, effectiveDate)
       .input('IdUsername', sql.Int, idUsername)
       .input('Note', sql.VarChar(255), payload.note ?? null);
 
     const insertSql = `
-      INSERT INTO dbo.BongkarSusun_h (
-        NoBongkarSusun, Tanggal, IdUsername, Note
-      )
+      INSERT INTO dbo.BongkarSusun_h (NoBongkarSusun, Tanggal, IdUsername, Note)
       OUTPUT INSERTED.*
-      VALUES (
-        @NoBongkarSusun, @Tanggal, @IdUsername, @Note
-      );
+      VALUES (@NoBongkarSusun, @Tanggal, @IdUsername, @Note);
     `;
 
     const insRes = await rqIns.query(insertSql);
@@ -190,12 +232,11 @@ async function createBongkarSusun(payload) {
 
     return { header: insRes.recordset?.[0] || null };
   } catch (e) {
-    try {
-      await tx.rollback();
-    } catch (_) {}
+    try { await tx.rollback(); } catch (_) {}
     throw e;
   }
 }
+
 
 // ===========================
 //  UPDATE BongkarSusun_h
@@ -208,55 +249,94 @@ async function updateBongkarSusunCascade(noBongkarSusun, headerPayload, inputsPa
   const tx = new sql.Transaction(pool);
 
   try {
-    await tx.begin();
+    await tx.begin(sql.ISOLATION_LEVEL.SERIALIZABLE);
 
-    // 1) pastikan header ada + ambil old tanggal (lock row)
-    {
-      const rq = new sql.Request(tx);
-      rq.input('No', sql.VarChar(50), noBongkarSusun);
-      const ck = await rq.query(`
-        SELECT CAST(Tanggal AS datetime) AS OldTanggal
-        FROM dbo.BongkarSusun_h WITH (UPDLOCK, HOLDLOCK)
-        WHERE NoBongkarSusun = @No;
-      `);
-      if (!ck.recordset.length) throw badReq('BongkarSusun tidak ditemukan');
+    // =========================================================
+    // 0) AMBIL docDateOnly DARI CONFIG + LOCK HEADER ROW
+    //    (menggantikan SELECT BongkarSusun_h manual)
+    // =========================================================
+    const { docDateOnly: oldDocDateOnly } = await loadDocDateOnlyFromConfig({
+      entityKey: 'bongkarSusun',      // pastikan sesuai config tutup-transaksi
+      codeValue: noBongkarSusun,
+      runner: tx,
+      useLock: true,                 // UPDATE = write action
+      throwIfNotFound: true,
+    });
+
+    // =========================================================
+    // 1) Kalau user mengubah tanggal, hitung tanggal baru (date-only)
+    // =========================================================
+    const isChangingDate =
+      !!headerPayload && Object.prototype.hasOwnProperty.call(headerPayload, 'tanggal');
+
+    let newDocDateOnly = null;
+    if (isChangingDate) {
+      if (!headerPayload.tanggal) throw badReq('tanggal tidak boleh kosong');
+      newDocDateOnly = resolveEffectiveDateForCreate(headerPayload.tanggal);
     }
 
-    // 2) update header kalau ada field
+    // =========================================================
+    // 2) GUARD TUTUP TRANSAKSI (UPDATE = write)
+    //    - cek tanggal lama
+    //    - kalau ganti tanggal, cek tanggal baru juga
+    // =========================================================
+    await assertNotLocked({
+      date: oldDocDateOnly,
+      runner: tx,
+      action: 'update BongkarSusun (current date)',
+      useLock: true,
+    });
+
+    if (isChangingDate) {
+      await assertNotLocked({
+        date: newDocDateOnly,
+        runner: tx,
+        action: 'update BongkarSusun (new date)',
+        useLock: true,
+      });
+    }
+
+    // =========================================================
+    // 3) Update header (kalau ada field)
+    //    - jika tanggal diganti, pastikan yang disimpan date-only
+    // =========================================================
     let headerUpdated = null;
+
     if (headerPayload && Object.keys(headerPayload).length) {
-      headerUpdated = await _updateHeaderWithTx(tx, noBongkarSusun, headerPayload);
+      const headerToUpdate = { ...headerPayload };
+      if (isChangingDate) headerToUpdate.tanggal = newDocDateOnly;
+
+      headerUpdated = await _updateHeaderWithTx(tx, noBongkarSusun, headerToUpdate);
     } else {
       headerUpdated = await _getHeaderWithTx(tx, noBongkarSusun);
     }
 
-    // 3) kalau user kirim inputs: tambah yang baru (reuse fungsi kamu)
-    //    (fungsi upsert kamu sudah set DateUsage=@tgl untuk yang baru dimasukkan)
+    // =========================================================
+    // 4) Kalau user kirim inputs: upsert yang baru (pakai tx yang sama)
+    // =========================================================
     let attachmentsSummary = null;
     if (inputsPayloadOrNull) {
-      // pakai upsertInputs versi kamu, tapi pastikan bisa menerima tx.
-      // Jika upsertInputs kamu belum support tx, buat wrapper upsertInputsWithTx.
       attachmentsSummary = await upsertInputsWithExistingTx(tx, noBongkarSusun, inputsPayloadOrNull);
     }
 
-    // 4) Kalau tanggal diubah (atau kamu ingin selalu konsisten), refresh DateUsage semua item yang attached
-    //    Ini yang bikin "PUT juga meng-update dateusage berdasarkan bongkarsusuninput"
-    if (headerPayload && Object.prototype.hasOwnProperty.call(headerPayload, 'tanggal')) {
+    // =========================================================
+    // 5) Jika tanggal berubah → refresh DateUsage semua item yang attached
+    // =========================================================
+    if (isChangingDate) {
       await refreshDateUsageByInputsTx(tx, noBongkarSusun);
-      headerUpdated = await _getHeaderWithTx(tx, noBongkarSusun); // ambil lagi biar return terbaru
+      headerUpdated = await _getHeaderWithTx(tx, noBongkarSusun);
     }
 
     await tx.commit();
 
-    return {
-      header: headerUpdated,
-      inputs: attachmentsSummary, // bisa null kalau tidak ada inputs
-    };
+    return { header: headerUpdated, inputs: attachmentsSummary };
   } catch (err) {
     try { await tx.rollback(); } catch {}
     throw err;
   }
 }
+
+
 
 async function _getHeaderWithTx(tx, no) {
   const rq = new sql.Request(tx);
@@ -426,26 +506,40 @@ async function deleteBongkarSusun(noBongkarSusun) {
   const tx = new sql.Transaction(pool);
 
   try {
-    await tx.begin();
+    await tx.begin(sql.ISOLATION_LEVEL.SERIALIZABLE);
 
-    const req = new sql.Request(tx);
-    req.input('No', sql.VarChar(50), noBongkarSusun);
+    // =========================================================
+    // 0) AMBIL docDateOnly DARI CONFIG + LOCK HEADER ROW
+    //    (menggantikan SELECT BongkarSusun_h manual)
+    // =========================================================
+    const { docDateOnly } = await loadDocDateOnlyFromConfig({
+      entityKey: 'bongkarSusun',      // pastikan key ini ada di config tutup-transaksi
+      codeValue: noBongkarSusun,
+      runner: tx,
+      useLock: true,                 // DELETE = write action
+      throwIfNotFound: true,         // kalau tidak ada, lempar error
+    });
 
-    // 1) pastikan header ada + lock
-    const ck = await req.query(`
-      SELECT 1
-      FROM dbo.BongkarSusun_h WITH (UPDLOCK, HOLDLOCK)
-      WHERE NoBongkarSusun = @No;
-    `);
-    if (!ck.recordset.length) {
-      throw badReq('BongkarSusun tidak ditemukan atau sudah dihapus');
-    }
+    // =========================================================
+    // 1) GUARD TUTUP TRANSAKSI (DELETE = WRITE)
+    // =========================================================
+    await assertNotLocked({
+      date: docDateOnly,
+      runner: tx,
+      action: 'delete BongkarSusun',
+      useLock: true,
+    });
 
-    // 2) CEK OUTPUT: kalau ada data -> TOLAK DELETE
-    const out = await req.query(`
+    // =========================================================
+    // 2) CEK OUTPUT: kalau ada label output -> TOLAK DELETE
+    // =========================================================
+    const rqOut = new sql.Request(tx);
+    rqOut.input('No', sql.VarChar(50), noBongkarSusun);
+
+    const out = await rqOut.query(`
       SET NOCOUNT ON;
 
-      IF EXISTS (SELECT 1 FROM dbo.BongkarSusunOutputBahanBaku     WITH (NOLOCK) WHERE NoBongkarSusun=@No)
+      IF EXISTS (SELECT 1 FROM dbo.BongkarSusunOutputBahanBaku      WITH (NOLOCK) WHERE NoBongkarSusun=@No)
       OR EXISTS (SELECT 1 FROM dbo.BongkarSusunOutputBarangjadi     WITH (NOLOCK) WHERE NoBongkarSusun=@No)
       OR EXISTS (SELECT 1 FROM dbo.BongkarSusunOutputBonggolan      WITH (NOLOCK) WHERE NoBongkarSusun=@No)
       OR EXISTS (SELECT 1 FROM dbo.BongkarSusunOutputBroker         WITH (NOLOCK) WHERE NoBongkarSusun=@No)
@@ -464,12 +558,15 @@ async function deleteBongkarSusun(noBongkarSusun) {
 
     const hasOutput = out.recordset?.[0]?.HasOutput === true;
     if (hasOutput) {
-      const e = badReq('Nomor Bongkar Susun ini telah menerbitkan label, hapus labelnya kemudian coba kembali');
-      e.statusCode = 400;
-      throw e;
+      throw badReq('Nomor Bongkar Susun ini telah menerbitkan label, hapus labelnya kemudian coba kembali');
     }
 
-    // 3) kalau aman, lakukan CASCADE delete inputs + DateUsage NULL + delete header
+    // =========================================================
+    // 3) CASCADE DELETE INPUTS + DateUsage NULL + delete header
+    // =========================================================
+    const req = new sql.Request(tx);
+    req.input('No', sql.VarChar(50), noBongkarSusun);
+
     await req.query(`
       SET NOCOUNT ON;
 
@@ -596,6 +693,7 @@ async function deleteBongkarSusun(noBongkarSusun) {
     throw err;
   }
 }
+
 
 
 
@@ -1600,29 +1698,60 @@ async function validateLabelBongkarSusun(labelCode) {
  */
 
 async function upsertInputs(noBongkarSusun, payload) {
+  if (!noBongkarSusun) throw badReq('noBongkarSusun wajib diisi');
+
   const pool = await poolPromise;
   const tx = new sql.Transaction(pool);
 
   const norm = (a) => (Array.isArray(a) ? a : []);
 
   const body = {
-    broker: norm(payload.broker),
-    bb: norm(payload.bb),
-    washing: norm(payload.washing),
-    crusher: norm(payload.crusher),
-    gilingan: norm(payload.gilingan),
-    mixer: norm(payload.mixer),
-    reject: norm(payload.reject),
+    broker: norm(payload?.broker),
+    bb: norm(payload?.bb),
+    washing: norm(payload?.washing),
+    crusher: norm(payload?.crusher),
+    gilingan: norm(payload?.gilingan),
+    mixer: norm(payload?.mixer),
+    reject: norm(payload?.reject),
 
-    bonggolan: norm(payload.bonggolan),
-    furnitureWip: norm(payload.furnitureWip),
-    barangJadi: norm(payload.barangJadi),
+    bonggolan: norm(payload?.bonggolan),
+    furnitureWip: norm(payload?.furnitureWip),
+    barangJadi: norm(payload?.barangJadi),
   };
 
   try {
-    await tx.begin();
+    await tx.begin(sql.ISOLATION_LEVEL.SERIALIZABLE);
 
-    const attachments = await _insertInputsWithTx(tx, noBongkarSusun, body);
+    // =========================================================
+    // 0) AMBIL docDateOnly DARI CONFIG + LOCK HEADER ROW
+    //    (ini menggantikan SELECT BongkarSusun_h manual)
+    // =========================================================
+    const { docDateOnly } = await loadDocDateOnlyFromConfig({
+      entityKey: 'bongkarSusun',     // <- pastikan ini sama persis dengan config tutup-transaksi
+      codeValue: noBongkarSusun,
+      runner: tx,
+      useLock: true,                // UPSERT = write action
+      throwIfNotFound: true,
+    });
+
+    // =========================================================
+    // 1) GUARD TUTUP TRANSAKSI (UPSERT INPUT = WRITE)
+    // =========================================================
+    await assertNotLocked({
+      date: docDateOnly,
+      runner: tx,
+      action: 'upsert BongkarSusun inputs',
+      useLock: true,
+    });
+
+    // =========================================================
+    // 2) INSERT/ATTACH INPUTS (idempotent)
+    //    Pastikan _insertInputsWithTx set DateUsage = docDateOnly
+    //    untuk item yang berhasil di-attach
+    // =========================================================
+    const attachments = await _insertInputsWithTx(tx, noBongkarSusun, body, {
+      usageDate: docDateOnly, // opsional: kalau kamu mau lempar tanggal biar konsisten
+    });
 
     await tx.commit();
 
@@ -1630,25 +1759,24 @@ async function upsertInputs(noBongkarSusun, payload) {
     const totalSkipped  = Object.values(attachments).reduce((s, x) => s + (x.skipped  || 0), 0);
     const totalInvalid  = Object.values(attachments).reduce((s, x) => s + (x.invalid  || 0), 0);
 
-    const response = {
-      noBongkarSusun,
-      summary: { totalInserted, totalSkipped, totalInvalid },
-      details: attachments
-    };
-
     const hasInvalid = totalInvalid > 0;
     const hasNoSuccess = totalInserted === 0;
 
     return {
       success: !hasInvalid && !hasNoSuccess,
       hasWarnings: totalSkipped > 0,
-      data: response,
+      data: {
+        noBongkarSusun,
+        summary: { totalInserted, totalSkipped, totalInvalid },
+        details: attachments,
+      },
     };
   } catch (err) {
     try { await tx.rollback(); } catch {}
     throw err;
   }
 }
+
 
 async function _insertInputsWithTx(tx, noBongkarSusun, lists) {
   const req = new sql.Request(tx);
@@ -2215,28 +2343,56 @@ async function _insertInputsWithTx(tx, noBongkarSusun, lists) {
 
 
 
-
 async function deleteInputs(noBongkarSusun, payload) {
+  if (!noBongkarSusun) throw badReq('noBongkarSusun wajib diisi');
+
   const pool = await poolPromise;
   const tx = new sql.Transaction(pool);
 
   const norm = (a) => (Array.isArray(a) ? a : []);
 
   const body = {
-    broker: norm(payload.broker),             // [{ noBroker, noSak }]
-    bb: norm(payload.bb),                     // [{ noBahanBaku, noPallet, noSak }]
-    washing: norm(payload.washing),           // [{ noWashing, noSak }]
-    crusher: norm(payload.crusher),           // [{ noCrusher }]
-    gilingan: norm(payload.gilingan),         // [{ noGilingan }]
-    mixer: norm(payload.mixer),               // [{ noMixer, noSak }]
-    bonggolan: norm(payload.bonggolan),       // [{ noBonggolan }]
-    furnitureWip: norm(payload.furnitureWip), // [{ noFurnitureWip }]
-    barangJadi: norm(payload.barangJadi),     // [{ noBj }]
+    broker: norm(payload?.broker),             // [{ noBroker, noSak }]
+    bb: norm(payload?.bb),                     // [{ noBahanBaku, noPallet, noSak }]
+    washing: norm(payload?.washing),           // [{ noWashing, noSak }]
+    crusher: norm(payload?.crusher),           // [{ noCrusher }]
+    gilingan: norm(payload?.gilingan),         // [{ noGilingan }]
+    mixer: norm(payload?.mixer),               // [{ noMixer, noSak }]
+    bonggolan: norm(payload?.bonggolan),       // [{ noBonggolan }]
+    furnitureWip: norm(payload?.furnitureWip), // [{ noFurnitureWip }]
+    barangJadi: norm(payload?.barangJadi),     // [{ noBj }]
   };
 
   try {
-    await tx.begin();
+    await tx.begin(sql.ISOLATION_LEVEL.SERIALIZABLE);
 
+    // =========================================================
+    // 0) AMBIL docDateOnly DARI CONFIG + LOCK HEADER ROW
+    // =========================================================
+    const { docDateOnly } = await loadDocDateOnlyFromConfig({
+      entityKey: 'bongkarSusun',     // pastikan sama dengan config tutup-transaksi
+      codeValue: noBongkarSusun,
+      runner: tx,
+      useLock: true,                // DELETE = write action
+      throwIfNotFound: true,
+    });
+
+    // =========================================================
+    // 1) GUARD TUTUP TRANSAKSI (DELETE INPUT = WRITE)
+    // =========================================================
+    await assertNotLocked({
+      date: docDateOnly,
+      runner: tx,
+      action: 'delete BongkarSusun inputs',
+      useLock: true,
+    });
+
+    // =========================================================
+    // 2) DELETE INPUTS + RESET DATEUSAGE
+    //    Pastikan helper kamu:
+    //    - delete mapping row berdasarkan payload
+    //    - update DateUsage = NULL untuk item yang dihapus
+    // =========================================================
     const inputsResult = await _deleteBongkarSusunInputsWithTx(tx, noBongkarSusun, body);
 
     await tx.commit();

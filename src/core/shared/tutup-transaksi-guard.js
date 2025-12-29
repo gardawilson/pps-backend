@@ -1,6 +1,16 @@
 // src/core/shared/tutup-transaksi.js
-// ✅ UTC-only implementation (nama function & export tetap sama)
+// ✅ UTC-only implementation + helper config-based doc date lookup
 const { sql, poolPromise } = require('../config/db');
+
+// Optional config (kalau file config belum dibuat, helper config-based akan throw dengan pesan jelas)
+let TUTUP_TRANSAKSI_SOURCES = null;
+try {
+  // 👉 buat file ini: src/core/config/tutup-transaksi-config.js
+  // module.exports = { TUTUP_TRANSAKSI_SOURCES: { ... } }
+  ({ TUTUP_TRANSAKSI_SOURCES } = require('../config/tutup-transaksi-config'));
+} catch (_) {
+  TUTUP_TRANSAKSI_SOURCES = null;
+}
 
 async function getRequest(runner) {
   const r = (typeof runner?.then === 'function') ? await runner : runner;
@@ -129,11 +139,146 @@ function resolveEffectiveDateForCreate(bodyDate) {
   return d;
 }
 
+/**
+ * Helper: ambil tanggal dokumen (date-only) dari tabel tertentu secara GENERIC.
+ * Cocok untuk menghindari perulangan query "SELECT DateCreate FROM ... WHERE ..."
+ *
+ * @param {Object} p
+ * @param {sql.Transaction|sql.Request|Pool} p.runner - tx/request/pool
+ * @param {string} p.table - contoh: 'dbo.Washing_h'
+ * @param {string} p.codeColumn - contoh: 'NoWashing'
+ * @param {string} p.dateColumn - contoh: 'DateCreate'
+ * @param {string|number} p.codeValue - contoh: 'B.0000000123'
+ * @param {boolean} p.useLock - default true (UPDLOCK, HOLDLOCK)
+ * @param {boolean} p.throwIfNotFound - default true
+ */
+async function loadDocDateOnlyFromTable({
+  runner,
+  table,
+  codeColumn,
+  dateColumn,
+  codeValue,
+  useLock = true,
+  throwIfNotFound = true,
+} = {}) {
+  if (!table) {
+    const e = new Error('table wajib diisi');
+    e.statusCode = 500;
+    throw e;
+  }
+  if (!codeColumn) {
+    const e = new Error('codeColumn wajib diisi');
+    e.statusCode = 500;
+    throw e;
+  }
+  if (!dateColumn) {
+    const e = new Error('dateColumn wajib diisi');
+    e.statusCode = 500;
+    throw e;
+  }
+  if (codeValue === undefined || codeValue === null || String(codeValue).trim() === '') {
+    const e = new Error('codeValue wajib diisi');
+    e.statusCode = 400;
+    throw e;
+  }
+
+  const request = await getRequest(runner);
+  const hint = useLock ? 'WITH (UPDLOCK, HOLDLOCK)' : 'WITH (NOLOCK)';
+
+  // NOTE: table/column tidak bisa jadi parameter, jadi harus dari config/static.
+  // Pastikan table/column berasal dari kode internal (bukan input user mentah).
+  const q = `
+    SELECT TOP 1
+      ${codeColumn} AS CodeValue,
+      CONVERT(date, ${dateColumn}) AS DocDate
+    FROM ${table} ${hint}
+    WHERE ${codeColumn} = @code
+  `;
+
+  const res = await request.input('code', sql.VarChar, String(codeValue)).query(q);
+  const row = res.recordset?.[0] || null;
+
+  if (!row) {
+    if (!throwIfNotFound) return { found: false, docDateOnly: null, row: null };
+
+    const e = new Error(`Dokumen tidak ditemukan: ${table}.${codeColumn} = ${String(codeValue)}`);
+    e.statusCode = 404;
+    e.code = 'DOC_NOT_FOUND';
+    e.meta = { table, codeColumn, dateColumn, codeValue: String(codeValue) };
+    throw e;
+  }
+
+  const docDateOnly = row.DocDate ? toDateOnly(row.DocDate) : null;
+  return { found: true, docDateOnly, row };
+}
+
+/**
+ * Helper (recommended): ambil tanggal dokumen berdasarkan CONFIG key.
+ * Ini yang bikin CRUD kamu gak perlu ulang query ambil tanggal.
+ *
+ * @param {Object} p
+ * @param {string} p.entityKey - key config, contoh: 'washingLabel'
+ * @param {string|number} p.codeValue - nilai kode, contoh: NoWashing
+ * @param {sql.Transaction|sql.Request|Pool} p.runner - tx/request/pool
+ * @param {boolean} p.useLock - default true
+ * @param {boolean} p.throwIfNotFound - default true
+ */
+async function loadDocDateOnlyFromConfig({
+  entityKey,
+  codeValue,
+  runner,
+  useLock = true,
+  throwIfNotFound = true,
+} = {}) {
+  if (!entityKey) {
+    const e = new Error('entityKey wajib diisi');
+    e.statusCode = 500;
+    throw e;
+  }
+  if (!TUTUP_TRANSAKSI_SOURCES) {
+    const e = new Error(
+      `TUTUP_TRANSAKSI_SOURCES belum tersedia. Buat file: src/core/config/tutup-transaksi-config.js`
+    );
+    e.statusCode = 500;
+    e.code = 'TUTUP_TRANSAKSI_CONFIG_MISSING';
+    throw e;
+  }
+
+  const cfg = TUTUP_TRANSAKSI_SOURCES[entityKey];
+  if (!cfg) {
+    const e = new Error(`Config tutup transaksi tidak ditemukan untuk entityKey=${entityKey}`);
+    e.statusCode = 500;
+    e.code = 'TUTUP_TRANSAKSI_CONFIG_NOT_FOUND';
+    e.meta = { entityKey, availableKeys: Object.keys(TUTUP_TRANSAKSI_SOURCES) };
+    throw e;
+  }
+
+  // Support alias field names for flexibility
+  const table = cfg.table;
+  const codeColumn = cfg.codeColumn;
+  const dateColumn = cfg.dateColumn;
+
+  return loadDocDateOnlyFromTable({
+    runner,
+    table,
+    codeColumn,
+    dateColumn,
+    codeValue,
+    useLock,
+    throwIfNotFound,
+  });
+}
+
 module.exports = {
+  // existing exports
   toDateOnly,
   formatYMD,
   resolveEffectiveDateForCreate,
   getLastClosedPeriod,
   assertDateAfterLastClosed,
   assertNotLocked,
+
+  // new exports (to avoid duplicated queries)
+  loadDocDateOnlyFromTable,
+  loadDocDateOnlyFromConfig,
 };

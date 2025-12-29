@@ -1,6 +1,14 @@
 // services/broker-production-service.js
 const { sql, poolPromise } = require('../../../core/config/db');
 
+const {
+  resolveEffectiveDateForCreate,
+  toDateOnly,
+  assertNotLocked,     
+  formatYMD,
+  loadDocDateOnlyFromConfig
+} = require('../../../core/shared/tutup-transaksi-guard');
+
 
 /**
  * Paginated fetch for dbo.BrokerProduksi_h
@@ -12,29 +20,41 @@ const { sql, poolPromise } = require('../../../core/config/db');
  */
 async function getAllProduksi(page = 1, pageSize = 20, search = '') {
   const pool = await poolPromise;
-  const offset = (page - 1) * pageSize;
+
+  const p = Math.max(1, Number(page) || 1);
+  const ps = Math.max(1, Math.min(200, Number(pageSize) || 20));
+  const offset = (p - 1) * ps;
+
   const searchTerm = (search || '').trim();
 
-  // We'll reuse the same WHERE clause for count and data queries
   const whereClause = `
     WHERE (@search = '' OR h.NoProduksi LIKE '%' + @search + '%')
   `;
 
-  // 1) Count (lightweight, no joins)
+  // 1) Count (lightweight)
   const countQry = `
     SELECT COUNT(1) AS total
     FROM dbo.BrokerProduksi_h h WITH (NOLOCK)
     ${whereClause};
   `;
+
   const countReq = pool.request();
   countReq.input('search', sql.VarChar(100), searchTerm);
+
   const countRes = await countReq.query(countQry);
-
   const total = countRes.recordset?.[0]?.total || 0;
-  if (total === 0) return { data: [], total };
 
-  // 2) Page data + joins
+  if (total === 0) return { data: [], total: 0 };
+
+  // 2) Data + Flag Tutup Transaksi (ambil lastClosed sekali)
   const dataQry = `
+    ;WITH LastClosed AS (
+      SELECT TOP 1
+        CONVERT(date, PeriodHarian) AS LastClosedDate
+      FROM dbo.MstTutupTransaksiHarian WITH (NOLOCK)
+      WHERE [Lock] = 1
+      ORDER BY CONVERT(date, PeriodHarian) DESC, Id DESC
+    )
     SELECT
       h.NoProduksi,
       h.TglProduksi,
@@ -52,23 +72,44 @@ async function getAllProduksi(page = 1, pageSize = 20, search = '') {
       h.Hadir,
       h.HourMeter,
       CONVERT(VARCHAR(8), h.HourStart, 108) AS HourStart,
-      CONVERT(VARCHAR(8), h.HourEnd, 108) AS HourEnd
+      CONVERT(VARCHAR(8), h.HourEnd, 108) AS HourEnd,
+
+      -- (opsional utk frontend)
+      lc.LastClosedDate AS LastClosedDate,
+
+      -- flag tutup transaksi
+      CASE
+        WHEN lc.LastClosedDate IS NOT NULL
+         AND CONVERT(date, h.TglProduksi) <= lc.LastClosedDate
+        THEN CAST(1 AS bit)
+        ELSE CAST(0 AS bit)
+      END AS IsLocked
+
     FROM dbo.BrokerProduksi_h h WITH (NOLOCK)
-    LEFT JOIN dbo.MstMesin    ms WITH (NOLOCK) ON ms.IdMesin    = h.IdMesin
-    LEFT JOIN dbo.MstOperator op WITH (NOLOCK) ON op.IdOperator = h.IdOperator
+    LEFT JOIN dbo.MstMesin    ms WITH (NOLOCK) ON ms.IdMesin     = h.IdMesin
+    LEFT JOIN dbo.MstOperator op WITH (NOLOCK) ON op.IdOperator  = h.IdOperator
+
+    OUTER APPLY (
+      SELECT TOP 1 LastClosedDate
+      FROM LastClosed
+    ) lc
+
     ${whereClause}
-    ORDER BY h.NoProduksi DESC
+
+    -- rekomendasi: urutkan konsisten berdasarkan tanggal + jam + nomor
+    ORDER BY h.TglProduksi DESC, h.Jam ASC, h.NoProduksi DESC
     OFFSET @offset ROWS FETCH NEXT @limit ROWS ONLY;
   `;
 
   const dataReq = pool.request();
   dataReq.input('search', sql.VarChar(100), searchTerm);
   dataReq.input('offset', sql.Int, offset);
-  dataReq.input('limit',  sql.Int, pageSize);
+  dataReq.input('limit', sql.Int, ps);
 
   const dataRes = await dataReq.query(dataQry);
   return { data: dataRes.recordset || [], total };
 }
+
 
 
 
@@ -501,77 +542,146 @@ function badReq(msg) {
   return e;
 }
 
-async function createBrokerProduksi (payload) {
+async function createBrokerProduksi(payload) {
   const must = [];
   if (!payload?.tglProduksi) must.push('tglProduksi');
   if (payload?.idMesin == null) must.push('idMesin');
   if (payload?.idOperator == null) must.push('idOperator');
-  if (payload?.jam == null) must.push('jam');          // tetep, buat durasi
+  if (payload?.jam == null) must.push('jam'); // durasi (int)
   if (payload?.shift == null) must.push('shift');
   if (must.length) throw badReq(`Field wajib: ${must.join(', ')}`);
+
+  // ---- helper: date-only (tanpa geser hari) ----
+  // input payload.tglProduksi bisa Date / string "YYYY-MM-DD" / ISO
+  const toDateOnly = (d) => {
+    if (!d) return null;
+
+    // kalau sudah Date
+    if (d instanceof Date) {
+      // date-only lokal -> pakai YYYY-MM-DD dari lokal, lalu new Date(YYYY-MM-DD) (anggap UTC midnight)
+      const y = d.getFullYear();
+      const m = String(d.getMonth() + 1).padStart(2, '0');
+      const dd = String(d.getDate()).padStart(2, '0');
+      return new Date(`${y}-${m}-${dd}`);
+    }
+
+    // kalau string (ISO atau YYYY-MM-DD)
+    const s = String(d).trim();
+    // ambil 10 char pertama biar jadi YYYY-MM-DD
+    const ymd = s.length >= 10 ? s.slice(0, 10) : s;
+    if (!/^\d{4}-\d{2}-\d{2}$/.test(ymd)) {
+      throw badReq('Format tglProduksi harus YYYY-MM-DD atau ISO date');
+    }
+    return new Date(ymd); // UTC midnight untuk tanggal tsb
+  };
+
+  const docDateOnly = toDateOnly(payload.tglProduksi);
 
   const pool = await poolPromise;
   const tx = new sql.Transaction(pool);
   await tx.begin(sql.ISOLATION_LEVEL.SERIALIZABLE);
 
   try {
+    // -------------------------------------------------------
+    // 1) GUARD TUTUP TRANSAKSI (CREATE = WRITE)
+    // -------------------------------------------------------
+    await assertNotLocked({
+      date: docDateOnly,
+      runner: tx, // IMPORTANT: pakai tx biar konsisten dalam transaksi
+      action: 'create BrokerProduksi',
+      useLock: true,
+    });
+
+    // -------------------------------------------------------
+    // 2) Generate NoProduksi (Prefix 'E.' untuk broker)
+    // -------------------------------------------------------
     const no1 = await generateNextNoProduksi(tx, { prefix: 'E.', width: 10 });
+
     const rqCheck = new sql.Request(tx);
     const exist = await rqCheck
-      .input('NoProduksi', sql.VarChar, no1)
+      .input('NoProduksi', sql.VarChar(50), no1)
       .query(`
         SELECT 1
         FROM dbo.BrokerProduksi_h WITH (UPDLOCK, HOLDLOCK)
         WHERE NoProduksi = @NoProduksi
       `);
+
     const noProduksi = exist.recordset.length
       ? await generateNextNoProduksi(tx, { prefix: 'E.', width: 10 })
       : no1;
 
     const jamInt = parseJamToInt(payload.jam);
 
+    // -------------------------------------------------------
+    // 3) Insert header (pakai docDateOnly)
+    // -------------------------------------------------------
     const rqIns = new sql.Request(tx);
     rqIns
-      .input('NoProduksi',  sql.VarChar(50),   noProduksi)
-      .input('TglProduksi', sql.Date,          payload.tglProduksi)
-      .input('IdMesin',     sql.Int,           payload.idMesin)
-      .input('IdOperator',  sql.Int,           payload.idOperator)
-      .input('Jam',         sql.Int,           jamInt)
-      .input('Shift',       sql.Int,           payload.shift)
-      .input('CreateBy',    sql.VarChar(100),  payload.createBy)
-      .input('CheckBy1',    sql.VarChar(100),  payload.checkBy1 ?? null)
-      .input('CheckBy2',    sql.VarChar(100),  payload.checkBy2 ?? null)
-      .input('ApproveBy',   sql.VarChar(100),  payload.approveBy ?? null)
-      .input('JmlhAnggota', sql.Int,           payload.jmlhAnggota ?? null)
-      .input('Hadir',       sql.Int,           payload.hadir ?? null)
+      .input('NoProduksi',  sql.VarChar(50),    noProduksi)
+      .input('TglProduksi', sql.Date,           docDateOnly)
+      .input('IdMesin',     sql.Int,            payload.idMesin)
+      .input('IdOperator',  sql.Int,            payload.idOperator)
+      .input('Jam',         sql.Int,            jamInt)
+      .input('Shift',       sql.Int,            payload.shift)
+      .input('CreateBy',    sql.VarChar(100),   payload.createBy)
+      .input('CheckBy1',    sql.VarChar(100),   payload.checkBy1 ?? null)
+      .input('CheckBy2',    sql.VarChar(100),   payload.checkBy2 ?? null)
+      .input('ApproveBy',   sql.VarChar(100),   payload.approveBy ?? null)
+      .input('JmlhAnggota', sql.Int,            payload.jmlhAnggota ?? null)
+      .input('Hadir',       sql.Int,            payload.hadir ?? null)
       .input('HourMeter',   sql.Decimal(18, 2), payload.hourMeter ?? null)
-      // ⬇️ tambahin ini kalau kolomnya ada
-      .input('HourStart', sql.VarChar(20), payload.hourStart ?? null)
-      .input('HourEnd',   sql.VarChar(20), payload.hourEnd ?? null);
+      // optional kalau kolom ada
+      .input('HourStart',   sql.VarChar(20),    payload.hourStart ?? null)
+      .input('HourEnd',     sql.VarChar(20),    payload.hourEnd ?? null);
 
     const insertSql = `
       INSERT INTO dbo.BrokerProduksi_h (
-        NoProduksi, TglProduksi, IdMesin, IdOperator, Jam, Shift,
-        CreateBy, CheckBy1, CheckBy2, ApproveBy, JmlhAnggota, Hadir, HourMeter,
-        HourStart, HourEnd
+        NoProduksi,
+        TglProduksi,
+        IdMesin,
+        IdOperator,
+        Jam,
+        Shift,
+        CreateBy,
+        CheckBy1,
+        CheckBy2,
+        ApproveBy,
+        JmlhAnggota,
+        Hadir,
+        HourMeter,
+        HourStart,
+        HourEnd
       )
       OUTPUT INSERTED.*
       VALUES (
-        @NoProduksi, @TglProduksi, @IdMesin, @IdOperator, @Jam, @Shift,
-        @CreateBy, @CheckBy1, @CheckBy2, @ApproveBy, @JmlhAnggota, @Hadir, @HourMeter,
-        CAST(@HourStart AS time(7)),  -- ⬅️ ini penting
-        CAST(@HourEnd   AS time(7))
+        @NoProduksi,
+        @TglProduksi,
+        @IdMesin,
+        @IdOperator,
+        @Jam,
+        @Shift,
+        @CreateBy,
+        @CheckBy1,
+        @CheckBy2,
+        @ApproveBy,
+        @JmlhAnggota,
+        @Hadir,
+        @HourMeter,
+        CASE WHEN @HourStart IS NULL OR LTRIM(RTRIM(@HourStart)) = '' THEN NULL ELSE CAST(@HourStart AS time(7)) END,
+        CASE WHEN @HourEnd   IS NULL OR LTRIM(RTRIM(@HourEnd))   = '' THEN NULL ELSE CAST(@HourEnd   AS time(7)) END
       );
     `;
-    const insRes = await rqIns.query(insertSql);
-    await tx.commit();
 
+    const insRes = await rqIns.query(insertSql);
+
+    await tx.commit();
     return { header: insRes.recordset?.[0] || null };
   } catch (e) {
     try { await tx.rollback(); } catch (_) {}
     throw e;
   }
 }
+
 
 
 async function updateBrokerProduksi(noProduksi, payload) {
@@ -582,28 +692,59 @@ async function updateBrokerProduksi(noProduksi, payload) {
   await tx.begin(sql.ISOLATION_LEVEL.SERIALIZABLE);
 
   try {
-    // 1. cek dulu ada gak + lock row
-    const rqGet = new sql.Request(tx);
-    const current = await rqGet
-      .input('NoProduksi', sql.VarChar, noProduksi)
-      .query(`
-        SELECT *
-        FROM dbo.BrokerProduksi_h WITH (UPDLOCK, HOLDLOCK)
-        WHERE NoProduksi = @NoProduksi
-      `);
+    // -------------------------------------------------------
+    // 0) AMBIL docDateOnly DARI CONFIG (LOCK HEADER ROW)
+    //    Ini menggantikan SELECT BrokerProduksi_h manual
+    // -------------------------------------------------------
+    const { docDateOnly: oldDocDateOnly } = await loadDocDateOnlyFromConfig({
+      entityKey: 'brokerProduksi', // pastikan sesuai config tutup-transaksi
+      codeValue: noProduksi,
+      runner: tx,
+      useLock: true,               // UPDATE = write action
+      throwIfNotFound: true,
+    });
 
-    if (current.recordset.length === 0) {
-      throw badReq('Data not found');
+    // -------------------------------------------------------
+    // 1) Jika user mengubah tanggal, hitung tanggal barunya (date-only)
+    // -------------------------------------------------------
+    const isChangingDate = payload?.tglProduksi !== undefined;
+    let newDocDateOnly = null;
+
+    if (isChangingDate) {
+      if (!payload.tglProduksi) throw badReq('tglProduksi tidak boleh kosong');
+      newDocDateOnly = resolveEffectiveDateForCreate(payload.tglProduksi);
     }
 
-    // 2. build SET dinamis
+    // -------------------------------------------------------
+    // 2) GUARD TUTUP TRANSAKSI
+    //    - cek tanggal lama
+    //    - kalau ganti tanggal, cek tanggal baru juga
+    // -------------------------------------------------------
+    await assertNotLocked({
+      date: oldDocDateOnly,
+      runner: tx,
+      action: 'update BrokerProduksi (current date)',
+      useLock: true,
+    });
+
+    if (isChangingDate) {
+      await assertNotLocked({
+        date: newDocDateOnly,
+        runner: tx,
+        action: 'update BrokerProduksi (new date)',
+        useLock: true,
+      });
+    }
+
+    // -------------------------------------------------------
+    // 3) BUILD SET DINAMIS
+    // -------------------------------------------------------
     const sets = [];
     const rqUpd = new sql.Request(tx);
 
-    // tglProduksi
-    if (payload.tglProduksi !== undefined) {
+    if (isChangingDate) {
       sets.push('TglProduksi = @TglProduksi');
-      rqUpd.input('TglProduksi', sql.Date, payload.tglProduksi);
+      rqUpd.input('TglProduksi', sql.Date, newDocDateOnly);
     }
 
     if (payload.idMesin !== undefined) {
@@ -651,29 +792,34 @@ async function updateBrokerProduksi(noProduksi, payload) {
       rqUpd.input('HourMeter', sql.Decimal(18, 2), payload.hourMeter ?? null);
     }
 
-    // jam: kita parse ke int lagi
     if (payload.jam !== undefined) {
       const jamInt = payload.jam === null ? null : parseJamToInt(payload.jam);
       sets.push('Jam = @Jam');
       rqUpd.input('Jam', sql.Int, jamInt);
     }
 
-    // hourStart / hourEnd
+    // hourStart / hourEnd (lebih aman kalau null / kosong)
     if (payload.hourStart !== undefined) {
-      sets.push('HourStart = CAST(@HourStart AS time(7))');
-      rqUpd.input('HourStart', sql.VarChar(20), payload.hourStart);
+      sets.push(`
+        HourStart =
+          CASE WHEN @HourStart IS NULL OR LTRIM(RTRIM(@HourStart)) = '' THEN NULL
+               ELSE CAST(@HourStart AS time(7)) END
+      `);
+      rqUpd.input('HourStart', sql.VarChar(20), payload.hourStart ?? null);
     }
+
     if (payload.hourEnd !== undefined) {
-      sets.push('HourEnd = CAST(@HourEnd AS time(7))');
-      rqUpd.input('HourEnd', sql.VarChar(20), payload.hourEnd);
+      sets.push(`
+        HourEnd =
+          CASE WHEN @HourEnd IS NULL OR LTRIM(RTRIM(@HourEnd)) = '' THEN NULL
+               ELSE CAST(@HourEnd AS time(7)) END
+      `);
+      rqUpd.input('HourEnd', sql.VarChar(20), payload.hourEnd ?? null);
     }
 
-    if (sets.length === 0) {
-      await tx.rollback();
-      throw badReq('No fields to update');
-    }
+    if (sets.length === 0) throw badReq('No fields to update');
 
-    rqUpd.input('NoProduksi', sql.VarChar, noProduksi);
+    rqUpd.input('NoProduksi', sql.VarChar(50), noProduksi);
 
     const updateSql = `
       UPDATE dbo.BrokerProduksi_h
@@ -688,12 +834,17 @@ async function updateBrokerProduksi(noProduksi, payload) {
     const updRes = await rqUpd.query(updateSql);
     const updatedHeader = updRes.recordset?.[0] || null;
 
-    // 3. Kalau TglProduksi ikut di-update → sinkron DateUsage semua label (full + partial)
-    if (payload.tglProduksi !== undefined && updatedHeader) {
+    // -------------------------------------------------------
+    // 4) Jika TglProduksi berubah → sinkron DateUsage full + partial
+    //    (pakai tanggal hasil DB agar konsisten)
+    // -------------------------------------------------------
+    if (isChangingDate && updatedHeader) {
+      const usageDate = resolveEffectiveDateForCreate(updatedHeader.TglProduksi);
+
       const rqUsage = new sql.Request(tx);
       rqUsage
-        .input('NoProduksi', sql.VarChar, noProduksi)
-        .input('TglProduksi', sql.Date, updatedHeader.TglProduksi);
+        .input('NoProduksi', sql.VarChar(50), noProduksi)
+        .input('TglProduksi', sql.Date, usageDate);
 
       const sqlUpdateUsage = `
         -------------------------------------------------------
@@ -704,7 +855,6 @@ async function updateBrokerProduksi(noProduksi, payload) {
         FROM dbo.BahanBaku_d AS bb
         WHERE bb.DateUsage IS NOT NULL
           AND (
-            -- full
             EXISTS (
               SELECT 1
               FROM dbo.BrokerProduksiInputBB AS map
@@ -714,7 +864,6 @@ async function updateBrokerProduksi(noProduksi, payload) {
                 AND map.NoSak        = bb.NoSak
             )
             OR
-            -- partial
             EXISTS (
               SELECT 1
               FROM dbo.BrokerProduksiInputBBPartial AS mp
@@ -735,7 +884,6 @@ async function updateBrokerProduksi(noProduksi, payload) {
         FROM dbo.Broker_d AS br
         WHERE br.DateUsage IS NOT NULL
           AND (
-            -- full
             EXISTS (
               SELECT 1
               FROM dbo.BrokerProduksiInputBroker AS map
@@ -744,7 +892,6 @@ async function updateBrokerProduksi(noProduksi, payload) {
                 AND map.NoSak      = br.NoSak
             )
             OR
-            -- partial
             EXISTS (
               SELECT 1
               FROM dbo.BrokerProduksiInputBrokerPartial AS mp
@@ -757,7 +904,7 @@ async function updateBrokerProduksi(noProduksi, payload) {
           );
 
         -------------------------------------------------------
-        -- WASHING (FULL ONLY - TIDAK ADA PARTIAL)
+        -- WASHING (FULL ONLY)
         -------------------------------------------------------
         UPDATE w
         SET w.DateUsage = @TglProduksi
@@ -772,7 +919,7 @@ async function updateBrokerProduksi(noProduksi, payload) {
           );
 
         -------------------------------------------------------
-        -- CRUSHER (FULL ONLY - TIDAK ADA PARTIAL)
+        -- CRUSHER (FULL ONLY)
         -------------------------------------------------------
         UPDATE c
         SET c.DateUsage = @TglProduksi
@@ -793,7 +940,6 @@ async function updateBrokerProduksi(noProduksi, payload) {
         FROM dbo.Gilingan AS g
         WHERE g.DateUsage IS NOT NULL
           AND (
-            -- full
             EXISTS (
               SELECT 1
               FROM dbo.BrokerProduksiInputGilingan AS map
@@ -801,7 +947,6 @@ async function updateBrokerProduksi(noProduksi, payload) {
                 AND map.NoGilingan = g.NoGilingan
             )
             OR
-            -- partial
             EXISTS (
               SELECT 1
               FROM dbo.BrokerProduksiInputGilinganPartial AS mp
@@ -820,7 +965,6 @@ async function updateBrokerProduksi(noProduksi, payload) {
         FROM dbo.Mixer_d AS m
         WHERE m.DateUsage IS NOT NULL
           AND (
-            -- full
             EXISTS (
               SELECT 1
               FROM dbo.BrokerProduksiInputMixer AS map
@@ -829,7 +973,6 @@ async function updateBrokerProduksi(noProduksi, payload) {
                 AND map.NoSak      = m.NoSak
             )
             OR
-            -- partial
             EXISTS (
               SELECT 1
               FROM dbo.BrokerProduksiInputMixerPartial AS mp
@@ -849,7 +992,6 @@ async function updateBrokerProduksi(noProduksi, payload) {
         FROM dbo.RejectV2 AS r
         WHERE r.DateUsage IS NOT NULL
           AND (
-            -- full
             EXISTS (
               SELECT 1
               FROM dbo.BrokerProduksiInputReject AS map
@@ -857,7 +999,6 @@ async function updateBrokerProduksi(noProduksi, payload) {
                 AND map.NoReject   = r.NoReject
             )
             OR
-            -- partial
             EXISTS (
               SELECT 1
               FROM dbo.BrokerProduksiInputRejectPartial AS mp
@@ -867,13 +1008,10 @@ async function updateBrokerProduksi(noProduksi, payload) {
                 AND rp.NoReject   = r.NoReject
             )
           );
-      `;
-
-      await rqUsage.query(sqlUpdateUsage);
+      `;      await rqUsage.query(sqlUpdateUsage);
     }
 
     await tx.commit();
-
     return { header: updatedHeader };
   } catch (e) {
     try { await tx.rollback(); } catch (_) {}
@@ -893,7 +1031,29 @@ async function deleteBrokerProduksi(noProduksi) {
 
   try {
     // -------------------------------------------------------
-    // 0. CEK DULU: SUDAH PUNYA OUTPUT / BONGGOLAN ATAU BELUM
+    // 0) AMBIL docDateOnly DARI CONFIG (LOCK HEADER ROW)
+    //    GANTI SELECT BrokerProduksi_h manual (tglProduksi)
+    // -------------------------------------------------------
+    const { docDateOnly } = await loadDocDateOnlyFromConfig({
+      entityKey: 'brokerProduksi', // pastikan key ini ada di config tutup-transaksi
+      codeValue: noProduksi,
+      runner: tx,
+      useLock: true,               // DELETE = write action
+      throwIfNotFound: true,
+    });
+
+    // -------------------------------------------------------
+    // 1) GUARD TUTUP TRANSAKSI (DELETE = WRITE)
+    // -------------------------------------------------------
+    await assertNotLocked({
+      date: docDateOnly,
+      runner: tx,                 // IMPORTANT: same tx
+      action: 'delete BrokerProduksi',
+      useLock: true,
+    });
+
+    // -------------------------------------------------------
+    // 2) CEK DULU: SUDAH PUNYA OUTPUT / BONGGOLAN ATAU BELUM
     // -------------------------------------------------------
     const rqCheck = new sql.Request(tx);
     const outCheck = await rqCheck
@@ -915,341 +1075,292 @@ async function deleteBrokerProduksi(noProduksi) {
         ) AS X;
       `);
 
-    const row = outCheck.recordset[0] || { CntOutput: 0, CntOutputBong: 0 };
+    const row = outCheck.recordset?.[0] || { CntOutput: 0, CntOutputBong: 0 };
     const hasOutput = (row.CntOutput || 0) > 0;
     const hasOutputBong = (row.CntOutputBong || 0) > 0;
 
     if (hasOutput || hasOutputBong) {
-      // Sudah ada data output → tolak delete
-      await tx.rollback();
+      // sudah ada data output → tolak delete
       throw badReq('Tidak dapat menghapus Nomor Produksi ini karena memiliki data output.');
     }
 
     // -------------------------------------------------------
-    // 1. LANJUT DELETE INPUT + PARTIAL + RESET DATEUSAGE
+    // 3) LANJUT DELETE INPUT + PARTIAL + RESET DATEUSAGE
+    //    (SQL BESAR kamu tetap)
     // -------------------------------------------------------
     const req = new sql.Request(tx);
     req.input('NoProduksi', sql.VarChar(50), noProduksi);
 
     const sqlDelete = `
-    ---------------------------------------------------------
-    -- TABLE VARIABLE UNTUK MENYIMPAN KEY YANG TERDAMPAK
-    ---------------------------------------------------------
-    DECLARE @BBKeys TABLE (
-      NoBahanBaku varchar(50),
-      NoPallet    varchar(50),
-      NoSak       varchar(50)
-    );
+      ---------------------------------------------------------
+      -- TABLE VARIABLE UNTUK MENYIMPAN KEY YANG TERDAMPAK
+      ---------------------------------------------------------
+      DECLARE @BBKeys TABLE (
+        NoBahanBaku varchar(50),
+        NoPallet    varchar(50),
+        NoSak       varchar(50)
+      );
 
-    DECLARE @BrokerKeys TABLE (
-      NoBroker varchar(50),
-      NoSak    varchar(50)
-    );
+      DECLARE @BrokerKeys TABLE (
+        NoBroker varchar(50),
+        NoSak    varchar(50)
+      );
 
-    DECLARE @GilinganKeys TABLE (
-      NoGilingan varchar(50)
-    );
+      DECLARE @GilinganKeys TABLE ( NoGilingan varchar(50) );
 
-    DECLARE @MixerKeys TABLE (
-      NoMixer varchar(50),
-      NoSak   varchar(50)
-    );
+      DECLARE @MixerKeys TABLE (
+        NoMixer varchar(50),
+        NoSak   varchar(50)
+      );
 
-    DECLARE @RejectKeys TABLE (
-      NoReject varchar(50)
-    );
+      DECLARE @RejectKeys TABLE ( NoReject varchar(50) );
 
-    ---------------------------------------------------------
-    -- 1. BAHAN BAKU (FULL + PARTIAL)
-    ---------------------------------------------------------
-    INSERT INTO @BBKeys (NoBahanBaku, NoPallet, NoSak)
-    SELECT DISTINCT bb.NoBahanBaku, bb.NoPallet, bb.NoSak
-    FROM dbo.BahanBaku_d AS bb
-    WHERE EXISTS (
-            SELECT 1
-            FROM dbo.BrokerProduksiInputBB AS map
-            WHERE map.NoProduksi   = @NoProduksi
-              AND map.NoBahanBaku  = bb.NoBahanBaku
-              AND ISNULL(map.NoPallet,'') = ISNULL(bb.NoPallet,'')
-              AND map.NoSak        = bb.NoSak
-          )
-       OR EXISTS (
-            SELECT 1
-            FROM dbo.BrokerProduksiInputBBPartial AS mp
-            JOIN dbo.BahanBakuPartial AS bp
-              ON bp.NoBBPartial = mp.NoBBPartial
-            WHERE mp.NoProduksi   = @NoProduksi
-              AND bp.NoBahanBaku  = bb.NoBahanBaku
-              AND ISNULL(bp.NoPallet,'') = ISNULL(bb.NoPallet,'')
-              AND bp.NoSak        = bb.NoSak
-          );
+      ---------------------------------------------------------
+      -- 1. BAHAN BAKU (FULL + PARTIAL)
+      ---------------------------------------------------------
+      INSERT INTO @BBKeys (NoBahanBaku, NoPallet, NoSak)
+      SELECT DISTINCT bb.NoBahanBaku, bb.NoPallet, bb.NoSak
+      FROM dbo.BahanBaku_d AS bb
+      WHERE EXISTS (
+              SELECT 1
+              FROM dbo.BrokerProduksiInputBB AS map
+              WHERE map.NoProduksi   = @NoProduksi
+                AND map.NoBahanBaku  = bb.NoBahanBaku
+                AND ISNULL(map.NoPallet,'') = ISNULL(bb.NoPallet,'')
+                AND map.NoSak        = bb.NoSak
+            )
+         OR EXISTS (
+              SELECT 1
+              FROM dbo.BrokerProduksiInputBBPartial AS mp
+              JOIN dbo.BahanBakuPartial AS bp
+                ON bp.NoBBPartial = mp.NoBBPartial
+              WHERE mp.NoProduksi   = @NoProduksi
+                AND bp.NoBahanBaku  = bb.NoBahanBaku
+                AND ISNULL(bp.NoPallet,'') = ISNULL(bb.NoPallet,'')
+                AND bp.NoSak        = bb.NoSak
+            );
 
-    -- Hapus baris partial detail yang terhubung NoProduksi ini
-    DELETE bp
-    FROM dbo.BahanBakuPartial AS bp
-    JOIN dbo.BrokerProduksiInputBBPartial AS mp
-      ON mp.NoBBPartial = bp.NoBBPartial
-    WHERE mp.NoProduksi = @NoProduksi;
+      DELETE bp
+      FROM dbo.BahanBakuPartial AS bp
+      JOIN dbo.BrokerProduksiInputBBPartial AS mp
+        ON mp.NoBBPartial = bp.NoBBPartial
+      WHERE mp.NoProduksi = @NoProduksi;
 
-    -- Hapus mapping partial
-    DELETE FROM dbo.BrokerProduksiInputBBPartial
-    WHERE NoProduksi = @NoProduksi;
+      DELETE FROM dbo.BrokerProduksiInputBBPartial
+      WHERE NoProduksi = @NoProduksi;
 
-    -- Hapus mapping full
-    DELETE FROM dbo.BrokerProduksiInputBB
-    WHERE NoProduksi = @NoProduksi;
+      DELETE FROM dbo.BrokerProduksiInputBB
+      WHERE NoProduksi = @NoProduksi;
 
-    -- Reset DateUsage & IsPartial di BahanBaku_d untuk key yang terdampak
-    UPDATE bb
-    SET bb.DateUsage = NULL,
-        bb.IsPartial = CASE 
-          WHEN EXISTS (
-            SELECT 1
-            FROM dbo.BahanBakuPartial AS bp
-            WHERE bp.NoBahanBaku = bb.NoBahanBaku
-              AND ISNULL(bp.NoPallet,'') = ISNULL(bb.NoPallet,'')
-              AND bp.NoSak       = bb.NoSak
-          ) THEN 1 ELSE 0 END
-    FROM dbo.BahanBaku_d AS bb
-    JOIN @BBKeys AS k
-      ON k.NoBahanBaku = bb.NoBahanBaku
-     AND ISNULL(k.NoPallet,'') = ISNULL(bb.NoPallet,'')
-     AND k.NoSak       = bb.NoSak;
+      UPDATE bb
+      SET bb.DateUsage = NULL,
+          bb.IsPartial = CASE
+            WHEN EXISTS (
+              SELECT 1
+              FROM dbo.BahanBakuPartial AS bp
+              WHERE bp.NoBahanBaku = bb.NoBahanBaku
+                AND ISNULL(bp.NoPallet,'') = ISNULL(bb.NoPallet,'')
+                AND bp.NoSak = bb.NoSak
+            ) THEN 1 ELSE 0 END
+      FROM dbo.BahanBaku_d AS bb
+      JOIN @BBKeys AS k
+        ON k.NoBahanBaku = bb.NoBahanBaku
+       AND ISNULL(k.NoPallet,'') = ISNULL(bb.NoPallet,'')
+       AND k.NoSak = bb.NoSak;
 
-    ---------------------------------------------------------
-    -- 2. BROKER (FULL + PARTIAL)
-    ---------------------------------------------------------
-    INSERT INTO @BrokerKeys (NoBroker, NoSak)
-    SELECT DISTINCT b.NoBroker, b.NoSak
-    FROM dbo.Broker_d AS b
-    WHERE EXISTS (
-            SELECT 1
-            FROM dbo.BrokerProduksiInputBroker AS map
-            WHERE map.NoProduksi = @NoProduksi
-              AND map.NoBroker   = b.NoBroker
-              AND map.NoSak      = b.NoSak
-          )
-       OR EXISTS (
-            SELECT 1
-            FROM dbo.BrokerProduksiInputBrokerPartial AS mp
-            JOIN dbo.BrokerPartial AS bp
-              ON bp.NoBrokerPartial = mp.NoBrokerPartial
-            WHERE mp.NoProduksi = @NoProduksi
-              AND bp.NoBroker   = b.NoBroker
-              AND bp.NoSak      = b.NoSak
-          );
+      ---------------------------------------------------------
+      -- 2. BROKER (FULL + PARTIAL)
+      ---------------------------------------------------------
+      INSERT INTO @BrokerKeys (NoBroker, NoSak)
+      SELECT DISTINCT b.NoBroker, b.NoSak
+      FROM dbo.Broker_d AS b
+      WHERE EXISTS (
+              SELECT 1
+              FROM dbo.BrokerProduksiInputBroker AS map
+              WHERE map.NoProduksi = @NoProduksi
+                AND map.NoBroker   = b.NoBroker
+                AND map.NoSak      = b.NoSak
+            )
+         OR EXISTS (
+              SELECT 1
+              FROM dbo.BrokerProduksiInputBrokerPartial AS mp
+              JOIN dbo.BrokerPartial AS bp
+                ON bp.NoBrokerPartial = mp.NoBrokerPartial
+              WHERE mp.NoProduksi = @NoProduksi
+                AND bp.NoBroker   = b.NoBroker
+                AND bp.NoSak      = b.NoSak
+            );
 
-    -- Hapus detail partial
-    DELETE bp
-    FROM dbo.BrokerPartial AS bp
-    JOIN dbo.BrokerProduksiInputBrokerPartial AS mp
-      ON mp.NoBrokerPartial = bp.NoBrokerPartial
-    WHERE mp.NoProduksi = @NoProduksi;
+      DELETE bp
+      FROM dbo.BrokerPartial AS bp
+      JOIN dbo.BrokerProduksiInputBrokerPartial AS mp
+        ON mp.NoBrokerPartial = bp.NoBrokerPartial
+      WHERE mp.NoProduksi = @NoProduksi;
 
-    -- Hapus mapping partial
-    DELETE FROM dbo.BrokerProduksiInputBrokerPartial
-    WHERE NoProduksi = @NoProduksi;
+      DELETE FROM dbo.BrokerProduksiInputBrokerPartial
+      WHERE NoProduksi = @NoProduksi;
 
-    -- Hapus mapping full
-    DELETE FROM dbo.BrokerProduksiInputBroker
-    WHERE NoProduksi = @NoProduksi;
+      DELETE FROM dbo.BrokerProduksiInputBroker
+      WHERE NoProduksi = @NoProduksi;
 
-    -- Reset DateUsage & IsPartial di Broker_d
-    UPDATE b
-    SET b.DateUsage = NULL,
-        b.IsPartial = CASE 
-          WHEN EXISTS (
-            SELECT 1
-            FROM dbo.BrokerPartial AS bp
-            WHERE bp.NoBroker = b.NoBroker
-              AND bp.NoSak    = b.NoSak
-          ) THEN 1 ELSE 0 END
-    FROM dbo.Broker_d AS b
-    JOIN @BrokerKeys AS k
-      ON k.NoBroker = b.NoBroker
-     AND k.NoSak    = b.NoSak;
+      UPDATE b
+      SET b.DateUsage = NULL,
+          b.IsPartial = CASE
+            WHEN EXISTS (
+              SELECT 1 FROM dbo.BrokerPartial AS bp
+              WHERE bp.NoBroker = b.NoBroker AND bp.NoSak = b.NoSak
+            ) THEN 1 ELSE 0 END
+      FROM dbo.Broker_d AS b
+      JOIN @BrokerKeys AS k
+        ON k.NoBroker = b.NoBroker AND k.NoSak = b.NoSak;
 
-    ---------------------------------------------------------
-    -- 3. WASHING (TIDAK ADA PARTIAL)
-    ---------------------------------------------------------
-    UPDATE w
-    SET w.DateUsage = NULL
-    FROM dbo.Washing_d AS w
-    JOIN dbo.BrokerProduksiInputWashing AS map
-      ON map.NoWashing = w.NoWashing
-     AND map.NoSak     = w.NoSak
-    WHERE map.NoProduksi = @NoProduksi;
+      ---------------------------------------------------------
+      -- 3. WASHING (FULL ONLY)
+      ---------------------------------------------------------
+      UPDATE w
+      SET w.DateUsage = NULL
+      FROM dbo.Washing_d AS w
+      JOIN dbo.BrokerProduksiInputWashing AS map
+        ON map.NoWashing = w.NoWashing AND map.NoSak = w.NoSak
+      WHERE map.NoProduksi = @NoProduksi;
 
-    DELETE FROM dbo.BrokerProduksiInputWashing
-    WHERE NoProduksi = @NoProduksi;
+      DELETE FROM dbo.BrokerProduksiInputWashing
+      WHERE NoProduksi = @NoProduksi;
 
-    ---------------------------------------------------------
-    -- 4. CRUSHER (TIDAK ADA PARTIAL)
-    ---------------------------------------------------------
-    UPDATE c
-    SET c.DateUsage = NULL
-    FROM dbo.Crusher AS c
-    JOIN dbo.BrokerProduksiInputCrusher AS map
-      ON map.NoCrusher = c.NoCrusher
-    WHERE map.NoProduksi = @NoProduksi;
+      ---------------------------------------------------------
+      -- 4. CRUSHER (FULL ONLY)
+      ---------------------------------------------------------
+      UPDATE c
+      SET c.DateUsage = NULL
+      FROM dbo.Crusher AS c
+      JOIN dbo.BrokerProduksiInputCrusher AS map
+        ON map.NoCrusher = c.NoCrusher
+      WHERE map.NoProduksi = @NoProduksi;
 
-    DELETE FROM dbo.BrokerProduksiInputCrusher
-    WHERE NoProduksi = @NoProduksi;
+      DELETE FROM dbo.BrokerProduksiInputCrusher
+      WHERE NoProduksi = @NoProduksi;
 
-    ---------------------------------------------------------
-    -- 5. GILINGAN (ADA PARTIAL)
-    ---------------------------------------------------------
-    INSERT INTO @GilinganKeys (NoGilingan)
-    SELECT DISTINCT g.NoGilingan
-    FROM dbo.Gilingan AS g
-    WHERE EXISTS (
-            SELECT 1
-            FROM dbo.BrokerProduksiInputGilingan AS map
-            WHERE map.NoProduksi = @NoProduksi
-              AND map.NoGilingan = g.NoGilingan
-          )
-       OR EXISTS (
-            SELECT 1
-            FROM dbo.BrokerProduksiInputGilinganPartial AS mp
-            JOIN dbo.GilinganPartial AS gp
-              ON gp.NoGilinganPartial = mp.NoGilinganPartial
-            WHERE mp.NoProduksi = @NoProduksi
-              AND gp.NoGilingan = g.NoGilingan
-          );
+      ---------------------------------------------------------
+      -- 5. GILINGAN (ADA PARTIAL)
+      ---------------------------------------------------------
+      INSERT INTO @GilinganKeys (NoGilingan)
+      SELECT DISTINCT g.NoGilingan
+      FROM dbo.Gilingan AS g
+      WHERE EXISTS (
+              SELECT 1 FROM dbo.BrokerProduksiInputGilingan AS map
+              WHERE map.NoProduksi = @NoProduksi AND map.NoGilingan = g.NoGilingan
+            )
+         OR EXISTS (
+              SELECT 1
+              FROM dbo.BrokerProduksiInputGilinganPartial AS mp
+              JOIN dbo.GilinganPartial AS gp
+                ON gp.NoGilinganPartial = mp.NoGilinganPartial
+              WHERE mp.NoProduksi = @NoProduksi AND gp.NoGilingan = g.NoGilingan
+            );
 
-    -- Hapus detail partial
-    DELETE gp
-    FROM dbo.GilinganPartial AS gp
-    JOIN dbo.BrokerProduksiInputGilinganPartial AS mp
-      ON mp.NoGilinganPartial = gp.NoGilinganPartial
-    WHERE mp.NoProduksi = @NoProduksi;
+      DELETE gp
+      FROM dbo.GilinganPartial AS gp
+      JOIN dbo.BrokerProduksiInputGilinganPartial AS mp
+        ON mp.NoGilinganPartial = gp.NoGilinganPartial
+      WHERE mp.NoProduksi = @NoProduksi;
 
-    -- Hapus mapping partial
-    DELETE FROM dbo.BrokerProduksiInputGilinganPartial
-    WHERE NoProduksi = @NoProduksi;
+      DELETE FROM dbo.BrokerProduksiInputGilinganPartial
+      WHERE NoProduksi = @NoProduksi;
 
-    -- Hapus mapping full
-    DELETE FROM dbo.BrokerProduksiInputGilingan
-    WHERE NoProduksi = @NoProduksi;
+      DELETE FROM dbo.BrokerProduksiInputGilingan
+      WHERE NoProduksi = @NoProduksi;
 
-    -- Reset DateUsage & IsPartial di Gilingan
-    UPDATE g
-    SET g.DateUsage = NULL,
-        g.IsPartial = CASE 
-          WHEN EXISTS (
-            SELECT 1 FROM dbo.GilinganPartial AS gp
-            WHERE gp.NoGilingan = g.NoGilingan
-          ) THEN 1 ELSE 0 END
-    FROM dbo.Gilingan AS g
-    JOIN @GilinganKeys AS k
-      ON k.NoGilingan = g.NoGilingan;
+      UPDATE g
+      SET g.DateUsage = NULL,
+          g.IsPartial = CASE
+            WHEN EXISTS (SELECT 1 FROM dbo.GilinganPartial gp WHERE gp.NoGilingan = g.NoGilingan)
+            THEN 1 ELSE 0 END
+      FROM dbo.Gilingan AS g
+      JOIN @GilinganKeys AS k ON k.NoGilingan = g.NoGilingan;
 
-    ---------------------------------------------------------
-    -- 6. MIXER (ADA PARTIAL)
-    ---------------------------------------------------------
-    INSERT INTO @MixerKeys (NoMixer, NoSak)
-    SELECT DISTINCT m.NoMixer, m.NoSak
-    FROM dbo.Mixer_d AS m
-    WHERE EXISTS (
-            SELECT 1
-            FROM dbo.BrokerProduksiInputMixer AS map
-            WHERE map.NoProduksi = @NoProduksi
-              AND map.NoMixer    = m.NoMixer
-              AND map.NoSak      = m.NoSak
-          )
-       OR EXISTS (
-            SELECT 1
-            FROM dbo.BrokerProduksiInputMixerPartial AS mp
-            JOIN dbo.MixerPartial AS mpd
-              ON mpd.NoMixerPartial = mp.NoMixerPartial
-            WHERE mp.NoProduksi = @NoProduksi
-              AND mpd.NoMixer   = m.NoMixer
-              AND mpd.NoSak     = m.NoSak
-          );
+      ---------------------------------------------------------
+      -- 6. MIXER (ADA PARTIAL)
+      ---------------------------------------------------------
+      INSERT INTO @MixerKeys (NoMixer, NoSak)
+      SELECT DISTINCT m.NoMixer, m.NoSak
+      FROM dbo.Mixer_d AS m
+      WHERE EXISTS (
+              SELECT 1 FROM dbo.BrokerProduksiInputMixer AS map
+              WHERE map.NoProduksi = @NoProduksi AND map.NoMixer = m.NoMixer AND map.NoSak = m.NoSak
+            )
+         OR EXISTS (
+              SELECT 1
+              FROM dbo.BrokerProduksiInputMixerPartial AS mp
+              JOIN dbo.MixerPartial AS mpd
+                ON mpd.NoMixerPartial = mp.NoMixerPartial
+              WHERE mp.NoProduksi = @NoProduksi AND mpd.NoMixer = m.NoMixer AND mpd.NoSak = m.NoSak
+            );
 
-    -- Hapus detail partial
-    DELETE mpd
-    FROM dbo.MixerPartial AS mpd
-    JOIN dbo.BrokerProduksiInputMixerPartial AS mp
-      ON mp.NoMixerPartial = mpd.NoMixerPartial
-    WHERE mp.NoProduksi = @NoProduksi;
+      DELETE mpd
+      FROM dbo.MixerPartial AS mpd
+      JOIN dbo.BrokerProduksiInputMixerPartial AS mp
+        ON mp.NoMixerPartial = mpd.NoMixerPartial
+      WHERE mp.NoProduksi = @NoProduksi;
 
-    -- Hapus mapping partial
-    DELETE FROM dbo.BrokerProduksiInputMixerPartial
-    WHERE NoProduksi = @NoProduksi;
+      DELETE FROM dbo.BrokerProduksiInputMixerPartial
+      WHERE NoProduksi = @NoProduksi;
 
-    -- Hapus mapping full
-    DELETE FROM dbo.BrokerProduksiInputMixer
-    WHERE NoProduksi = @NoProduksi;
+      DELETE FROM dbo.BrokerProduksiInputMixer
+      WHERE NoProduksi = @NoProduksi;
 
-    -- Reset DateUsage & IsPartial di Mixer_d
-    UPDATE m
-    SET m.DateUsage = NULL,
-        m.IsPartial = CASE 
-          WHEN EXISTS (
-            SELECT 1 FROM dbo.MixerPartial AS mpd
-            WHERE mpd.NoMixer = m.NoMixer
-              AND mpd.NoSak   = m.NoSak
-          ) THEN 1 ELSE 0 END
-    FROM dbo.Mixer_d AS m
-    JOIN @MixerKeys AS k
-      ON k.NoMixer = m.NoMixer
-     AND k.NoSak   = m.NoSak;
+      UPDATE m
+      SET m.DateUsage = NULL,
+          m.IsPartial = CASE
+            WHEN EXISTS (
+              SELECT 1 FROM dbo.MixerPartial mpd
+              WHERE mpd.NoMixer = m.NoMixer AND mpd.NoSak = m.NoSak
+            ) THEN 1 ELSE 0 END
+      FROM dbo.Mixer_d AS m
+      JOIN @MixerKeys AS k ON k.NoMixer = m.NoMixer AND k.NoSak = m.NoSak;
 
-    ---------------------------------------------------------
-    -- 7. REJECT (ADA PARTIAL)
-    ---------------------------------------------------------
-    INSERT INTO @RejectKeys (NoReject)
-    SELECT DISTINCT r.NoReject
-    FROM dbo.RejectV2 AS r
-    WHERE EXISTS (
-            SELECT 1
-            FROM dbo.BrokerProduksiInputReject AS map
-            WHERE map.NoProduksi = @NoProduksi
-              AND map.NoReject   = r.NoReject
-          )
-       OR EXISTS (
-            SELECT 1
-            FROM dbo.BrokerProduksiInputRejectPartial AS mp
-            JOIN dbo.RejectV2Partial AS rp
-              ON rp.NoRejectPartial = mp.NoRejectPartial
-            WHERE mp.NoProduksi = @NoProduksi
-              AND rp.NoReject   = r.NoReject
-          );
+      ---------------------------------------------------------
+      -- 7. REJECT (ADA PARTIAL)
+      ---------------------------------------------------------
+      INSERT INTO @RejectKeys (NoReject)
+      SELECT DISTINCT r.NoReject
+      FROM dbo.RejectV2 AS r
+      WHERE EXISTS (
+              SELECT 1 FROM dbo.BrokerProduksiInputReject AS map
+              WHERE map.NoProduksi = @NoProduksi AND map.NoReject = r.NoReject
+            )
+         OR EXISTS (
+              SELECT 1
+              FROM dbo.BrokerProduksiInputRejectPartial AS mp
+              JOIN dbo.RejectV2Partial AS rp
+                ON rp.NoRejectPartial = mp.NoRejectPartial
+              WHERE mp.NoProduksi = @NoProduksi AND rp.NoReject = r.NoReject
+            );
 
-    -- Hapus detail partial
-    DELETE rp
-    FROM dbo.RejectV2Partial AS rp
-    JOIN dbo.BrokerProduksiInputRejectPartial AS mp
-      ON mp.NoRejectPartial = rp.NoRejectPartial
-    WHERE mp.NoProduksi = @NoProduksi;
+      DELETE rp
+      FROM dbo.RejectV2Partial AS rp
+      JOIN dbo.BrokerProduksiInputRejectPartial AS mp
+        ON mp.NoRejectPartial = rp.NoRejectPartial
+      WHERE mp.NoProduksi = @NoProduksi;
 
-    -- Hapus mapping partial
-    DELETE FROM dbo.BrokerProduksiInputRejectPartial
-    WHERE NoProduksi = @NoProduksi;
+      DELETE FROM dbo.BrokerProduksiInputRejectPartial
+      WHERE NoProduksi = @NoProduksi;
 
-    -- Hapus mapping full
-    DELETE FROM dbo.BrokerProduksiInputReject
-    WHERE NoProduksi = @NoProduksi;
+      DELETE FROM dbo.BrokerProduksiInputReject
+      WHERE NoProduksi = @NoProduksi;
 
-    -- Reset DateUsage & IsPartial di RejectV2
-    UPDATE r
-    SET r.DateUsage = NULL,
-        r.IsPartial = CASE 
-          WHEN EXISTS (
-            SELECT 1 FROM dbo.RejectV2Partial AS rp
-            WHERE rp.NoReject = r.NoReject
-          ) THEN 1 ELSE 0 END
-    FROM dbo.RejectV2 AS r
-    JOIN @RejectKeys AS k
-      ON k.NoReject = r.NoReject;
+      UPDATE r
+      SET r.DateUsage = NULL,
+          r.IsPartial = CASE
+            WHEN EXISTS (SELECT 1 FROM dbo.RejectV2Partial rp WHERE rp.NoReject = r.NoReject)
+            THEN 1 ELSE 0 END
+      FROM dbo.RejectV2 AS r
+      JOIN @RejectKeys AS k ON k.NoReject = r.NoReject;
 
-    ---------------------------------------------------------
-    -- 8. TERAKHIR: HAPUS HEADER BROKERPRODUKSI_H
-    ---------------------------------------------------------
-    DELETE FROM dbo.BrokerProduksi_h
-    WHERE NoProduksi = @NoProduksi;
-
+      ---------------------------------------------------------
+      -- 8. TERAKHIR: HAPUS HEADER
+      ---------------------------------------------------------
+      DELETE FROM dbo.BrokerProduksi_h
+      WHERE NoProduksi = @NoProduksi;
     `;
 
     await req.query(sqlDelete);
@@ -1261,6 +1372,7 @@ async function deleteBrokerProduksi(noProduksi) {
     throw e;
   }
 }
+
 
 
 
@@ -1657,33 +1769,59 @@ async function validateLabel(labelCode) {
  *   rejectPartialNew:   [{ noReject, berat }]
  * }
  */
-
 async function upsertInputsAndPartials(noProduksi, payload) {
+  if (!noProduksi) throw badReq('noProduksi wajib');
+
   const pool = await poolPromise;
   const tx = new sql.Transaction(pool);
 
   const norm = (a) => (Array.isArray(a) ? a : []);
 
   const body = {
-    broker: norm(payload.broker),
-    bb: norm(payload.bb),
-    washing: norm(payload.washing),
-    crusher: norm(payload.crusher),
-    gilingan: norm(payload.gilingan),
-    mixer: norm(payload.mixer),
-    reject: norm(payload.reject),
+    broker: norm(payload?.broker),
+    bb: norm(payload?.bb),
+    washing: norm(payload?.washing),
+    crusher: norm(payload?.crusher),
+    gilingan: norm(payload?.gilingan),
+    mixer: norm(payload?.mixer),
+    reject: norm(payload?.reject),
 
-    bbPartialNew: norm(payload.bbPartialNew),
-    brokerPartialNew: norm(payload.brokerPartialNew),
-    gilinganPartialNew: norm(payload.gilinganPartialNew),
-    mixerPartialNew: norm(payload.mixerPartialNew),
-    rejectPartialNew: norm(payload.rejectPartialNew),
+    bbPartialNew: norm(payload?.bbPartialNew),
+    brokerPartialNew: norm(payload?.brokerPartialNew),
+    gilinganPartialNew: norm(payload?.gilinganPartialNew),
+    mixerPartialNew: norm(payload?.mixerPartialNew),
+    rejectPartialNew: norm(payload?.rejectPartialNew),
   };
 
   try {
-    await tx.begin();
+    // IMPORTANT: gunakan serializable biar konsisten + cegah race
+    await tx.begin(sql.ISOLATION_LEVEL.SERIALIZABLE);
 
-    // 1) Create partials + map them to produksi
+    // -------------------------------------------------------
+    // 0) AMBIL docDateOnly DARI CONFIG (LOCK HEADER ROW)
+    //    Ini menggantikan SELECT BrokerProduksi_h manual
+    // -------------------------------------------------------
+    const { docDateOnly } = await loadDocDateOnlyFromConfig({
+      entityKey: 'brokerProduksi', // pastikan key ini ada di config tutup-transaksi
+      codeValue: noProduksi,
+      runner: tx,
+      useLock: true,               // UPSERT = write action
+      throwIfNotFound: true,
+    });
+
+    // -------------------------------------------------------
+    // 1) GUARD TUTUP TRANSAKSI (UPSERT INPUT = WRITE)
+    // -------------------------------------------------------
+    await assertNotLocked({
+      date: docDateOnly,
+      runner: tx, // WAJIB tx
+      action: 'upsert BrokerProduksi inputs/partials',
+      useLock: true, // write action
+    });
+
+    // -------------------------------------------------------
+    // 2) Create partials + map them to produksi
+    // -------------------------------------------------------
     const partials = await _insertPartialsWithTx(tx, noProduksi, {
       bbPartialNew: body.bbPartialNew,
       brokerPartialNew: body.brokerPartialNew,
@@ -1692,7 +1830,9 @@ async function upsertInputsAndPartials(noProduksi, payload) {
       rejectPartialNew: body.rejectPartialNew,
     });
 
-    // 2) Attach existing inputs (idempotent)
+    // -------------------------------------------------------
+    // 3) Attach existing inputs (idempotent)
+    // -------------------------------------------------------
     const attachments = await _insertInputsWithTx(tx, noProduksi, {
       broker: body.broker,
       bb: body.bb,
@@ -1705,24 +1845,26 @@ async function upsertInputsAndPartials(noProduksi, payload) {
 
     await tx.commit();
 
-    // Calculate totals
+    // ===== response kamu tetap =====
     const totalInserted = Object.values(attachments).reduce((sum, item) => sum + (item.inserted || 0), 0);
     const totalSkipped = Object.values(attachments).reduce((sum, item) => sum + (item.skipped || 0), 0);
     const totalInvalid = Object.values(attachments).reduce((sum, item) => sum + (item.invalid || 0), 0);
-    const totalPartialsCreated = Object.values(partials.summary).reduce((sum, item) => sum + (item.created || 0), 0);
 
-    // Determine if there are any issues
+    const totalPartialsCreated = Object.values(partials.summary || {}).reduce(
+      (sum, item) => sum + (item.created || 0),
+      0
+    );
+
     const hasInvalid = totalInvalid > 0;
     const hasNoSuccess = totalInserted === 0 && totalPartialsCreated === 0;
 
-    // Build detailed response
     const response = {
       noProduksi,
       summary: {
         totalInserted,
         totalSkipped,
         totalInvalid,
-        totalPartialsCreated
+        totalPartialsCreated,
       },
       details: {
         inputs: _buildInputDetails(attachments, body),
@@ -1737,12 +1879,12 @@ async function upsertInputsAndPartials(noProduksi, payload) {
       data: response,
     };
   } catch (err) {
-    try {
-      await tx.rollback();
-    } catch {}
+    try { await tx.rollback(); } catch {}
     throw err;
   }
 }
+
+
 
 // Helper function to build detailed input information
 function _buildInputDetails(attachments, requestBody) {
@@ -2697,6 +2839,8 @@ async function _insertInputsWithTx(tx, noProduksi, lists) {
 
 //DELETE INPUT AND PARTIAL SERVICE
 async function deleteInputsAndPartials(noProduksi, payload) {
+  if (!noProduksi) throw badReq('noProduksi wajib');
+
   const pool = await poolPromise;
   const tx = new sql.Transaction(pool);
 
@@ -2719,9 +2863,31 @@ async function deleteInputsAndPartials(noProduksi, payload) {
   };
 
   try {
-    await tx.begin();
+    await tx.begin(sql.ISOLATION_LEVEL.SERIALIZABLE);
 
-    // 1) Delete partials mappings
+    // -------------------------------------------------------
+    // 0) AMBIL HEADER + LOCK ROW → untuk dapat TglProduksi
+    // -------------------------------------------------------
+    const { docDateOnly } = await loadDocDateOnlyFromConfig({
+      entityKey: 'brokerProduksi', // pastikan key ini ada di config tutup-transaksi
+      codeValue: noProduksi,
+      runner: tx,
+      useLock: true,               // DELETE = write action, sebaiknya lock
+      throwIfNotFound: true,
+    });
+
+    // -------------------------------------------------------
+    // 1) GUARD TUTUP TRANSAKSI (DELETE INPUT = WRITE)
+    // -------------------------------------------------------
+    await assertNotLocked({
+      date: docDateOnly,
+      runner: tx, // WAJIB tx
+      action: 'delete BrokerProduksi inputs/partials',
+      useLock: true,
+    });
+    // -------------------------------------------------------
+    // 2) Delete partials mappings + (biasanya juga delete row partial)
+    // -------------------------------------------------------
     const partialsResult = await _deletePartialsWithTx(tx, noProduksi, {
       bbPartial: body.bbPartial,
       brokerPartial: body.brokerPartial,
@@ -2730,7 +2896,9 @@ async function deleteInputsAndPartials(noProduksi, payload) {
       rejectPartial: body.rejectPartial,
     });
 
-    // 2) Delete inputs mappings
+    // -------------------------------------------------------
+    // 3) Delete inputs mappings
+    // -------------------------------------------------------
     const inputsResult = await _deleteInputsWithTx(tx, noProduksi, {
       broker: body.broker,
       bb: body.bb,
@@ -2743,7 +2911,7 @@ async function deleteInputsAndPartials(noProduksi, payload) {
 
     await tx.commit();
 
-    // Calculate totals
+    // ===== response kamu tetap =====
     const totalDeleted = Object.values(inputsResult).reduce((sum, item) => sum + (item.deleted || 0), 0);
     const totalNotFound = Object.values(inputsResult).reduce((sum, item) => sum + (item.notFound || 0), 0);
     const totalPartialsDeleted = Object.values(partialsResult.summary).reduce((sum, item) => sum + (item.deleted || 0), 0);
@@ -2758,7 +2926,7 @@ async function deleteInputsAndPartials(noProduksi, payload) {
         totalDeleted,
         totalNotFound,
         totalPartialsDeleted,
-        totalPartialsNotFound
+        totalPartialsNotFound,
       },
       details: {
         inputs: _buildDeleteInputDetails(inputsResult, body),
@@ -2772,12 +2940,11 @@ async function deleteInputsAndPartials(noProduksi, payload) {
       data: response,
     };
   } catch (err) {
-    try {
-      await tx.rollback();
-    } catch {}
+    try { await tx.rollback(); } catch {}
     throw err;
   }
 }
+
 
 // Helper to build delete input details
 function _buildDeleteInputDetails(results, requestBody) {

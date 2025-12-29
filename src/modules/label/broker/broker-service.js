@@ -259,14 +259,23 @@ exports.createBrokerCascade = async (payload) => {
       useLock: true,
     });
 
-    // 0) Auto-isi Blok & IdLokasi dari kode produksi
-    if (!header.Blok || !header.IdLokasi) {
+    // 0) Auto-isi Blok & IdLokasi dari kode produksi / bongkar susun
+    const needBlok = header.Blok == null || String(header.Blok).trim() === '';
+    const needLokasi = header.IdLokasi == null; // lebih aman daripada !header.IdLokasi
+
+    if (needBlok || needLokasi) {
+      let lokasi = null;
+
       if (hasProduksi) {
-        const lokasi = await getBlokLokasiFromKodeProduksi({ kode: NoProduksi, runner: tx });
-        if (lokasi) {
-          if (!header.Blok) header.Blok = lokasi.Blok;
-          if (!header.IdLokasi) header.IdLokasi = lokasi.IdLokasi;
-        }
+        lokasi = await getBlokLokasiFromKodeProduksi({ kode: NoProduksi, runner: tx });
+      } else if (hasBongkar) {
+        // BG juga lewat fungsi yang sama, karena config kamu STATIC mapping BG.
+        lokasi = await getBlokLokasiFromKodeProduksi({ kode: NoBongkarSusun, runner: tx });
+      }
+
+      if (lokasi) {
+        if (needBlok) header.Blok = lokasi.Blok;
+        if (needLokasi) header.IdLokasi = lokasi.IdLokasi;
       }
     }
 

@@ -177,20 +177,45 @@ exports.createWashingCascade = async (payload) => {
       useLock: true,
     });
 
-    // 0) Auto-isi Blok & IdLokasi dari kode produksi (jika header belum isi)
-    if (!header.Blok || !header.IdLokasi) {
-      if (hasProduksi) {
-        const lokasi = await getBlokLokasiFromKodeProduksi({
-          kode: NoProduksi,
-          runner: tx,
-        });
+  // 0) Auto-isi Blok & IdLokasi dari sumber kode (produksi / bongkar susun)
+const needBlok = header.Blok == null || String(header.Blok).trim() === '';
+const needLokasi = header.IdLokasi == null;
 
-        if (lokasi) {
-          if (!header.Blok) header.Blok = lokasi.Blok;
-          if (!header.IdLokasi) header.IdLokasi = lokasi.IdLokasi;
-        }
-      }
-    }
+if (needBlok || needLokasi) {
+  const kodeRef = hasProduksi
+    ? NoProduksi
+    : (hasBongkar ? NoBongkarSusun : null);
+
+  console.log('[WASHING][AUTO-LOKASI] hasProduksi=', hasProduksi,
+              'hasBongkar=', hasBongkar,
+              'NoProduksi=', NoProduksi,
+              'NoBongkarSusun=', NoBongkarSusun,
+              'kodeRef=', kodeRef,
+              'needBlok=', needBlok,
+              'needLokasi=', needLokasi);
+
+  let lokasi = null;
+
+  if (kodeRef) {
+    lokasi = await getBlokLokasiFromKodeProduksi({
+      kode: kodeRef,      // ✅ PENTING: pakai "kode"
+      runner: tx,
+    });
+  }
+
+  console.log('[WASHING][AUTO-LOKASI] lokasi(result)=', lokasi);
+
+  if (lokasi) {
+    if (needBlok) header.Blok = lokasi.Blok;
+    if (needLokasi) header.IdLokasi = lokasi.IdLokasi;
+  }
+
+  console.log('[WASHING][AUTO-LOKASI] header(after)=', {
+    Blok: header.Blok ?? null,
+    IdLokasi: header.IdLokasi ?? null,
+  });
+}
+
 
     // 1) Generate NoWashing (abaikan NoWashing dari client kalau ada)
     const generatedNo = await generateNextNoWashing(tx, 'B.', 10);

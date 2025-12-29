@@ -84,6 +84,9 @@ const rejectTypeRoutes = require('./modules/master-reject/reject-master-route');
 const productionSortirRejectRoutes = require('./modules/production/sortir-reject/sortir-reject-route');
 
 
+const updateRoutes = require('./modules/update/update-routes');
+
+
 
 
 const app = express();
@@ -100,6 +103,7 @@ app.get('/health', (req, res) => {
     timestamp: new Date().toISOString()
   });
 });
+app.use('/api/update', updateRoutes);
 
 // 📌 API Routes
 app.use('/api/auth', authRoutes);
@@ -165,6 +169,7 @@ app.use('/api/reject-type', rejectTypeRoutes);
 
 
 app.use('/api/production', productionSortirRejectRoutes);
+
 
 
 

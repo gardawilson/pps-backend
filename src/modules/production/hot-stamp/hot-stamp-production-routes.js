@@ -13,4 +13,63 @@ router.get(
   hotStampingController.getProduksiByDate
 );
 
+router.get(
+  '/hot-stamp',
+  verifyToken,
+  hotStampingController.getAllProduksi
+);
+
+router.post(
+  '/hot-stamp',
+  verifyToken,
+  hotStampingController.createProduksi
+);
+
+
+router.put(
+  '/hot-stamp/:noProduksi',
+  verifyToken,
+  hotStampingController.updateProduksi
+);
+
+
+router.delete(
+  '/hot-stamp/:noProduksi',
+  verifyToken,
+  hotStampingController.deleteProduksi
+);
+
+
+router.get(
+  '/hot-stamp/:noProduksi/inputs',
+  verifyToken,
+  hotStampingController.getInputsByNoProduksi
+);
+
+
+router.get(
+  '/hot-stamp/validate-fwip/:labelCode',
+  verifyToken,
+  hotStampingController.validateFwipLabel
+);
+
+
+router.get(
+  '/hot-stamp/validate-cabinet-material',
+  verifyToken,
+  hotStampingController.validateCabinetMaterial
+);
+
+router.get('/hot-stamp/cabinet-materials', hotStampingController.getMasterCabinetMaterials);
+
+
+router.post('/hot-stamp/:noProduksi/inputs', verifyToken, hotStampingController.upsertInputs);
+
+// DELETE inputs & partials
+router.delete(
+  '/hot-stamp/:noProduksi/inputs',
+  verifyToken,
+  hotStampingController.deleteInputsAndPartials
+);
+
 module.exports = router;

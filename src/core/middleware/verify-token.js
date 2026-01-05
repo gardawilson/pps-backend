@@ -5,9 +5,6 @@ const secretKey = process.env.SECRET_KEY;
 
 // Middleware untuk memverifikasi token dan mengekstrak data user
 const verifyToken = (req, res, next) => {
-  console.log('🔒 verifyToken hit:', req.method, req.originalUrl);
-  console.log('✅ UPDATE ROUTES LOADED FROM:', __filename);
-
 
   const token = req.header('Authorization')?.replace('Bearer ', '');
 

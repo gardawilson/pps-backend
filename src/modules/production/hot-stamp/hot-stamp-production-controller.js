@@ -272,101 +272,6 @@ async function validateFwipLabel(req, res) {
 }
 
 
-async function validateCabinetMaterial(req, res) {
-  const idRaw = req.query.id;
-  const itemCodeRaw = req.query.itemCode;
-  const idWarehouseRaw = req.query.idWarehouse;
-
-  const id = (idRaw === undefined || idRaw === null || idRaw === '') ? null : Number(idRaw);
-  const itemCode = (typeof itemCodeRaw === 'string' && itemCodeRaw.trim()) ? itemCodeRaw.trim() : null;
-  const idWarehouse = (idWarehouseRaw === undefined || idWarehouseRaw === null || idWarehouseRaw === '')
-    ? null
-    : Number(idWarehouseRaw);
-
-  if ((id === null || Number.isNaN(id)) && !itemCode) {
-    return res.status(400).json({
-      success: false,
-      message: 'Provide ?id=<IdCabinetMaterial> OR ?itemCode=<ItemCode>',
-    });
-  }
-
-  if (idWarehouse === null || Number.isNaN(idWarehouse)) {
-    return res.status(400).json({
-      success: false,
-      message: 'Provide ?idWarehouse=<IdWarehouse>',
-    });
-  }
-
-  try {
-    const result = await hotStampingService.validateCabinetMaterialStock({
-      id,
-      itemCode,
-      idWarehouse,
-    });
-
-    if (!result.found) {
-      return res.status(404).json({
-        success: false,
-        message: 'Cabinet material not found',
-        tableName: result.tableName,
-      });
-    }
-
-    return res.status(200).json({
-      success: true,
-      message: 'Cabinet material validated successfully',
-      tableName: result.tableName,
-      totalRecords: result.count,
-      data: result.data,
-    });
-  } catch (e) {
-    console.error('[validateCabinetMaterial]', e);
-    return res.status(500).json({
-      success: false,
-      message: 'Internal Server Error',
-      error: e.message,
-    });
-  }
-}
-
-
-async function getMasterCabinetMaterials(req, res) {
-  const idWarehouseRaw = req.query.idWarehouse;
-
-  const idWarehouse = (idWarehouseRaw === undefined || idWarehouseRaw === null || idWarehouseRaw === '')
-    ? null
-    : Number(idWarehouseRaw);
-
-  if (idWarehouse === null || Number.isNaN(idWarehouse)) {
-    return res.status(400).json({
-      success: false,
-      message: 'Query parameter idWarehouse is required',
-      example: '/api/production/hot-stamp/cabinet-materials?idWarehouse=5',
-    });
-  }
-
-  try {
-    const result = await hotStampingService.getMasterCabinetMaterials({
-      idWarehouse,
-    });
-
-    return res.status(200).json({
-      success: true,
-      message: `Found ${result.count} cabinet materials`,
-      totalRecords: result.count,
-      data: result.data,
-    });
-  } catch (e) {
-    console.error('[getMasterCabinetMaterials]', e);
-    return res.status(500).json({
-      success: false,
-      message: 'Internal Server Error',
-      error: e.message,
-    });
-  }
-}
-
-
 // hot-stamping-controller.js
 async function upsertInputs(req, res) {
   const noProduksi = String(req.params.noProduksi || '').trim();
@@ -508,4 +413,4 @@ async function deleteInputsAndPartials(req, res) {
 }
 
 
-module.exports = { getProduksiByDate, getAllProduksi, createProduksi, updateProduksi, deleteProduksi, getInputsByNoProduksi, validateFwipLabel, validateCabinetMaterial, getMasterCabinetMaterials, upsertInputs, deleteInputsAndPartials };
+module.exports = { getProduksiByDate, getAllProduksi, createProduksi, updateProduksi, deleteProduksi, getInputsByNoProduksi, validateFwipLabel, upsertInputs, deleteInputsAndPartials };

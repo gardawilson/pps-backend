@@ -37,6 +37,12 @@ const crusherTypeRoutes = require('./modules/master-crusher/master-crusher-route
 const mstMesinRoutes = require('./modules/master-mesin/master-mesin-routes');
 const mstOperatorRoutes = require('./modules/master-operator/master-operator-routes');
 
+const mstCetakanRoutes = require('./modules/master-cetakan/master-cetakan-route');
+
+const mstWarnaRoutes = require('./modules/master-warna/master-warna-route');
+
+const mstFurnitureMaterialRoutes = require('./modules/master-furniture-material/master-furniture-material-route');
+
 
 const checkOverlapRoutes = require('./modules/production/overlap/production-overlap-routes');
 
@@ -132,6 +138,12 @@ app.use('/api/mst-mesin', mstMesinRoutes);
 app.use('/api/mst-operator', mstOperatorRoutes);
 
 app.use('/api/production', checkOverlapRoutes);
+
+app.use('/api/mst-cetakan', mstCetakanRoutes);
+
+app.use('/api/mst-warna', mstWarnaRoutes);
+
+app.use('/api/mst-furniture-material', mstFurnitureMaterialRoutes);
 
 app.use('/api/', labelGilinganRoutes);
 

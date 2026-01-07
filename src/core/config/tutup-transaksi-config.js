@@ -29,6 +29,11 @@ washingProduksi: {
     codeColumn: 'NoProduksi',
     dateColumn: 'TglProduksi',
   },
+    injectProduksi: {
+    table: 'dbo.InjectProduksi_h',
+    codeColumn: 'NoProduksi',
+    dateColumn: 'TglProduksi',
+  },
     hotStamping: {
     table: 'dbo.HotStamping_h',
     codeColumn: 'NoProduksi',

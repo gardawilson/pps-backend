@@ -39,6 +39,11 @@ washingProduksi: {
     codeColumn: 'NoProduksi',
     dateColumn: 'Tanggal',
   },
+    keyFitting: {
+    table: 'dbo.PasangKunci_h',
+    codeColumn: 'NoProduksi',
+    dateColumn: 'Tanggal',
+  },
   // tambah lainnya...
 };
 

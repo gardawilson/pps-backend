@@ -44,6 +44,11 @@ washingProduksi: {
     codeColumn: 'NoProduksi',
     dateColumn: 'Tanggal',
   },
+    spanner: {
+    table: 'dbo.Spanner_h',
+    codeColumn: 'NoProduksi',
+    dateColumn: 'Tanggal',
+  },
   // tambah lainnya...
 };
 

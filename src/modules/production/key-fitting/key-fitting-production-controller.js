@@ -225,43 +225,6 @@ async function getInputsByNoProduksi(req, res) {
   }
 }
 
-async function validateLabel(req, res) {
-  const labelCode = String(req.params.labelCode || '').trim();
-
-  if (!labelCode) {
-    return res.status(400).json({
-      success: false,
-      message: 'labelCode is required',
-    });
-  }
-
-  try {
-    const result = await keyFittingService.validateLabel(labelCode);
-
-    if (!result.found) {
-      return res.status(404).json({
-        success: false,
-        message: `FWIP label ${labelCode} not found or already used`,
-        tableName: result.tableName,
-      });
-    }
-
-    return res.status(200).json({
-      success: true,
-      message: 'FWIP label validated successfully',
-      tableName: result.tableName,
-      totalRecords: result.count,
-      data: result.data,
-    });
-  } catch (e) {
-    console.error('[keyfitting.validateLabel]', e);
-    return res.status(500).json({
-      success: false,
-      message: 'Internal Server Error',
-      error: e.message,
-    });
-  }
-}
 
 async function upsertInputs(req, res) {
   const noProduksi = String(req.params.noProduksi || '').trim();
@@ -394,4 +357,4 @@ async function deleteInputsAndPartials(req, res) {
   }
 }
 
-module.exports = { getAllProduksi, getProductionByDate, createProduksi, updateProduksi, deleteProduksi, getInputsByNoProduksi, validateLabel, upsertInputs, deleteInputsAndPartials };
+module.exports = { getAllProduksi, getProductionByDate, createProduksi, updateProduksi, deleteProduksi, getInputsByNoProduksi, upsertInputs, deleteInputsAndPartials };

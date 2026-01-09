@@ -89,6 +89,8 @@ const rejectTypeRoutes = require('./modules/master-reject/reject-master-route');
 
 const productionSortirRejectRoutes = require('./modules/production/sortir-reject/sortir-reject-route');
 
+const productionSharedRoutes = require('./modules/production/shared/production-shared-routes');
+
 
 const updateRoutes = require('./modules/update/update-routes');
 
@@ -181,6 +183,9 @@ app.use('/api/reject-type', rejectTypeRoutes);
 
 
 app.use('/api/production', productionSortirRejectRoutes);
+
+app.use('/api/production', productionSharedRoutes);
+
 
 
 

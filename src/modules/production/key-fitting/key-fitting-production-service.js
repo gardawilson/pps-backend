@@ -3,20 +3,26 @@ const { sql, poolPromise } = require('../../../core/config/db');
 
 const {
   resolveEffectiveDateForCreate,
-  toDateOnly,
-  assertNotLocked,     
-  formatYMD,
-  loadDocDateOnlyFromConfig
+  assertNotLocked,
+  loadDocDateOnlyFromConfig,
 } = require('../../../core/shared/tutup-transaksi-guard');
 
-// ✅ GET ALL (paged + search) - pola HotStamping
+const { generateNextCode } = require('../../../core/utils/sequence-code-helper');
+const {
+  parseJamToInt,
+  calcJamKerjaFromStartEnd,
+  badReq,
+} = require('../../../core/utils/jam-kerja-helper');
+
+// =====================================================
+// GET ALL (paged + search)
+// =====================================================
 async function getAllProduksi(page = 1, pageSize = 20, search = '') {
   const pool = await poolPromise;
 
   const offset = (Math.max(page, 1) - 1) * Math.max(pageSize, 1);
   const s = String(search || '').trim();
 
-  // pakai 2 request terpisah biar parameter rapi & aman
   const rqCount = pool.request();
   const rqData = pool.request();
 
@@ -54,7 +60,7 @@ async function getAllProduksi(page = 1, pageSize = 20, search = '') {
     LEFT JOIN dbo.MstOperator o WITH (NOLOCK)
       ON h.IdOperator = o.IdOperator
     WHERE (@search = '' OR h.NoProduksi LIKE '%' + @search + '%')
-    ORDER BY h.Tanggal DESC, h.JamKerja ASC
+    ORDER BY h.Tanggal DESC, h.NoProduksi DESC
     OFFSET @offset ROWS FETCH NEXT @pageSize ROWS ONLY;
   `;
 
@@ -67,7 +73,9 @@ async function getAllProduksi(page = 1, pageSize = 20, search = '') {
   return { data, total };
 }
 
-
+// =====================================================
+// GET BY DATE
+// =====================================================
 async function getProductionByDate(date) {
   const pool = await poolPromise;
   const request = pool.request();
@@ -79,18 +87,20 @@ async function getProductionByDate(date) {
       h.IdMesin,
       m.NamaMesin,
       h.IdOperator,
-      o.NamaOperator,      -- ganti kalau kolomnya beda, misal: o.Nama AS NamaOperator
+      o.NamaOperator,
       h.Shift,
       h.JamKerja,
       h.CreateBy,
       h.CheckBy1,
       h.CheckBy2,
       h.ApproveBy,
-      h.HourMeter
-    FROM [dbo].[PasangKunci_h] h
-    LEFT JOIN [dbo].[MstMesin] m
+      h.HourMeter,
+      h.HourStart,
+      h.HourEnd
+    FROM dbo.PasangKunci_h h WITH (NOLOCK)
+    LEFT JOIN dbo.MstMesin m WITH (NOLOCK)
       ON h.IdMesin = m.IdMesin
-    LEFT JOIN [dbo].[MstOperator] o
+    LEFT JOIN dbo.MstOperator o WITH (NOLOCK)
       ON h.IdOperator = o.IdOperator
     WHERE CONVERT(date, h.Tanggal) = @date
     ORDER BY h.JamKerja ASC;
@@ -98,108 +108,12 @@ async function getProductionByDate(date) {
 
   request.input('date', sql.Date, date);
   const result = await request.query(query);
-  return result.recordset;
+  return result.recordset || [];
 }
 
-
-// -------------------- helpers --------------------
-function padLeft(num, width) {
-  const s = String(num);
-  return s.length >= width ? s : '0'.repeat(width - s.length) + s;
-}
-
-function badReq(msg) {
-  const e = new Error(msg);
-  e.statusCode = 400;
-  return e;
-}
-
-/**
- * Generate next NoProduksi PasangKunci
- * Contoh: BI.0000000078 (10 digit angka)
- */
-async function generateNextNoProduksi(tx, { prefix = 'BI.', width = 10 } = {}) {
-  const rq = new sql.Request(tx);
-  const q = `
-    SELECT TOP 1 h.NoProduksi
-    FROM dbo.PasangKunci_h AS h WITH (UPDLOCK, HOLDLOCK)
-    WHERE h.NoProduksi LIKE @prefix + '%'
-    ORDER BY
-      TRY_CONVERT(BIGINT, SUBSTRING(h.NoProduksi, LEN(@prefix) + 1, 50)) DESC,
-      h.NoProduksi DESC;
-  `;
-  const r = await rq.input('prefix', sql.VarChar, prefix).query(q);
-
-  let lastNum = 0;
-  if (r.recordset.length > 0) {
-    const last = r.recordset[0].NoProduksi;
-    const numericPart = last.substring(prefix.length);
-    lastNum = parseInt(numericPart, 10) || 0;
-  }
-
-  const next = lastNum + 1;
-  return prefix + padLeft(next, width);
-}
-
-/**
- * jamKerja bisa:
- *  - number (8)
- *  - "HH:mm-HH:mm" => selisih jam
- *  - "HH:mm" => ambil jam-nya
- */
-function parseJamToInt(jam) {
-  if (jam == null) throw badReq('Format jamKerja tidak valid');
-  if (typeof jam === 'number') return Math.max(0, Math.round(jam));
-
-  const s = String(jam).trim();
-  const mRange = s.match(/^(\d{1,2}):(\d{2})\s*-\s*(\d{1,2}):(\d{2})$/);
-  if (mRange) {
-    const sh = +mRange[1], sm = +mRange[2], eh = +mRange[3], em = +mRange[4];
-    let mins = (eh * 60 + em) - (sh * 60 + sm);
-    if (mins < 0) mins += 24 * 60; // cross-midnight
-    return Math.max(0, Math.round(mins / 60));
-  }
-
-  const mTime = s.match(/^(\d{1,2}):(\d{2})$/);
-  if (mTime) return Math.max(0, parseInt(mTime[1], 10));
-
-  const mHour = s.match(/^(\d{1,2})$/);
-  if (mHour) return Math.max(0, parseInt(mHour[1], 10));
-
-  throw badReq('Format jamKerja tidak valid. Gunakan angka (mis. 8) atau "HH:mm-HH:mm"');
-}
-
-// optional: kalau jamKerja kosong, hitung dari hourStart-hourEnd
-function calcJamKerjaFromStartEnd(hourStart, hourEnd) {
-  if (!hourStart || !hourEnd) return null;
-
-  const norm = (s) => {
-    const t = String(s).trim();
-    if (/^\d{1,2}:\d{2}$/.test(t)) return `${t}:00`;
-    return t;
-  };
-
-  const hs = norm(hourStart);
-  const he = norm(hourEnd);
-
-  const parse = (t) => {
-    const m = String(t).match(/^(\d{1,2}):(\d{2}):(\d{2})$/);
-    if (!m) return null;
-    const h = +m[1], min = +m[2], sec = +m[3];
-    return h * 3600 + min * 60 + sec;
-  };
-
-  const s1 = parse(hs);
-  const s2 = parse(he);
-  if (s1 == null || s2 == null) return null;
-
-  let diff = s2 - s1;
-  if (diff < 0) diff += 24 * 3600;
-  const hours = diff / 3600;
-  return Math.max(0, Math.round(hours));
-}
-
-// -------------------- CREATE header PasangKunci_h --------------------
+// =====================================================
+// CREATE PasangKunci_h
+// =====================================================
 async function createKeyFittingProduksi(payload) {
   const must = [];
   if (!payload?.tglProduksi) must.push('tglProduksi');
@@ -225,9 +139,15 @@ async function createKeyFittingProduksi(payload) {
       useLock: true,
     });
 
-    // 1) generate NoProduksi BI. + anti race
-    const no1 = await generateNextNoProduksi(tx, { prefix: 'BI.', width: 10 });
+    // 1) generate NoProduksi BI.0000000001 (generic helper)
+    const no1 = await generateNextCode(tx, {
+      tableName: 'dbo.PasangKunci_h',
+      columnName: 'NoProduksi',
+      prefix: 'BI.',
+      width: 10,
+    });
 
+    // optional anti-race double check (keep your style)
     const rqCheck = new sql.Request(tx);
     const exist = await rqCheck
       .input('NoProduksi', sql.VarChar(50), no1)
@@ -238,7 +158,12 @@ async function createKeyFittingProduksi(payload) {
       `);
 
     const noProduksi = exist.recordset.length
-      ? await generateNextNoProduksi(tx, { prefix: 'BI.', width: 10 })
+      ? await generateNextCode(tx, {
+          tableName: 'dbo.PasangKunci_h',
+          columnName: 'NoProduksi',
+          prefix: 'BI.',
+          width: 10,
+        })
       : no1;
 
     // 2) jam kerja
@@ -292,35 +217,9 @@ async function createKeyFittingProduksi(payload) {
   }
 }
 
-
-// sama helper parse jam kerja seperti hotstamping (copy persis biar konsisten)
-function parseJamToInt(jam) {
-  if (jam == null) throw badReq('Format jamKerja tidak valid');
-  if (typeof jam === 'number') return Math.max(0, Math.round(jam));
-
-  const s = String(jam).trim();
-  const mRange = s.match(/^(\d{1,2}):(\d{2})\s*-\s*(\d{1,2}):(\d{2})$/);
-  if (mRange) {
-    const sh = +mRange[1], sm = +mRange[2], eh = +mRange[3], em = +mRange[4];
-    let mins = (eh * 60 + em) - (sh * 60 + sm);
-    if (mins < 0) mins += 24 * 60;
-    return Math.max(0, Math.round(mins / 60));
-  }
-
-  const mTime = s.match(/^(\d{1,2}):(\d{2})$/);
-  if (mTime) return Math.max(0, parseInt(mTime[1], 10));
-
-  const mHour = s.match(/^(\d{1,2})$/);
-  if (mHour) return Math.max(0, parseInt(mHour[1], 10));
-
-  throw badReq('Format jamKerja tidak valid. Gunakan angka (mis. 8) atau "HH:mm-HH:mm"');
-}
-
-/**
- * UPDATE header PasangKunci_h
- * - dynamic update (yang dikirim saja)
- * - jika Tanggal berubah -> sync DateUsage furniture wip input (full+partial)
- */
+// =====================================================
+// UPDATE PasangKunci_h (dynamic) + sync DateUsage jika Tanggal berubah
+// =====================================================
 async function updateKeyFittingProduksi(noProduksi, payload) {
   if (!noProduksi) throw badReq('noProduksi wajib');
 
@@ -329,20 +228,16 @@ async function updateKeyFittingProduksi(noProduksi, payload) {
   await tx.begin(sql.ISOLATION_LEVEL.SERIALIZABLE);
 
   try {
-    // -------------------------------------------------------
-    // 0) LOCK HEADER ROW + ambil tanggal lama (acuannya tutup transaksi)
-    // -------------------------------------------------------
+    // 0) lock header + ambil tanggal lama dari config
     const { docDateOnly: oldDocDateOnly } = await loadDocDateOnlyFromConfig({
-      entityKey: 'keyFitting', // ⬅️ pastikan ada di config
+      entityKey: 'keyFitting',
       codeValue: noProduksi,
       runner: tx,
       useLock: true,
       throwIfNotFound: true,
     });
 
-    // -------------------------------------------------------
-    // 1) kalau user mengubah tanggal, hitung tanggal baru
-    // -------------------------------------------------------
+    // 1) jika user kirim tglProduksi -> new date
     const isChangingDate = payload?.tglProduksi !== undefined;
     let newDocDateOnly = null;
 
@@ -351,9 +246,7 @@ async function updateKeyFittingProduksi(noProduksi, payload) {
       newDocDateOnly = resolveEffectiveDateForCreate(payload.tglProduksi);
     }
 
-    // -------------------------------------------------------
-    // 2) GUARD TUTUP TRANSAKSI
-    // -------------------------------------------------------
+    // 2) guard tutup transaksi
     await assertNotLocked({
       date: oldDocDateOnly,
       runner: tx,
@@ -370,9 +263,7 @@ async function updateKeyFittingProduksi(noProduksi, payload) {
       });
     }
 
-    // -------------------------------------------------------
-    // 3) BUILD SET DINAMIS
-    // -------------------------------------------------------
+    // 3) build set dinamis
     const sets = [];
     const rqUpd = new sql.Request(tx);
 
@@ -457,9 +348,7 @@ async function updateKeyFittingProduksi(noProduksi, payload) {
     const updRes = await rqUpd.query(updateSql);
     const updatedHeader = updRes.recordset?.[0] || null;
 
-    // -------------------------------------------------------
-    // 4) Jika Tanggal berubah → sinkron DateUsage FULL + PARTIAL
-    // -------------------------------------------------------
+    // 4) jika tanggal berubah -> sync DateUsage
     if (isChangingDate && updatedHeader) {
       const usageDate = resolveEffectiveDateForCreate(updatedHeader.Tanggal);
 
@@ -469,9 +358,7 @@ async function updateKeyFittingProduksi(noProduksi, payload) {
         .input('Tanggal', sql.Date, usageDate);
 
       const sqlUpdateUsage = `
-        -------------------------------------------------------
-        -- FURNITURE WIP (FULL)
-        -------------------------------------------------------
+        -- FULL
         UPDATE fw
         SET fw.DateUsage = @Tanggal
         FROM dbo.FurnitureWIP AS fw
@@ -483,10 +370,7 @@ async function updateKeyFittingProduksi(noProduksi, payload) {
               AND map.NoFurnitureWIP = fw.NoFurnitureWIP
           );
 
-        -------------------------------------------------------
-        -- FURNITURE WIP (PARTIAL)
-        -- FurnitureWIPPartial tidak punya DateUsage, jadi update ke FurnitureWIP via join
-        -------------------------------------------------------
+        -- PARTIAL (via FurnitureWIPPartial)
         UPDATE fw
         SET fw.DateUsage = @Tanggal
         FROM dbo.FurnitureWIP AS fw
@@ -512,7 +396,9 @@ async function updateKeyFittingProduksi(noProduksi, payload) {
   }
 }
 
-
+// =====================================================
+// DELETE PasangKunci (cek output dulu) + reset DateUsage
+// =====================================================
 async function deleteKeyFittingProduksi(noProduksi) {
   if (!noProduksi) throw badReq('noProduksi wajib');
 
@@ -521,20 +407,14 @@ async function deleteKeyFittingProduksi(noProduksi) {
   await tx.begin(sql.ISOLATION_LEVEL.SERIALIZABLE);
 
   try {
-    // -------------------------------------------------------
-    // 0) AMBIL docDateOnly DARI CONFIG (LOCK HEADER ROW)
-    // -------------------------------------------------------
     const { docDateOnly } = await loadDocDateOnlyFromConfig({
-      entityKey: 'keyFitting', // ⬅️ pastikan sesuai config tutup-transaksi
+      entityKey: 'keyFitting',
       codeValue: noProduksi,
       runner: tx,
-      useLock: true, // DELETE = write action
+      useLock: true,
       throwIfNotFound: true,
     });
 
-    // -------------------------------------------------------
-    // 1) GUARD TUTUP TRANSAKSI (DELETE = WRITE)
-    // -------------------------------------------------------
     await assertNotLocked({
       date: docDateOnly,
       runner: tx,
@@ -542,9 +422,7 @@ async function deleteKeyFittingProduksi(noProduksi) {
       useLock: true,
     });
 
-    // -------------------------------------------------------
-    // 2) CEK OUTPUT (FWIP / REJECT). Jika ada → tolak delete
-    // -------------------------------------------------------
+    // cek output
     const rqOut = new sql.Request(tx);
     const outRes = await rqOut
       .input('NoProduksi', sql.VarChar(50), noProduksi)
@@ -573,33 +451,21 @@ async function deleteKeyFittingProduksi(noProduksi) {
       throw badReq('Tidak dapat menghapus Nomor Produksi ini karena sudah memiliki data output.');
     }
 
-    // -------------------------------------------------------
-    // 3) LANJUT DELETE INPUT (LABEL + MATERIAL) + RESET DATEUSAGE
-    // -------------------------------------------------------
+    // delete inputs + reset
     const req = new sql.Request(tx);
     req.input('NoProduksi', sql.VarChar(50), noProduksi);
 
     const sqlDelete = `
-      ---------------------------------------------------------
-      -- SIMPAN KEY FURNITURE WIP YANG TERDAMPAK (FULL/PARTIAL)
-      ---------------------------------------------------------
-      DECLARE @FWIPKeys TABLE (
-        NoFurnitureWIP varchar(50) PRIMARY KEY
-      );
+      DECLARE @FWIPKeys TABLE (NoFurnitureWIP varchar(50) PRIMARY KEY);
 
-      ---------------------------------------------------------
-      -- A) KUMPULKAN KEY dari FULL mapping
-      ---------------------------------------------------------
+      -- keys FULL
       INSERT INTO @FWIPKeys (NoFurnitureWIP)
       SELECT DISTINCT map.NoFurnitureWIP
       FROM dbo.PasangKunciInputLabelFWIP AS map
       WHERE map.NoProduksi = @NoProduksi
         AND map.NoFurnitureWIP IS NOT NULL;
 
-      ---------------------------------------------------------
-      -- B) KUMPULKAN KEY dari PARTIAL mapping
-      --    PasangKunciInputLabelFWIPPartial -> FurnitureWIPPartial -> NoFurnitureWIP
-      ---------------------------------------------------------
+      -- keys PARTIAL
       INSERT INTO @FWIPKeys (NoFurnitureWIP)
       SELECT DISTINCT fwp.NoFurnitureWIP
       FROM dbo.PasangKunciInputLabelFWIPPartial AS mp
@@ -607,53 +473,39 @@ async function deleteKeyFittingProduksi(noProduksi) {
         ON fwp.NoFurnitureWIPPartial = mp.NoFurnitureWIPPartial
       WHERE mp.NoProduksi = @NoProduksi
         AND fwp.NoFurnitureWIP IS NOT NULL
-        AND NOT EXISTS (
-          SELECT 1 FROM @FWIPKeys k WHERE k.NoFurnitureWIP = fwp.NoFurnitureWIP
-        );
+        AND NOT EXISTS (SELECT 1 FROM @FWIPKeys k WHERE k.NoFurnitureWIP = fwp.NoFurnitureWIP);
 
-      ---------------------------------------------------------
-      -- C) HAPUS INPUT MATERIAL
-      ---------------------------------------------------------
+      -- delete material input
       DELETE FROM dbo.PasangKunciInputMaterial
       WHERE NoProduksi = @NoProduksi;
 
-      ---------------------------------------------------------
-      -- D) HAPUS ROW PARTIAL yang dipakai oleh produksi ini
-      ---------------------------------------------------------
+      -- delete partial rows
       DELETE fwp
       FROM dbo.FurnitureWIPPartial AS fwp
       JOIN dbo.PasangKunciInputLabelFWIPPartial AS mp
         ON mp.NoFurnitureWIPPartial = fwp.NoFurnitureWIPPartial
       WHERE mp.NoProduksi = @NoProduksi;
 
-      ---------------------------------------------------------
-      -- E) HAPUS MAPPING PARTIAL & FULL
-      ---------------------------------------------------------
+      -- delete mappings
       DELETE FROM dbo.PasangKunciInputLabelFWIPPartial
       WHERE NoProduksi = @NoProduksi;
 
       DELETE FROM dbo.PasangKunciInputLabelFWIP
       WHERE NoProduksi = @NoProduksi;
 
-      ---------------------------------------------------------
-      -- F) RESET DATEUSAGE + RECALC IsPartial di FurnitureWIP
-      ---------------------------------------------------------
+      -- reset dateusage + recalc isPartial
       UPDATE fw
       SET fw.DateUsage = NULL,
           fw.IsPartial = CASE
             WHEN EXISTS (
-              SELECT 1
-              FROM dbo.FurnitureWIPPartial p
+              SELECT 1 FROM dbo.FurnitureWIPPartial p
               WHERE p.NoFurnitureWIP = fw.NoFurnitureWIP
-            )
-            THEN 1 ELSE 0 END
+            ) THEN 1 ELSE 0 END
       FROM dbo.FurnitureWIP AS fw
       JOIN @FWIPKeys AS k
         ON k.NoFurnitureWIP = fw.NoFurnitureWIP;
 
-      ---------------------------------------------------------
-      -- G) TERAKHIR: HAPUS HEADER
-      ---------------------------------------------------------
+      -- delete header last
       DELETE FROM dbo.PasangKunci_h
       WHERE NoProduksi = @NoProduksi;
     `;
@@ -667,7 +519,6 @@ async function deleteKeyFittingProduksi(noProduksi) {
     throw e;
   }
 }
-
 
 
 async function fetchInputs(noProduksi) {
@@ -814,88 +665,6 @@ async function fetchInputs(noProduksi) {
   return out;
 }
 
-
-
-async function validateLabel(labelCode) {
-  const pool = await poolPromise;
-
-  const raw = String(labelCode || '').trim();
-  if (!raw) throw new Error('Label code is required');
-
-  const upper = raw.toUpperCase();
-  const prefix = upper.startsWith('BC.') ? 'BC.' : upper.substring(0, 3) === 'BB.' ? 'BB.' : upper.substring(0, 2);
-
-  let tableName = '';
-  let query = '';
-
-  async function run(label) {
-    const req = pool.request();
-    req.input('code', sql.VarChar(50), label);
-    const rs = await req.query(query);
-    const rows = rs.recordset || [];
-    return {
-      found: rows.length > 0,
-      count: rows.length,
-      prefix,
-      tableName,
-      data: rows,
-    };
-  }
-
-  // ===== BC = partial =====
-  if (prefix === 'BC.') {
-    tableName = 'FurnitureWIPPartial';
-    query = `
-      SELECT
-        fwp.NoFurnitureWIPPartial,
-        fwp.NoFurnitureWIP,
-        fwp.Pcs AS PcsPartial,
-
-        fw.Pcs AS PcsHeader,
-        fw.Berat,
-        fw.IDFurnitureWIP AS idJenis,
-        fw.IsPartial,
-        fw.DateUsage,
-
-        fw.IdWarehouse,
-        fw.IdWarna,
-        fw.CreateBy,
-        fw.DateTimeCreate,
-        fw.Blok,
-        fw.IdLokasi
-      FROM dbo.FurnitureWIPPartial fwp WITH (NOLOCK)
-      JOIN dbo.FurnitureWIP fw WITH (NOLOCK)
-        ON fw.NoFurnitureWIP = fwp.NoFurnitureWIP
-      WHERE fwp.NoFurnitureWIPPartial = @code
-        AND fw.DateUsage IS NULL;
-    `;
-    return await run(raw);
-  }
-
-  // ===== BB = full =====
-  tableName = 'FurnitureWIP';
-  query = `
-    SELECT
-      fw.NoFurnitureWIP,
-      fw.DateCreate,
-      fw.Jam,
-      fw.Pcs,
-      fw.IDFurnitureWIP AS idJenis,
-      fw.Berat,
-      fw.IsPartial,
-      fw.DateUsage,
-      fw.IdWarehouse,
-      fw.IdWarna,
-      fw.CreateBy,
-      fw.DateTimeCreate,
-      fw.Blok,
-      fw.IdLokasi
-    FROM dbo.FurnitureWIP fw WITH (NOLOCK)
-    WHERE fw.NoFurnitureWIP = @code
-      AND fw.DateUsage IS NULL;
-  `;
-  return await run(raw);
-}
 
 
 
@@ -1766,4 +1535,4 @@ async function _deleteCabinetMaterialWithTx(tx, noProduksi, lists) {
   };
 }
 
-module.exports = { getAllProduksi, getProductionByDate, createKeyFittingProduksi, updateKeyFittingProduksi, deleteKeyFittingProduksi, fetchInputs, validateLabel, upsertInputsAndPartials, deleteInputsAndPartials };
+module.exports = { getAllProduksi, getProductionByDate, createKeyFittingProduksi, updateKeyFittingProduksi, deleteKeyFittingProduksi, fetchInputs, upsertInputsAndPartials, deleteInputsAndPartials };

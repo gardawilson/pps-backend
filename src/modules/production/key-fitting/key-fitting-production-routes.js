@@ -42,13 +42,6 @@ router.get(
   keyFittingController.getInputsByNoProduksi
 );
 
-router.get(
-  '/key-fitting/validate-fwip/:labelCode',
-  verifyToken,
-  keyFittingController.validateLabel
-);
-
-
 router.post(
   '/key-fitting/:noProduksi/inputs',
   verifyToken,

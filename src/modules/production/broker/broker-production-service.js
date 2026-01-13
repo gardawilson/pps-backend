@@ -10,10 +10,6 @@ const {
 } = require('../../../core/shared/tutup-transaksi-guard');
 
 
-
-const { generateNextCode } = require('../../../core/utils/sequence-code-helper');
-const { parseJamToInt, badReq } = require('../../../core/utils/jam-kerja-helper');
-
 /**
  * Paginated fetch for dbo.BrokerProduksi_h
  * Columns available:
@@ -491,41 +487,114 @@ async function getProduksiByDate(date) {
 
 
 
-// -------------------- CREATE header BrokerProduksi_h --------------------
+function padLeft(num, width) {
+  const s = String(num);
+  return s.length >= width ? s : '0'.repeat(width - s.length) + s;
+}
+
+async function generateNextNoProduksi(tx, { prefix = 'E.', width = 10 } = {}) {
+  const rq = new sql.Request(tx);
+  const q = `
+    SELECT TOP 1 h.NoProduksi
+    FROM dbo.BrokerProduksi_h AS h WITH (UPDLOCK, HOLDLOCK)
+    WHERE h.NoProduksi LIKE @prefix + '%'
+    ORDER BY
+      TRY_CONVERT(BIGINT, SUBSTRING(h.NoProduksi, LEN(@prefix) + 1, 50)) DESC,
+      h.NoProduksi DESC;
+  `;
+  const r = await rq.input('prefix', sql.VarChar, prefix).query(q);
+
+  let lastNum = 0;
+  if (r.recordset.length > 0) {
+    const last = r.recordset[0].NoProduksi;
+    const numericPart = last.substring(prefix.length);
+    lastNum = parseInt(numericPart, 10) || 0;
+  }
+  const next = lastNum + 1;
+  return prefix + padLeft(next, width);
+}
+
+function parseJamToInt(jam) {
+  if (jam == null) throw badReq('Format jam tidak valid');
+  if (typeof jam === 'number') return Math.max(0, Math.round(jam)); // hours
+
+  const s = String(jam).trim();
+  const mRange = s.match(/^(\d{1,2}):(\d{2})\s*-\s*(\d{1,2}):(\d{2})$/);
+  if (mRange) {
+    const sh = +mRange[1], sm = +mRange[2], eh = +mRange[3], em = +mRange[4];
+    let mins = (eh * 60 + em) - (sh * 60 + sm);
+    if (mins < 0) mins += 24 * 60; // cross-midnight
+    return Math.max(0, Math.round(mins / 60));
+  }
+  const mTime = s.match(/^(\d{1,2}):(\d{2})$/);
+  if (mTime) return Math.max(0, parseInt(mTime[1], 10));
+  const mHour = s.match(/^(\d{1,2})$/);
+  if (mHour) return Math.max(0, parseInt(mHour[1], 10));
+
+  throw badReq('Format jam tidak valid. Gunakan angka (mis. 8) atau "HH:mm-HH:mm"');
+}
+
+function badReq(msg) {
+  const e = new Error(msg);
+  e.statusCode = 400;
+  return e;
+}
+
 async function createBrokerProduksi(payload) {
   const must = [];
   if (!payload?.tglProduksi) must.push('tglProduksi');
   if (payload?.idMesin == null) must.push('idMesin');
   if (payload?.idOperator == null) must.push('idOperator');
-  if (payload?.jam == null) must.push('jam');
+  if (payload?.jam == null) must.push('jam'); // durasi (int)
   if (payload?.shift == null) must.push('shift');
   if (must.length) throw badReq(`Field wajib: ${must.join(', ')}`);
+
+  // ---- helper: date-only (tanpa geser hari) ----
+  // input payload.tglProduksi bisa Date / string "YYYY-MM-DD" / ISO
+  const toDateOnly = (d) => {
+    if (!d) return null;
+
+    // kalau sudah Date
+    if (d instanceof Date) {
+      // date-only lokal -> pakai YYYY-MM-DD dari lokal, lalu new Date(YYYY-MM-DD) (anggap UTC midnight)
+      const y = d.getFullYear();
+      const m = String(d.getMonth() + 1).padStart(2, '0');
+      const dd = String(d.getDate()).padStart(2, '0');
+      return new Date(`${y}-${m}-${dd}`);
+    }
+
+    // kalau string (ISO atau YYYY-MM-DD)
+    const s = String(d).trim();
+    // ambil 10 char pertama biar jadi YYYY-MM-DD
+    const ymd = s.length >= 10 ? s.slice(0, 10) : s;
+    if (!/^\d{4}-\d{2}-\d{2}$/.test(ymd)) {
+      throw badReq('Format tglProduksi harus YYYY-MM-DD atau ISO date');
+    }
+    return new Date(ymd); // UTC midnight untuk tanggal tsb
+  };
+
+  const docDateOnly = toDateOnly(payload.tglProduksi);
 
   const pool = await poolPromise;
   const tx = new sql.Transaction(pool);
   await tx.begin(sql.ISOLATION_LEVEL.SERIALIZABLE);
 
   try {
-    // ✅ 0) normalize date (pola sama seperti modul lain)
-    const docDateOnly = resolveEffectiveDateForCreate(payload.tglProduksi);
-
-    // ✅ 1) guard tutup transaksi
+    // -------------------------------------------------------
+    // 1) GUARD TUTUP TRANSAKSI (CREATE = WRITE)
+    // -------------------------------------------------------
     await assertNotLocked({
       date: docDateOnly,
-      runner: tx,
+      runner: tx, // IMPORTANT: pakai tx biar konsisten dalam transaksi
       action: 'create BrokerProduksi',
       useLock: true,
     });
 
-    // ✅ 2) generate NoProduksi broker: E.0000000001
-    const no1 = await generateNextCode(tx, {
-      tableName: 'dbo.BrokerProduksi_h',
-      columnName: 'NoProduksi',
-      prefix: 'E.',
-      width: 10,
-    });
+    // -------------------------------------------------------
+    // 2) Generate NoProduksi (Prefix 'E.' untuk broker)
+    // -------------------------------------------------------
+    const no1 = await generateNextNoProduksi(tx, { prefix: 'E.', width: 10 });
 
-    // optional anti-race (tetap boleh dipertahankan, konsisten pola kamu)
     const rqCheck = new sql.Request(tx);
     const exist = await rqCheck
       .input('NoProduksi', sql.VarChar(50), no1)
@@ -536,35 +605,32 @@ async function createBrokerProduksi(payload) {
       `);
 
     const noProduksi = exist.recordset.length
-      ? await generateNextCode(tx, {
-          tableName: 'dbo.BrokerProduksi_h',
-          columnName: 'NoProduksi',
-          prefix: 'E.',
-          width: 10,
-        })
+      ? await generateNextNoProduksi(tx, { prefix: 'E.', width: 10 })
       : no1;
 
-    // ✅ 3) jam int pakai helper shared
     const jamInt = parseJamToInt(payload.jam);
 
-    // ✅ 4) insert header
+    // -------------------------------------------------------
+    // 3) Insert header (pakai docDateOnly)
+    // -------------------------------------------------------
     const rqIns = new sql.Request(tx);
     rqIns
-      .input('NoProduksi', sql.VarChar(50), noProduksi)
-      .input('TglProduksi', sql.Date, docDateOnly)
-      .input('IdMesin', sql.Int, payload.idMesin)
-      .input('IdOperator', sql.Int, payload.idOperator)
-      .input('Jam', sql.Int, jamInt)
-      .input('Shift', sql.Int, payload.shift)
-      .input('CreateBy', sql.VarChar(100), payload.createBy)
-      .input('CheckBy1', sql.VarChar(100), payload.checkBy1 ?? null)
-      .input('CheckBy2', sql.VarChar(100), payload.checkBy2 ?? null)
-      .input('ApproveBy', sql.VarChar(100), payload.approveBy ?? null)
-      .input('JmlhAnggota', sql.Int, payload.jmlhAnggota ?? null)
-      .input('Hadir', sql.Int, payload.hadir ?? null)
-      .input('HourMeter', sql.Decimal(18, 2), payload.hourMeter ?? null)
-      .input('HourStart', sql.VarChar(20), payload.hourStart ?? null)
-      .input('HourEnd', sql.VarChar(20), payload.hourEnd ?? null);
+      .input('NoProduksi',  sql.VarChar(50),    noProduksi)
+      .input('TglProduksi', sql.Date,           docDateOnly)
+      .input('IdMesin',     sql.Int,            payload.idMesin)
+      .input('IdOperator',  sql.Int,            payload.idOperator)
+      .input('Jam',         sql.Int,            jamInt)
+      .input('Shift',       sql.Int,            payload.shift)
+      .input('CreateBy',    sql.VarChar(100),   payload.createBy)
+      .input('CheckBy1',    sql.VarChar(100),   payload.checkBy1 ?? null)
+      .input('CheckBy2',    sql.VarChar(100),   payload.checkBy2 ?? null)
+      .input('ApproveBy',   sql.VarChar(100),   payload.approveBy ?? null)
+      .input('JmlhAnggota', sql.Int,            payload.jmlhAnggota ?? null)
+      .input('Hadir',       sql.Int,            payload.hadir ?? null)
+      .input('HourMeter',   sql.Decimal(18, 2), payload.hourMeter ?? null)
+      // optional kalau kolom ada
+      .input('HourStart',   sql.VarChar(20),    payload.hourStart ?? null)
+      .input('HourEnd',     sql.VarChar(20),    payload.hourEnd ?? null);
 
     const insertSql = `
       INSERT INTO dbo.BrokerProduksi_h (
@@ -613,7 +679,6 @@ async function createBrokerProduksi(payload) {
     throw e;
   }
 }
-
 
 
 async function updateBrokerProduksi(noProduksi, payload) {
@@ -950,7 +1015,6 @@ async function updateBrokerProduksi(noProduksi, payload) {
     throw e;
   }
 }
-
 
 
 // Contoh service delete semua input + reset DateUsage & IsPartial

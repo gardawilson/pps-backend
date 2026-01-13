@@ -49,6 +49,11 @@ washingProduksi: {
     codeColumn: 'NoProduksi',
     dateColumn: 'Tanggal',
   },
+      packingProduksi: {
+    table: 'dbo.PackingProduksi_h',
+    codeColumn: 'NoPacking',
+    dateColumn: 'Tanggal',
+  },
   // tambah lainnya...
 };
 

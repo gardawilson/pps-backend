@@ -666,8 +666,6 @@ async function fetchInputs(noProduksi) {
 }
 
 
-
-
 /**
  * Payload shape (arrays optional):
  * {

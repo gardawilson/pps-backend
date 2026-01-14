@@ -1,6 +1,6 @@
 # PPS Backend
 
-Backend API untuk Production Planning System (PPS) yang dibangun dengan Node.js dan Express.js.
+Backend API untuk Plastic Production System (PPS) yang dibangun dengan Node.js dan Express.js.
 
 ## 📋 Deskripsi
 

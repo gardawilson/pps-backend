@@ -54,6 +54,11 @@ washingProduksi: {
     codeColumn: 'NoPacking',
     dateColumn: 'Tanggal',
   },
+        bjJual: {
+    table: 'dbo.BJJual_h',
+    codeColumn: 'NoBJJual',
+    dateColumn: 'Tanggal',
+  },
   // tambah lainnya...
 };
 

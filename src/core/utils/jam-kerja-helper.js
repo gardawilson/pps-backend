@@ -1,10 +1,3 @@
-// src/core/utils/jam-kerja-helper.js
-function badReq(msg) {
-  const e = new Error(msg);
-  e.statusCode = 400;
-  return e;
-}
-
 /**
  * jamKerja can be:
  *  - number (8)
@@ -64,4 +57,4 @@ function calcJamKerjaFromStartEnd(hourStart, hourEnd) {
   return Math.max(0, Math.round(diff / 3600));
 }
 
-module.exports = { parseJamToInt, calcJamKerjaFromStartEnd, badReq };
+module.exports = { parseJamToInt, calcJamKerjaFromStartEnd };

@@ -91,8 +91,13 @@ const productionSortirRejectRoutes = require('./modules/production/sortir-reject
 
 const productionSharedRoutes = require('./modules/production/shared/production-shared-routes');
 
+const bjJualRoutes = require('./modules/bj-jual/bj-jual-route');
+
+const mstPembeliRoutes = require('./modules/master/pembeli/master-pembeli-route');
+
 
 const updateRoutes = require('./modules/update/update-routes');
+
 
 
 
@@ -185,6 +190,12 @@ app.use('/api/reject-type', rejectTypeRoutes);
 app.use('/api/production', productionSortirRejectRoutes);
 
 app.use('/api/production', productionSharedRoutes);
+
+app.use('/api/bj-jual', bjJualRoutes);
+
+app.use('/api/mst', mstPembeliRoutes);
+
+
 
 
 

@@ -685,7 +685,6 @@ async function fetchInputs(noBJJual) {
   return out;
 }
 
-
 /**
  * Payload shape (arrays optional):
  * {
@@ -719,7 +718,7 @@ async function upsertInputsAndPartials(noBJJual, payload) {
 
     // 0) lock header & get doc date
     const { docDateOnly } = await loadDocDateOnlyFromConfig({
-      entityKey: 'bjJual', // ✅ must match config key tutup-transaksi
+      entityKey: 'bjJual', // ✅ must match config key
       codeValue: noBJJual,
       runner: tx,
       useLock: true,
@@ -972,16 +971,32 @@ async function _insertPartialsWithTx(tx, noBJJual, lists) {
 
     IF @insBJP > 0
     BEGIN
-      UPDATE b
-      SET b.IsPartial = 1,
-          b.DateUsage = @tgl
-      FROM dbo.BarangJadi b
-      WHERE EXISTS (
-        SELECT 1
+      ;WITH existingPartials AS (
+        SELECT bp.NoBJ, SUM(ISNULL(bp.Pcs, 0)) AS TotalPcsPartialExisting
         FROM dbo.BarangJadiPartial bp WITH (NOLOCK)
-        JOIN @createdBJP n ON n.NoBJPartial = bp.NoBJPartial
-        WHERE bp.NoBJ = b.NoBJ
-      );
+        WHERE bp.NoBJPartial NOT IN (SELECT NoBJPartial FROM @createdBJP)
+        GROUP BY bp.NoBJ
+      ),
+      newPartials AS (
+        SELECT noBJ, SUM(pcs) AS TotalPcsPartialNew
+        FROM OPENJSON(@jsPartials, '$.barangJadiPartialNew')
+        WITH (
+          noBJ varchar(50) '$.noBJ',
+          pcs int '$.pcs'
+        )
+        GROUP BY noBJ
+      )
+      UPDATE b
+      SET
+        b.IsPartial = 1,
+        b.DateUsage = CASE
+          WHEN (b.Pcs - ISNULL(ep.TotalPcsPartialExisting, 0) - ISNULL(np.TotalPcsPartialNew, 0)) <= 0
+          THEN @tgl
+          ELSE b.DateUsage
+        END
+      FROM dbo.BarangJadi b
+      LEFT JOIN existingPartials ep ON ep.NoBJ = b.NoBJ
+      INNER JOIN newPartials np ON np.noBJ = b.NoBJ;
     END
 
     INSERT INTO @out SELECT 'barangJadiPartialNew', @insBJP;
@@ -1040,16 +1055,32 @@ async function _insertPartialsWithTx(tx, noBJJual, lists) {
 
     IF @insFWP > 0
     BEGIN
-      UPDATE f
-      SET f.IsPartial = 1,
-          f.DateUsage = @tgl
-      FROM dbo.FurnitureWIP f
-      WHERE EXISTS (
-        SELECT 1
+      ;WITH existingPartials AS (
+        SELECT fp.NoFurnitureWIP, SUM(ISNULL(fp.Pcs, 0)) AS TotalPcsPartialExisting
         FROM dbo.FurnitureWIPPartial fp WITH (NOLOCK)
-        JOIN @createdFWP n ON n.NoFurnitureWIPPartial = fp.NoFurnitureWIPPartial
-        WHERE fp.NoFurnitureWIP = f.NoFurnitureWIP
-      );
+        WHERE fp.NoFurnitureWIPPartial NOT IN (SELECT NoFurnitureWIPPartial FROM @createdFWP)
+        GROUP BY fp.NoFurnitureWIP
+      ),
+      newPartials AS (
+        SELECT noFurnitureWip, SUM(pcs) AS TotalPcsPartialNew
+        FROM OPENJSON(@jsPartials, '$.furnitureWipPartialNew')
+        WITH (
+          noFurnitureWip varchar(50) '$.noFurnitureWip',
+          pcs int '$.pcs'
+        )
+        GROUP BY noFurnitureWip
+      )
+      UPDATE f
+      SET
+        f.IsPartial = 1,
+        f.DateUsage = CASE
+          WHEN (f.Pcs - ISNULL(ep.TotalPcsPartialExisting, 0) - ISNULL(np.TotalPcsPartialNew, 0)) <= 0
+          THEN @tgl
+          ELSE f.DateUsage
+        END
+      FROM dbo.FurnitureWIP f
+      LEFT JOIN existingPartials ep ON ep.NoFurnitureWIP = f.NoFurnitureWIP
+      INNER JOIN newPartials np ON np.noFurnitureWip = f.NoFurnitureWIP;
     END
 
     INSERT INTO @out SELECT 'furnitureWipPartialNew', @insFWP;
@@ -1293,7 +1324,7 @@ async function _insertCabinetMaterialWithTx(tx, noBJJual, lists) {
   FROM OPENJSON(@jsInputs, '$.cabinetMaterial')
   WITH (
     IdCabinetMaterial int '$.idCabinetMaterial',
-    Pcs int '$.jumlah'
+    Pcs int '$.pcs'
   )
   WHERE IdCabinetMaterial IS NOT NULL
   GROUP BY IdCabinetMaterial;
@@ -1354,7 +1385,6 @@ async function _insertCabinetMaterialWithTx(tx, noBJJual, lists) {
     },
   };
 }
-
 
 async function deleteInputsAndPartials(noBJJual, payload) {
   if (!noBJJual) throw badReq('noBJJual wajib');

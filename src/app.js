@@ -94,7 +94,7 @@ const productionSharedRoutes = require('./modules/production/shared/production-s
 const bjJualRoutes = require('./modules/bj-jual/bj-jual-route');
 
 const mstPembeliRoutes = require('./modules/master/pembeli/master-pembeli-route');
-
+const mstWarehouseRoutes = require('./modules/master/warehouse/master-warehouse-route');
 
 const updateRoutes = require('./modules/update/update-routes');
 
@@ -194,6 +194,8 @@ app.use('/api/production', productionSharedRoutes);
 app.use('/api/bj-jual', bjJualRoutes);
 
 app.use('/api/mst', mstPembeliRoutes);
+app.use('/api/mst', mstWarehouseRoutes);
+
 
 
 

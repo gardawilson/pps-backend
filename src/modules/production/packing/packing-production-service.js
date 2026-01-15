@@ -9,8 +9,9 @@ const { generateNextCode } = require('../../../core/utils/sequence-code-helper')
 const {
   parseJamToInt,
   calcJamKerjaFromStartEnd,
-  badReq,
 } = require('../../../core/utils/jam-kerja-helper');
+const { badReq } = require('../../../core/utils/http-error');
+
 
 
 

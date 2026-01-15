@@ -59,6 +59,11 @@ washingProduksi: {
     codeColumn: 'NoBJJual',
     dateColumn: 'Tanggal',
   },
+          sortirReject: {
+    table: 'dbo.BJSortirReject_h',
+    codeColumn: 'NoBJSortir',
+    dateColumn: 'TglBJSortir',
+  },
   // tambah lainnya...
 };
 

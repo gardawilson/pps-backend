@@ -1,246 +1,311 @@
 <!DOCTYPE html>
-<html lang="en">
+<html lang="id">
 <head>
-    <meta charset="UTF-8">
-    <meta name="viewport" content="width=device-width, initial-scale=1.0">
-    <title>Stock Opname Validation Flowchart</title>
-    <script src="https://cdn.jsdelivr.net/npm/mermaid@10/dist/mermaid.min.js"></script>
-    <style>
-        body {
-            font-family: 'Segoe UI', Tahoma, Geneva, Verdana, sans-serif;
-            margin: 0;
-            padding: 20px;
-            background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
-            min-height: 100vh;
-        }
-        .container {
-            max-width: 1400px;
-            margin: 0 auto;
-            background: white;
-            padding: 30px;
-            border-radius: 15px;
-            box-shadow: 0 20px 60px rgba(0,0,0,0.3);
-        }
-        h1 {
-            color: #2d3748;
-            text-align: center;
-            margin-bottom: 10px;
-            font-size: 2em;
-        }
-        .subtitle {
-            text-align: center;
-            color: #718096;
-            margin-bottom: 30px;
-            font-size: 1.1em;
-        }
-        .legend {
-            background: #f7fafc;
-            padding: 20px;
-            border-radius: 10px;
-            margin-bottom: 30px;
-            border-left: 4px solid #667eea;
-        }
-        .legend h3 {
-            margin-top: 0;
-            color: #2d3748;
-        }
-        .legend-grid {
-            display: grid;
-            grid-template-columns: repeat(auto-fit, minmax(200px, 1fr));
-            gap: 15px;
-            margin-top: 15px;
-        }
-        .legend-item {
-            display: flex;
-            align-items: center;
-            gap: 10px;
-        }
-        .legend-box {
-            width: 40px;
-            height: 30px;
-            border-radius: 5px;
-            border: 2px solid #333;
-        }
-        .success { background: #48bb78; }
-        .error { background: #f56565; }
-        .warning { background: #ed8936; }
-        .info { background: #4299e1; }
-        .process { background: #9f7aea; }
-        .mermaid {
-            background: white;
-            padding: 20px;
-            border-radius: 10px;
-        }
-        .notes {
-            background: #fffbeb;
-            padding: 20px;
-            border-radius: 10px;
-            margin-top: 30px;
-            border-left: 4px solid #ed8936;
-        }
-        .notes h3 {
-            margin-top: 0;
-            color: #744210;
-        }
-        .notes ul {
-            color: #744210;
-            line-height: 1.8;
-        }
-    </style>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <title>Flowchart Audit Washing (Trigger)</title>
+  <style>
+    :root{
+      --bg:#0b1220;
+      --panel:#121b2f;
+      --node:#0f1730;
+      --line:#2a3963;
+      --text:#eaf0ff;
+      --muted:#aab6d6;
+      --accent:#7aa2ff;
+      --good:#4ade80;
+      --warn:#fbbf24;
+      --mono: ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, "Liberation Mono", "Courier New", monospace;
+      --sans: ui-sans-serif, system-ui, -apple-system, Segoe UI, Roboto, Helvetica, Arial;
+    }
+    *{ box-sizing:border-box; }
+    body{
+      margin:0;
+      font-family:var(--sans);
+      background: radial-gradient(1000px 650px at 20% 0%, #152a66 0%, var(--bg) 45%) fixed;
+      color:var(--text);
+    }
+    .wrap{
+      max-width: 1100px;
+      margin: 0 auto;
+      padding: 22px 16px 44px;
+    }
+    header{
+      display:flex;
+      flex-wrap:wrap;
+      justify-content:space-between;
+      align-items:flex-end;
+      gap:12px;
+      margin-bottom:14px;
+    }
+    h1{ margin:0; font-size:18px; letter-spacing:.2px; }
+    .sub{ color:var(--muted); font-size:13px; margin-top:6px; line-height:1.4; max-width:780px;}
+    .pill{
+      display:inline-block; padding:2px 8px; border-radius:999px;
+      border:1px solid rgba(255,255,255,.10);
+      background: rgba(255,255,255,.06);
+      font-family:var(--mono); font-size:11px; white-space:nowrap;
+    }
+
+    .card{
+      background: rgba(18,27,47,.88);
+      border:1px solid rgba(255,255,255,.08);
+      border-radius:14px;
+      padding: 14px;
+      box-shadow: 0 10px 28px rgba(0,0,0,.25);
+    }
+    .card h2{
+      margin:0 0 10px;
+      font-size:14px;
+      color:var(--text);
+      display:flex; align-items:center; gap:10px;
+    }
+    .badge{
+      width:26px; height:26px; border-radius:10px;
+      display:inline-flex; align-items:center; justify-content:center;
+      background: rgba(122,162,255,.16);
+      border:1px solid rgba(122,162,255,.26);
+      color: var(--accent); font-weight:700; font-family: var(--mono); font-size:12px;
+    }
+
+    /* FLOWCHART CANVAS */
+    .flow-wrap{
+      overflow:auto;
+      padding: 8px;
+      border-radius:12px;
+      border:1px dashed rgba(255,255,255,.10);
+      background: rgba(0,0,0,.12);
+    }
+    .flowchart{
+      --gapX: 44px;
+      --gapY: 26px;
+      min-width: 980px;
+      display:grid;
+      grid-template-columns: 1fr 1fr 1fr;
+      grid-auto-rows: minmax(90px, auto);
+      gap: var(--gapY) var(--gapX);
+      align-items:start;
+      position:relative;
+      padding: 16px;
+    }
+
+    /* NODE */
+    .node{
+      background: rgba(15,23,48,.82);
+      border:1px solid rgba(255,255,255,.10);
+      border-radius: 14px;
+      padding: 12px 12px 10px;
+      position:relative;
+      box-shadow: 0 6px 18px rgba(0,0,0,.18);
+    }
+    .node .t{
+      display:flex;
+      align-items:center;
+      justify-content:space-between;
+      gap:10px;
+      margin-bottom:6px;
+      font-weight:700;
+      font-size:13px;
+    }
+    .node .k{
+      font-family: var(--mono);
+      font-size:11px;
+      color: var(--muted);
+      background: rgba(255,255,255,.06);
+      border:1px solid rgba(255,255,255,.08);
+      border-radius:999px;
+      padding:3px 8px;
+      white-space:nowrap;
+    }
+    .node .d{
+      margin:0;
+      color: var(--muted);
+      font-size:12px;
+      line-height:1.45;
+    }
+    .node.good{ border-color: rgba(74,222,128,.30); }
+    .node.good .k{ border-color: rgba(74,222,128,.25); }
+    .node.audit{ border-color: rgba(122,162,255,.30); }
+    .node.warn{ border-color: rgba(251,191,36,.30); }
+
+    /* Arrow lines using pseudo-elements */
+    .to-right::after{
+      content:"";
+      position:absolute;
+      top:50%;
+      right:-44px;
+      width:44px; height:2px;
+      background: linear-gradient(90deg, rgba(122,162,255,.0), rgba(122,162,255,.7));
+      transform: translateY(-50%);
+    }
+    .to-right::before{
+      content:"";
+      position:absolute;
+      top:50%;
+      right:-44px;
+      transform: translate(38px,-50%);
+      width:0;height:0;
+      border-top:6px solid transparent;
+      border-bottom:6px solid transparent;
+      border-left:9px solid rgba(122,162,255,.7);
+    }
+
+    .to-down{
+      /* no default */
+    }
+    .to-down::after{
+      content:"";
+      position:absolute;
+      left:50%;
+      bottom:-26px;
+      width:2px; height:26px;
+      background: linear-gradient(180deg, rgba(122,162,255,.7), rgba(122,162,255,.0));
+      transform: translateX(-50%);
+    }
+    .to-down::before{
+      content:"";
+      position:absolute;
+      left:50%;
+      bottom:-26px;
+      transform: translate(-50%, 18px);
+      width:0;height:0;
+      border-left:6px solid transparent;
+      border-right:6px solid transparent;
+      border-top:9px solid rgba(122,162,255,.7);
+    }
+
+    /* Layout positions */
+    .c1r1{ grid-column:1; grid-row:1; }
+    .c2r1{ grid-column:2; grid-row:1; }
+    .c3r1{ grid-column:3; grid-row:1; }
+
+    .c1r2{ grid-column:1; grid-row:2; }
+    .c2r2{ grid-column:2; grid-row:2; }
+    .c3r2{ grid-column:3; grid-row:2; }
+
+    .c1r3{ grid-column:1; grid-row:3; }
+    .c2r3{ grid-column:2; grid-row:3; }
+    .c3r3{ grid-column:3; grid-row:3; }
+
+    .c1r4{ grid-column:1; grid-row:4; }
+    .c2r4{ grid-column:2; grid-row:4; }
+    .c3r4{ grid-column:3; grid-row:4; }
+
+    /* Legend */
+    .legend{
+      display:flex;
+      flex-wrap:wrap;
+      gap:10px;
+      margin-top:12px;
+      color:var(--muted);
+      font-size:12px;
+    }
+    .leg{
+      display:flex; align-items:center; gap:8px;
+      padding:8px 10px;
+      border-radius:12px;
+      border:1px solid rgba(255,255,255,.08);
+      background: rgba(0,0,0,.12);
+    }
+    .dot{
+      width:10px; height:10px; border-radius:999px;
+      background: rgba(122,162,255,.8);
+    }
+    .dot.good{ background: rgba(74,222,128,.85); }
+    .dot.warn{ background: rgba(251,191,36,.85); }
+    .dot.audit{ background: rgba(122,162,255,.85); }
+
+    .footer{
+      margin-top:12px;
+      color:var(--muted);
+      font-size:12px;
+      line-height:1.5;
+    }
+  </style>
 </head>
 <body>
-    <div class="container">
-        <h1>📊 Stock Opname Label Validation</h1>
-        <p class="subtitle">Comprehensive Flowchart - PPS System</p>
-        
-        <div class="legend">
-            <h3>🎨 Legend</h3>
-            <div class="legend-grid">
-                <div class="legend-item">
-                    <div class="legend-box success"></div>
-                    <span>Success Response</span>
-                </div>
-                <div class="legend-item">
-                    <div class="legend-box error"></div>
-                    <span>Error/Invalid</span>
-                </div>
-                <div class="legend-item">
-                    <div class="legend-box warning"></div>
-                    <span>Warning/Discrepancy</span>
-                </div>
-                <div class="legend-item">
-                    <div class="legend-box info"></div>
-                    <span>Information Check</span>
-                </div>
-                <div class="legend-item">
-                    <div class="legend-box process"></div>
-                    <span>Process/Query</span>
-                </div>
-            </div>
+  <div class="wrap">
+    <header>
+      <div>
+        <h1>Flowchart Audit Washing — Trigger + <span class="pill">request_id</span></h1>
+        <div class="sub">
+          Flowchart ini menunjukkan: 1x hit API create washing → insert <span class="pill">Washing_h</span> + banyak
+          <span class="pill">Washing_d</span> → trigger otomatis simpan log ke <span class="pill">AuditTrail</span>.
+          Untuk tampilan, data digroup dengan <span class="pill">RequestId</span> dan join ke <span class="pill">MstJenisPlastik</span>.
         </div>
+      </div>
+    </header>
 
-        <div class="mermaid">
-graph TD
-    Start([START<br/>validateStockOpnameLabel]) --> CheckLabel{Label<br/>Provided?}
-    
-    CheckLabel -->|No| ErrNoLabel[RETURN ERROR<br/>Label wajib diisi]
-    CheckLabel -->|Yes| ValidateFormat{Validate Format<br/>10 Categories}
-    
-    ValidateFormat -->|Invalid| ErrFormat[RETURN ERROR<br/>Kode label tidak dikenali]
-    ValidateFormat -->|Valid| ParseLabel[Parse Label<br/>Extract Parameters]
-    
-    ParseLabel --> CheckDuplicate[Query: Check Duplicate<br/>StockOpnameHasil Table]
-    
-    CheckDuplicate --> IsDuplicate{Is<br/>Duplicate?}
-    
-    IsDuplicate -->|Yes| ErrDuplicate[RETURN ERROR<br/>Label telah discan<br/>isDuplicate=true]
-    
-    IsDuplicate -->|No| CheckSOQualification[Query: SO Qualification<br/>StockOpname_h]
-    
-    CheckSOQualification --> CategoryMatch{Category<br/>Matches SO?}
-    
-    CategoryMatch -->|No| GetOriginalData1[Query: Original Data<br/>All records including used]
-    GetOriginalData1 --> ErrCategory[RETURN ERROR<br/>Kategori tidak sesuai<br/>isValidCategory=false]
-    
-    CategoryMatch -->|Yes| GetWarehouse[Query: Get IdWarehouse<br/>From MstBlok join]
-    
-    GetWarehouse --> CheckWarehouse[Query: Validate Warehouse<br/>StockOpname_h_WarehouseID]
-    
-    CheckWarehouse --> QueryDetail[Query: DETAIL QUERY<br/>DateUsage IS NULL<br/>EXISTS in SO kategori]
-    
-    QueryDetail --> DetailFound{Data<br/>Found?}
-    
-    DetailFound -->|Yes| ValidateWH{Warehouse<br/>Valid?}
-    
-    ValidateWH -->|No| ErrWarehouse[RETURN ERROR<br/>Warehouse tidak sesuai<br/>idDiscrepancy=2]
-    
-    ValidateWH -->|Yes| CheckLocationMatch{Blok and<br/>IdLokasi<br/>Match?}
-    
-    CheckLocationMatch -->|No| WarnLocationMoved[RETURN SUCCESS<br/>Lokasi dipindahkan<br/>foundInStockOpname=true]
-    
-    CheckLocationMatch -->|Yes| SuccessValid[RETURN SUCCESS<br/>Label Valid<br/>foundInStockOpname=true]
-    
-    DetailFound -->|No| QueryFallback[Query: FALLBACK QUERY<br/>DateUsage IS NULL<br/>NO SO qualification check]
-    
-    QueryFallback --> FallbackFound{Data Found<br/>and Has Stock?}
-    
-    FallbackFound -->|Yes| WarnNotInSO[RETURN SUCCESS<br/>Label tidak masuk daftar SO<br/>idDiscrepancy=2]
-    
-    FallbackFound -->|No| QueryOriginal[Query: ORIGINAL DATA<br/>All records<br/>including DateUsage]
-    
-    QueryOriginal --> OriginalFound{Data Found<br/>and Has Stock?}
-    
-    OriginalFound -->|Yes| ErrProcessed[RETURN ERROR<br/>Item telah diproses<br/>idDiscrepancy=1]
-    
-    OriginalFound -->|No| ErrNotFound[RETURN ERROR<br/>Item tidak ditemukan<br/>idDiscrepancy=1]
-    
-    style Start fill:#667eea,stroke:#333,stroke-width:3px,color:#fff
-    style ErrNoLabel fill:#f56565,stroke:#333,stroke-width:2px,color:#fff
-    style ErrFormat fill:#f56565,stroke:#333,stroke-width:2px,color:#fff
-    style ErrDuplicate fill:#f56565,stroke:#333,stroke-width:2px,color:#fff
-    style ErrCategory fill:#f56565,stroke:#333,stroke-width:2px,color:#fff
-    style ErrWarehouse fill:#f56565,stroke:#333,stroke-width:2px,color:#fff
-    style ErrProcessed fill:#f56565,stroke:#333,stroke-width:2px,color:#fff
-    style ErrNotFound fill:#f56565,stroke:#333,stroke-width:2px,color:#fff
-    
-    style SuccessValid fill:#48bb78,stroke:#333,stroke-width:2px,color:#fff
-    style WarnLocationMoved fill:#ed8936,stroke:#333,stroke-width:2px,color:#fff
-    style WarnNotInSO fill:#ed8936,stroke:#333,stroke-width:2px,color:#fff
-    
-    style CheckDuplicate fill:#9f7aea,stroke:#333,stroke-width:2px,color:#fff
-    style CheckSOQualification fill:#9f7aea,stroke:#333,stroke-width:2px,color:#fff
-    style GetWarehouse fill:#9f7aea,stroke:#333,stroke-width:2px,color:#fff
-    style CheckWarehouse fill:#9f7aea,stroke:#333,stroke-width:2px,color:#fff
-    style QueryDetail fill:#9f7aea,stroke:#333,stroke-width:2px,color:#fff
-    style QueryFallback fill:#9f7aea,stroke:#333,stroke-width:2px,color:#fff
-    style QueryOriginal fill:#9f7aea,stroke:#333,stroke-width:2px,color:#fff
-    style GetOriginalData1 fill:#9f7aea,stroke:#333,stroke-width:2px,color:#fff
-    
-    style ValidateFormat fill:#4299e1,stroke:#333,stroke-width:2px,color:#fff
-    style IsDuplicate fill:#4299e1,stroke:#333,stroke-width:2px,color:#fff
-    style CategoryMatch fill:#4299e1,stroke:#333,stroke-width:2px,color:#fff
-    style DetailFound fill:#4299e1,stroke:#333,stroke-width:2px,color:#fff
-    style ValidateWH fill:#4299e1,stroke:#333,stroke-width:2px,color:#fff
-    style CheckLocationMatch fill:#4299e1,stroke:#333,stroke-width:2px,color:#fff
-    style FallbackFound fill:#4299e1,stroke:#333,stroke-width:2px,color:#fff
-    style OriginalFound fill:#4299e1,stroke:#333,stroke-width:2px,color:#fff
+    <section class="card">
+      <h2><span class="badge">FC</span> Flowchart (Bentuk Diagram)</h2>
+
+      <div class="flow-wrap">
+        <div class="flowchart">
+          <!-- Row 1 -->
+          <div class="node c1r1 to-right">
+            <div class="t">User / UI <span class="k">Hit API</span></div>
+            <p class="d">Kirim payload: header + details (sak).</p>
+          </div>
+
+          <div class="node c2r1 to-right">
+            <div class="t">Backend Service <span class="k">BEGIN TX</span></div>
+            <p class="d">Validasi + tutup transaksi check.</p>
+          </div>
+
+          <div class="node c3r1 to-down warn">
+            <div class="t">Set Context Audit <span class="k">SESSION_CONTEXT</span></div>
+            <p class="d">
+              Set <b>actor</b> & <b>request_id</b> supaya trigger tahu “siapa” & bisa grouping.
+            </p>
+          </div>
+
+          <!-- Row 2 -->
+          <div class="node c3r2 to-down good">
+            <div class="t">Insert Header <span class="k">Washing_h</span></div>
+            <p class="d">Insert 1 row header (NoWashing, IdJenis, dst).</p>
+          </div>
+
+          <!-- Row 3 -->
+          <div class="node c3r3 to-down audit">
+            <div class="t">Trigger Header <span class="k">AuditTrail</span></div>
+            <p class="d">Trigger menulis 1 log: INSERT Washing_h (NewData JSON).</p>
+          </div>
+
+          <!-- Row 4 -->
+          <div class="node c2r4 to-right good">
+            <div class="t">Loop Details <span class="k">Washing_d</span></div>
+            <p class="d">Per sak: INSERT 1 row detail (NoSak, Berat).</p>
+          </div>
+
+          <div class="node c3r4 to-down audit">
+            <div class="t">Trigger Detail <span class="k">AuditTrail</span></div>
+            <p class="d">Per sak: trigger tulis 1 log. Total = jumlah sak.</p>
+          </div>
+
+          <!-- Extra: Show Data (placed on left side) -->
+          <div class="node c1r4 to-right">
+            <div class="t">Show Data <span class="k">UI View</span></div>
+            <p class="d">
+              Ambil audit by <b>RequestId</b> → header + detail.
+              Join <b>MstJenisPlastik</b> untuk tampilkan nama jenis.
+            </p>
+          </div>
+
+          <!-- Connect Show Data to Trigger Detail visually (right arrow already). -->
         </div>
+      </div>
 
-        <div class="notes">
-            <h3>📌 Important Notes</h3>
-            <ul>
-                <li><strong>3-Level Query Priority:</strong>
-                    <ol>
-                        <li><strong>Detail Query:</strong> DateUsage IS NULL + EXISTS in SO → "Label Valid"</li>
-                        <li><strong>Fallback Query:</strong> DateUsage IS NULL only → "Tidak masuk daftar SO" (idDiscrepancy=2)</li>
-                        <li><strong>Original Data:</strong> All records → "Telah diproses" (idDiscrepancy=1)</li>
-                    </ol>
-                </li>
-                <li><strong>Location Mismatch Check:</strong> Compares controller's Blok/IdLokasi with database. If different, returns success with warning message "Lokasi dipindahkan".</li>
-                <li><strong>Partial Calculation:</strong> For items with IsPartial=1, calculates: <code>Berat - TotalPartial</code> from PartialTable.</li>
-                <li><strong>Bonggolan Special:</strong> Includes mesinInfo array with machine/operator details from multiple production sources.</li>
-                <li><strong>idDiscrepancy Values:</strong>
-                    <ul>
-                        <li><code>null</code> = No issues</li>
-                        <li><code>1</code> = Item processed/not found</li>
-                        <li><code>2</code> = Item exists but not in SO list or wrong warehouse</li>
-                    </ul>
-                </li>
-            </ul>
-        </div>
-    </div>
+      <div class="legend">
+        <div class="leg"><span class="dot warn"></span> Step penting: set actor & request_id</div>
+        <div class="leg"><span class="dot good"></span> Operasi data utama (insert Washing)</div>
+        <div class="leg"><span class="dot audit"></span> Audit otomatis (trigger → AuditTrail)</div>
+      </div>
 
-    <script>
-        mermaid.initialize({ 
-            startOnLoad: true,
-            theme: 'default',
-            flowchart: {
-                useMaxWidth: true,
-                htmlLabels: true,
-                curve: 'basis',
-                padding: 20
-            }
-        });
-    </script>
+      <div class="footer">
+        <b>Catatan:</b> 1 hit API bisa menghasilkan banyak baris audit untuk <span class="pill">Washing_d</span> karena detail disimpan per sak.
+        Untuk UX, tampilkan sebagai “1 transaksi” dengan <span class="pill">GROUP BY RequestId</span>.
+      </div>
+    </section>
+  </div>
 </body>
 </html>

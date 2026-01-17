@@ -136,6 +136,7 @@ async function generateNextNoWashing(tx, prefix = 'B.', width = 10) {
   return prefix + padLeft(next, width);
 }
 
+
 exports.createWashingCascade = async (payload) => {
   const pool = await poolPromise;
   const tx = new sql.Transaction(pool);
@@ -147,11 +148,17 @@ exports.createWashingCascade = async (payload) => {
   const NoBongkarSusun = payload?.NoBongkarSusun?.toString().trim() || null;
 
   // ---- Validasi dasar
-  const badReq = (msg) => { const e = new Error(msg); e.statusCode = 400; return e; };
+  const badReq = (msg) => {
+    const e = new Error(msg);
+    e.statusCode = 400;
+    return e;
+  };
+
   if (!header.IdJenisPlastik) throw badReq('IdJenisPlastik wajib diisi');
   if (!header.IdWarehouse) throw badReq('IdWarehouse wajib diisi');
   if (!header.CreateBy) throw badReq('CreateBy wajib diisi');
-  if (!Array.isArray(details) || details.length === 0) throw badReq('Details wajib berisi minimal 1 item');
+  if (!Array.isArray(details) || details.length === 0)
+    throw badReq('Details wajib berisi minimal 1 item');
 
   // Mutually exclusive check
   const hasProduksi = !!NoProduksi;
@@ -162,12 +169,37 @@ exports.createWashingCascade = async (payload) => {
     throw err;
   }
 
+  // =====================================================
+  // [AUDIT] Buat sekali di awal (biar konsisten dipakai)
+  // =====================================================
+  const actor =
+    String(payload?.actor || '').trim() ||
+    String(header.CreateBy || '').trim() ||
+    null;
+
+  const requestId =
+    String(payload?.requestId || `${Date.now()}-${Math.random().toString(16).slice(2)}`);
+
+  // (Opsional tapi recommended) paksa actor tidak kosong
+  // kalau kamu sudah punya token, seharusnya actor selalu ada.
+  if (!actor) throw badReq('actor kosong. Kirim actor dari token (payload.actor).');
+
   try {
     await tx.begin(sql.ISOLATION_LEVEL.SERIALIZABLE);
 
+    // =====================================================
+    // [AUDIT CTX] Set actor + request_id untuk trigger audit
+    // =====================================================
+    await new sql.Request(tx)
+      .input('actor', sql.NVarChar(128), actor)
+      .input('rid', sql.NVarChar(64), requestId)
+      .query(`
+        EXEC sys.sp_set_session_context @key=N'actor', @value=@actor;
+        EXEC sys.sp_set_session_context @key=N'request_id', @value=@rid;
+      `);
+
     // ===============================
     // [A] TUTUP TRANSAKSI CHECK (CREATE)
-    // RULE: trxDate <= lastClosed => reject
     // ===============================
     const effectiveDateCreate = resolveEffectiveDateForCreate(header.DateCreate); // date-only
     await assertNotLocked({
@@ -177,47 +209,32 @@ exports.createWashingCascade = async (payload) => {
       useLock: true,
     });
 
-  // 0) Auto-isi Blok & IdLokasi dari sumber kode (produksi / bongkar susun)
-const needBlok = header.Blok == null || String(header.Blok).trim() === '';
-const needLokasi = header.IdLokasi == null;
+    // ===============================
+    // 0) Auto-isi Blok & IdLokasi dari sumber kode (produksi / bongkar susun)
+    // ===============================
+    const needBlok = header.Blok == null || String(header.Blok).trim() === '';
+    const needLokasi = header.IdLokasi == null;
 
-if (needBlok || needLokasi) {
-  const kodeRef = hasProduksi
-    ? NoProduksi
-    : (hasBongkar ? NoBongkarSusun : null);
+    if (needBlok || needLokasi) {
+      const kodeRef = hasProduksi ? NoProduksi : (hasBongkar ? NoBongkarSusun : null);
 
-  console.log('[WASHING][AUTO-LOKASI] hasProduksi=', hasProduksi,
-              'hasBongkar=', hasBongkar,
-              'NoProduksi=', NoProduksi,
-              'NoBongkarSusun=', NoBongkarSusun,
-              'kodeRef=', kodeRef,
-              'needBlok=', needBlok,
-              'needLokasi=', needLokasi);
+      let lokasi = null;
+      if (kodeRef) {
+        lokasi = await getBlokLokasiFromKodeProduksi({
+          kode: kodeRef,
+          runner: tx,
+        });
+      }
 
-  let lokasi = null;
+      if (lokasi) {
+        if (needBlok) header.Blok = lokasi.Blok;
+        if (needLokasi) header.IdLokasi = lokasi.IdLokasi;
+      }
+    }
 
-  if (kodeRef) {
-    lokasi = await getBlokLokasiFromKodeProduksi({
-      kode: kodeRef,      // ✅ PENTING: pakai "kode"
-      runner: tx,
-    });
-  }
-
-  console.log('[WASHING][AUTO-LOKASI] lokasi(result)=', lokasi);
-
-  if (lokasi) {
-    if (needBlok) header.Blok = lokasi.Blok;
-    if (needLokasi) header.IdLokasi = lokasi.IdLokasi;
-  }
-
-  console.log('[WASHING][AUTO-LOKASI] header(after)=', {
-    Blok: header.Blok ?? null,
-    IdLokasi: header.IdLokasi ?? null,
-  });
-}
-
-
-    // 1) Generate NoWashing (abaikan NoWashing dari client kalau ada)
+    // ===============================
+    // 1) Generate NoWashing
+    // ===============================
     const generatedNo = await generateNextNoWashing(tx, 'B.', 10);
 
     // 2) Double-check belum dipakai
@@ -241,10 +258,9 @@ if (needBlok || needLokasi) {
       header.NoWashing = generatedNo;
     }
 
+    // ===============================
     // 3) Insert header
-    // NOTE: selalu pakai @DateCreate (effectiveDateCreate) supaya:
-    // - tanggal yang dicek = tanggal yang disimpan
-    // - tidak tergantung GETDATE() server
+    // ===============================
     const nowDateTime = new Date();
 
     const insertHeaderSql = `
@@ -260,12 +276,11 @@ if (needBlok || needLokasi) {
       )
     `;
 
-    const rqHeader = new sql.Request(tx);
-    rqHeader
+    await new sql.Request(tx)
       .input('NoWashing', sql.VarChar, header.NoWashing)
       .input('IdJenisPlastik', sql.Int, header.IdJenisPlastik)
       .input('IdWarehouse', sql.Int, header.IdWarehouse)
-      .input('DateCreate', sql.Date, effectiveDateCreate) // ✅ date-only & sudah lolos tutup transaksi
+      .input('DateCreate', sql.Date, effectiveDateCreate)
       .input('IdStatus', sql.Int, header.IdStatus ?? 1)
       .input('CreateBy', sql.VarChar, header.CreateBy)
       .input('DateTimeCreate', sql.DateTime, nowDateTime)
@@ -276,27 +291,42 @@ if (needBlok || needLokasi) {
       .input('Moisture2', sql.Decimal(10, 3), header.Moisture2 ?? null)
       .input('Moisture3', sql.Decimal(10, 3), header.Moisture3 ?? null)
       .input('Blok', sql.VarChar, header.Blok ?? null)
-      .input('IdLokasi', sql.Int, header.IdLokasi ?? null);
+      .input('IdLokasi', sql.Int, header.IdLokasi ?? null)
+      .query(insertHeaderSql);
 
-    await rqHeader.query(insertHeaderSql);
-
+    // ===============================
     // 4) Insert details
+    // ===============================
     const insertDetailSql = `
       INSERT INTO Washing_d (NoWashing, NoSak, Berat, DateUsage)
       VALUES (@NoWashing, @NoSak, @Berat, NULL)
     `;
 
     let detailCount = 0;
+
     for (const d of details) {
+      const noSak = Number(d?.NoSak);
+      if (!Number.isFinite(noSak) || noSak <= 0) {
+        throw badReq(`NoSak tidak valid: ${d?.NoSak}`);
+      }
+
+      const berat = d?.Berat == null ? 0 : Number(d.Berat);
+      if (!Number.isFinite(berat) || berat < 0) {
+        throw badReq(`Berat tidak valid pada NoSak ${noSak}: ${d?.Berat}`);
+      }
+
       await new sql.Request(tx)
         .input('NoWashing', sql.VarChar, header.NoWashing)
-        .input('NoSak', sql.Int, d.NoSak)
-        .input('Berat', sql.Decimal(18, 3), d.Berat ?? 0)
+        .input('NoSak', sql.Int, noSak)
+        .input('Berat', sql.Decimal(18, 3), berat)
         .query(insertDetailSql);
+
       detailCount++;
     }
 
-    // 5) Conditional output (mutually exclusive)
+    // ===============================
+    // 5) Conditional output
+    // ===============================
     let outputTarget = null;
     let outputCount = 0;
 
@@ -310,7 +340,7 @@ if (needBlok || needLokasi) {
         await new sql.Request(tx)
           .input('NoProduksi', sql.VarChar, NoProduksi)
           .input('NoWashing', sql.VarChar, header.NoWashing)
-          .input('NoSak', sql.Int, d.NoSak)
+          .input('NoSak', sql.Int, Number(d.NoSak))
           .query(insertWpoSql);
         outputCount++;
       }
@@ -325,7 +355,7 @@ if (needBlok || needLokasi) {
         await new sql.Request(tx)
           .input('NoBongkarSusun', sql.VarChar, NoBongkarSusun)
           .input('NoWashing', sql.VarChar, header.NoWashing)
-          .input('NoSak', sql.Int, d.NoSak)
+          .input('NoSak', sql.Int, Number(d.NoSak))
           .query(insertBsoSql);
         outputCount++;
       }
@@ -341,7 +371,7 @@ if (needBlok || needLokasi) {
         IdWarehouse: header.IdWarehouse,
         IdStatus: header.IdStatus ?? 1,
         CreateBy: header.CreateBy,
-        DateCreate: formatYMD(effectiveDateCreate), // ✅ konsisten dengan rule tutup transaksi
+        DateCreate: formatYMD(effectiveDateCreate),
         DateTimeCreate: nowDateTime,
         Density: header.Density ?? null,
         Moisture: header.Moisture ?? null,
@@ -357,6 +387,9 @@ if (needBlok || needLokasi) {
         outputInserted: outputCount,
       },
       outputTarget,
+
+      // boleh dihapus, tapi berguna buat debug grouping audit
+      audit: { actor, requestId },
     };
   } catch (e) {
     try { await tx.rollback(); } catch (_) {}

@@ -42,7 +42,7 @@ async function getAllSortirReject(page = 1, pageSize = 20, search = '') {
 
   if (total === 0) return { data: [], total: 0 };
 
-  // 2) Data + Flag Tutup Transaksi + JOIN username
+  // 2) Data + Flag Tutup Transaksi + JOIN username + JOIN warehouse
   const dataQry = `
     ;WITH LastClosed AS (
       SELECT TOP 1
@@ -60,6 +60,9 @@ async function getAllSortirReject(page = 1, pageSize = 20, search = '') {
       -- join mst username
       u.Username,
 
+      -- join mst warehouse
+      w.NamaWarehouse,
+
       -- (opsional utk frontend)
       lc.LastClosedDate AS LastClosedDate,
 
@@ -72,8 +75,14 @@ async function getAllSortirReject(page = 1, pageSize = 20, search = '') {
       END AS IsLocked
 
     FROM dbo.BJSortirReject_h h WITH (NOLOCK)
+
     LEFT JOIN dbo.MstUsername u WITH (NOLOCK)
       ON u.IdUsername = h.IdUsername
+
+    LEFT JOIN dbo.MstWarehouse w WITH (NOLOCK)
+      ON w.IdWarehouse = h.IdWarehouse
+      -- kalau mau hanya yang aktif:
+      -- AND w.[Enable] = 1
 
     OUTER APPLY (
       SELECT TOP 1 LastClosedDate
@@ -95,25 +104,6 @@ async function getAllSortirReject(page = 1, pageSize = 20, search = '') {
   return { data: dataRes.recordset || [], total };
 }
 
-
-async function getSortirRejectByDate(date) {
-  const pool = await poolPromise;
-  const request = pool.request();
-
-  const query = `
-    SELECT 
-      h.NoBJSortir,
-      h.TglBJSortir,
-      h.IdUsername
-    FROM [dbo].[BJSortirReject_h] h
-    WHERE CONVERT(date, h.TglBJSortir) = @date
-    ORDER BY h.NoBJSortir ASC;
-  `;
-
-  request.input('date', sql.Date, date);
-  const result = await request.query(query);
-  return result.recordset;
-}
 
 
 async function getSortirRejectByDate(date) {

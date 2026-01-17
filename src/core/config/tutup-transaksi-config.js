@@ -64,6 +64,11 @@ washingProduksi: {
     codeColumn: 'NoBJSortir',
     dateColumn: 'TglBJSortir',
   },
+            return: {
+    table: 'dbo.BJRetur_h',
+    codeColumn: 'NoRetur',
+    dateColumn: 'Tanggal',
+  },
   // tambah lainnya...
 };
 

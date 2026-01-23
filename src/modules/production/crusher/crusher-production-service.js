@@ -105,7 +105,7 @@ async function getAllProduksi(page = 1, pageSize = 20, search = '') {
     ${whereClause}
 
     -- rekomendasi: urut by tanggal + jam + no
-    ORDER BY h.Tanggal DESC, h.Jam ASC, h.NoCrusherProduksi DESC
+    ORDER BY h.NoCrusherProduksi DESC, h.Tanggal DESC
     OFFSET @offset ROWS FETCH NEXT @limit ROWS ONLY;
   `;
 

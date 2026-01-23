@@ -15,6 +15,9 @@ const labelRoutes = require('./modules/label/all/label-routes');
 const productionRoutes = require('./modules/production/washing/washing-production-routes');
 const bongkarSusunRoutes = require('./modules/bongkar-susun/bongkar-susun-route');
 const maxSak = require('./modules/master-max-sak/max-sak-routes');
+
+const bahanBakuRoutes = require('./modules/label/bahan-baku/bahan-baku-route');
+
 const labelBrokerRoutes = require('./modules/label/broker/broker-routes');
 const productionBrokerRoutes = require('./modules/production/broker/broker-production-routes');
 
@@ -96,6 +99,9 @@ const bjJualRoutes = require('./modules/bj-jual/bj-jual-route');
 const mstPembeliRoutes = require('./modules/master/pembeli/master-pembeli-route');
 const mstWarehouseRoutes = require('./modules/master/warehouse/master-warehouse-route');
 
+const auditRoutes = require('./modules/audit/audit-route');
+
+
 const updateRoutes = require('./modules/update/update-routes');
 
 
@@ -124,6 +130,7 @@ app.use('/api/', stockOpnameRoutes);
 app.use('/api/', profileRoutes);
 app.use('/api/', mstLokasiRoutes);
 app.use('/api/', detailLabelRoutes);
+app.use('/api/', bahanBakuRoutes);
 app.use('/api/', labelWashingRoutes);
 app.use('/api/plastic-type', plasticTypeRoutes);
 app.use('/api/blok', blokRoutes);
@@ -195,6 +202,7 @@ app.use('/api/bj-jual', bjJualRoutes);
 
 app.use('/api/mst', mstPembeliRoutes);
 app.use('/api/mst', mstWarehouseRoutes);
+app.use('/api/audit', auditRoutes);
 
 
 

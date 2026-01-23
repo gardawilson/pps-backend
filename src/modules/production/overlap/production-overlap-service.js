@@ -49,6 +49,28 @@ function getConfig(kind) {
         hourStartCol: 'HourStart',
         hourEndCol: 'HourEnd',
       };
+      case 'mixer':
+      return {
+        mode: 'range',
+        schema: 'dbo',
+        table: 'MixerProduksi_h',
+        pk: 'NoProduksi',
+        dateCol: 'TglProduksi',
+        idMesinCol: 'IdMesin',
+        hourStartCol: 'HourStart',
+        hourEndCol: 'HourEnd',
+      };
+            case 'inject':
+      return {
+        mode: 'range',
+        schema: 'dbo',
+        table: 'InjectProduksi_h',
+        pk: 'NoProduksi',
+        dateCol: 'TglProduksi',
+        idMesinCol: 'IdMesin',
+        hourStartCol: 'HourStart',
+        hourEndCol: 'HourEnd',
+      };
     default:
       throw new Error('Invalid kind');
   }

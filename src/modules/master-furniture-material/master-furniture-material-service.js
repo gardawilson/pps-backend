@@ -233,7 +233,7 @@ async function getByCetakanWarna({ idCetakan, idWarna }) {
   request.input('IdWarna', sql.Int, idWarna);
 
   const query = `
-    SELECT TOP (1)
+    SELECT
       cw.IdFurnitureMaterial,
       cm.Nama,
       cm.ItemCode,
@@ -242,11 +242,14 @@ async function getByCetakanWarna({ idCetakan, idWarna }) {
     LEFT JOIN dbo.MstCabinetMaterial cm
       ON cm.IdCabinetMaterial = cw.IdFurnitureMaterial
     WHERE cw.IdCetakan = @IdCetakan
-      AND cw.IdWarna = @IdWarna;
+      AND cw.IdWarna = @IdWarna
+      AND cw.IdFurnitureMaterial IS NOT NULL
+    ORDER BY cw.IdFurnitureMaterial; -- optional (atau urutkan sesuai kolom yang kamu mau)
   `;
 
   const result = await request.query(query);
-  return result.recordset?.[0] || null;
+  return result.recordset; // ini array
 }
+
 
 module.exports = { getMasterCabinetMaterials, getByCetakanWarna };

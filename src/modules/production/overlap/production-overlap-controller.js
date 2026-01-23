@@ -1,6 +1,6 @@
 const overlapService = require('./production-overlap-service');
 
-const ALLOWED_KINDS = new Set(['broker', 'crusher', 'washing', 'gilingan']);
+const ALLOWED_KINDS = new Set(['broker', 'crusher', 'washing', 'gilingan', 'mixer','inject']);
 
 function normalizeTime(t) {
   // Terima: "7:00", "07:00", "07:00:30"

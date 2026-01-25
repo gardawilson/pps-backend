@@ -1,4 +1,5 @@
 const labelWashingService = require('./washing-service');
+const { getActorId, getActorUsername, makeRequestId } = require('../../../core/utils/http-context'); 
 
 // GET all header washing
 exports.getAll = async (req, res) => {
@@ -8,23 +9,23 @@ exports.getAll = async (req, res) => {
     const search = (req.query.search || '').trim();
 
     const { data, total } = await labelWashingService.getAll({ page, limit, search });
-
     const totalPages = Math.ceil(total / limit);
 
-    res.status(200).json({
+    return res.status(200).json({
       success: true,
       data,
       meta: { page, limit, total, totalPages }
     });
   } catch (err) {
     console.error('Get Washing List Error:', err);
-    res.status(500).json({ success: false, message: 'Terjadi kesalahan server' });
+    return res.status(500).json({ success: false, message: 'Terjadi kesalahan server' });
   }
 };
 
 // GET one header + details
 exports.getOne = async (req, res) => {
   const { nowashing } = req.params;
+
   try {
     const details = await labelWashingService.getWashingDetailByNoWashing(nowashing);
 
@@ -35,58 +36,44 @@ exports.getOne = async (req, res) => {
       });
     }
 
-    res.status(200).json({ success: true, data: { nowashing, details } });
+    return res.status(200).json({ success: true, data: { nowashing, details } });
   } catch (err) {
     console.error('Get Washing_d Error:', err);
-    res.status(500).json({ success: false, message: 'Terjadi kesalahan server' });
+    return res.status(500).json({ success: false, message: 'Terjadi kesalahan server' });
   }
 };
 
-
 exports.create = async (req, res) => {
   try {
-    /**
-     * Expected body:
-     * {
-     *   "header": {
-     *     "NoWashing": "W.20251009-0001",   // wajib (kalau mau auto-gen, bisa nanti ditambah helper)
-     *     "IdJenisPlastik": 1,              // wajib
-     *     "IdWarehouse": 2,                 // wajib
-     *     "DateCreate": "2025-10-09",       // opsional (default GETDATE())
-     *     "IdStatus": 1,                    // opsional (default 1=PASS/0=HOLD sesuai sistemmu)
-     *     "CreateBy": "x",              // wajib (ambil dari token juga boleh)
-     *     "Density": 0.91, "Moisture": 0.3, "Density2": null, ...,
-     *     "Blok": "A", "IdLokasi": 1     // opsional
-     *   },
-     *   "details": [
-     *     { "NoSak": 1, "Berat": 25.6, "IdLokasi": "A1" },
-     *     { "NoSak": 2, "Berat": 26.0, "IdLokasi": "A1" }
-     *   ],
-     *   // Conditional output (mutually exclusive):
-     *   "NoProduksi": "C.0000002304",       // isi ini ATAU
-     *   "NoBongkarSusun": null              // isi ini (bukan dua-duanya)
-     * }
-     */
-    const payload = req.body;
+    const payload = req.body || {};
 
-    // optional: set CreateBy dari token
-    if (!payload?.header?.CreateBy && req.username) {
-      payload.header = { ...(payload.header || {}), CreateBy: req.username };
+    const actorId = getActorId(req);
+    if (!actorId) {
+      return res.status(401).json({ success: false, message: 'Unauthorized (idUsername missing)' });
     }
+
+    // ✅ untuk audit trail (ID saja)
+    payload.actorId = actorId;
+    payload.requestId = makeRequestId(req);
+
+    // ✅ business field di Washing_h (tetap string username)
+    // (overwrite supaya tidak spoof dari client)
+    payload.header = payload.header || {};
+    payload.header.CreateBy = getActorUsername(req) || 'system';
 
     const result = await labelWashingService.createWashingCascade(payload);
 
-    res.status(201).json({
+    return res.status(201).json({
       success: true,
       message: 'Washing berhasil dibuat',
-      data: result
+      data: result,
     });
   } catch (err) {
     console.error('Create Washing Error:', err);
     const status = err.statusCode || 500;
-    res.status(status).json({
+    return res.status(status).json({
       success: false,
-      message: err.message || 'Terjadi kesalahan server'
+      message: err.message || 'Terjadi kesalahan server',
     });
   }
 };
@@ -94,70 +81,87 @@ exports.create = async (req, res) => {
 
 exports.update = async (req, res) => {
   const { nowashing } = req.params;
-  try {
-    /**
-     * Expected body (mirip POST, tapi NoWashing ambil dari path):
-     * {
-     *   "header": {
-     *     // kolom2 yang mau di-update (opsional jika tidak berubah)
-     *     "IdJenisPlastik": 1,
-     *     "IdWarehouse": 2,
-     *     "DateCreate": "2025-10-09", // optional
-     *     "IdStatus": 1,
-     *     "Density": 0.91, "Moisture": 0.3, ...
-     *     "Blok": "A", "IdLokasi": "A1"
-     *   },
-     *   "details": [
-     *     { "NoSak": 1, "Berat": 25.6, "IdLokasi": "A1" },
-     *     { "NoSak": 2, "Berat": 26.0, "IdLokasi": "A1" }
-     *   ], // kalau dikirim: REPLACE semua detail yg DateUsage IS NULL
-     *
-     *   // Conditional output (mutually exclusive, opsional):
-     *   "NoProduksi": "C.0000002304",
-     *   "NoBongkarSusun": null
-     * }
-     */
-    const payload = { ...req.body, NoWashing: nowashing };
 
-    // optional: UpdateBy dari token
-    if (req.username) {
-      payload.UpdateBy = req.username;
+  try {
+    const NoWashing = String(nowashing || '').trim();
+    if (!NoWashing) {
+      return res.status(400).json({ success: false, message: 'nowashing wajib diisi' });
     }
+
+    const actorId = getActorId(req);
+    if (!actorId) {
+      return res.status(401).json({ success: false, message: 'Unauthorized (idUsername missing)' });
+    }
+
+    const actorUsername = getActorUsername(req) || 'system';
+
+    // ✅ pastikan body object
+    const body = req.body && typeof req.body === 'object' ? req.body : {};
+
+    // ✅ jangan percaya audit fields dari client
+    const { actorId: _clientActorId, requestId: _clientRequestId, ...safeBody } = body;
+
+    const payload = {
+      ...safeBody,
+      NoWashing,
+      actorId,                  // ✅ audit pakai ID
+      requestId: makeRequestId(req),
+    };
+
+    // ✅ business field (username), overwrite dari token
+    payload.header = payload.header && typeof payload.header === 'object' ? payload.header : {};
+    payload.header.UpdateBy = actorUsername;
 
     const result = await labelWashingService.updateWashingCascade(payload);
 
-    res.status(200).json({
+    return res.status(200).json({
       success: true,
       message: 'Washing berhasil diupdate',
-      data: result
+      data: result,
     });
   } catch (err) {
     console.error('Update Washing Error:', err);
     const status = err.statusCode || 500;
-    res.status(status).json({
+    return res.status(status).json({
       success: false,
-      message: err.message || 'Terjadi kesalahan server'
+      message: err.message || 'Terjadi kesalahan server',
     });
   }
 };
 
-
 exports.remove = async (req, res) => {
   const { nowashing } = req.params;
-  try {
-    const result = await labelWashingService.deleteWashingCascade(nowashing);
 
-    res.status(200).json({
+  try {
+    const NoWashing = String(nowashing || '').trim();
+    if (!NoWashing) {
+      return res.status(400).json({ success: false, message: 'nowashing wajib diisi' });
+    }
+
+    const actorId = getActorId(req);
+    if (!actorId) {
+      return res.status(401).json({ success: false, message: 'Unauthorized (idUsername missing)' });
+    }
+
+    const payload = {
+      NoWashing,
+      actorId,                 // ✅ audit uses ID
+      requestId: makeRequestId(req),
+    };
+
+    const result = await labelWashingService.deleteWashingCascade(payload);
+
+    return res.status(200).json({
       success: true,
-      message: `Washing ${nowashing} berhasil dihapus`,
-      data: result
+      message: `Washing ${NoWashing} berhasil dihapus`,
+      data: result,
     });
   } catch (err) {
     console.error('Delete Washing Error:', err);
     const status = err.statusCode || 500;
-    res.status(status).json({
+    return res.status(status).json({
       success: false,
-      message: err.message || 'Terjadi kesalahan server'
+      message: err.message || 'Terjadi kesalahan server',
     });
   }
 };

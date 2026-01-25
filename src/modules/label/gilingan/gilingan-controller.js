@@ -1,5 +1,6 @@
-// routes/labels/gilingan-controller.js
+// controllers/gilingan-controller.js  (atau sesuai struktur kamu)
 const service = require('./gilingan-service');
+const { getActorId, getActorUsername, makeRequestId } = require('../../../core/utils/http-context');
 
 // GET /labels/gilingan?page=&limit=&search=
 exports.getAll = async (req, res) => {
@@ -9,170 +10,204 @@ exports.getAll = async (req, res) => {
     const search = (req.query.search || '').trim();
 
     const { data, total } = await service.getAll({ page, limit, search });
-    const totalPages = Math.max(Math.ceil(total / limit), 1);
+    const totalPages = Math.ceil(total / limit);
 
-    res.status(200).json({
+    return res.status(200).json({
       success: true,
       data,
       meta: { page, limit, total, totalPages },
     });
   } catch (err) {
     console.error('Get Gilingan List Error:', err);
-    res.status(500).json({ success: false, message: 'Terjadi kesalahan server' });
+    return res.status(500).json({ success: false, message: 'Terjadi kesalahan server' });
   }
 };
 
-
-
-
-/**
- * Expected body:
- * {
- *   "header": {
- *     "IdGilingan": 1,              // required
- *     "DateCreate": "2025-10-28",   // optional (default GETDATE() on server)
- *     "Berat": 25.5,                // optional
- *     "IsPartial": 0,               // optional (default 0)
- *     "IdStatus": 1,                // optional (default 1)
- *     "Blok": "A",                  // optional
- *     "IdLokasi": "A1"              // optional
- *     // "CreateBy": "user"         // future: if column exists
- *   },
- *   // "outputCode": "W.0000004133" | "BG.0000004133"   // optional
- * }
- */
 exports.create = async (req, res) => {
   try {
-    const payload = req.body || {};
+    // ✅ pastikan body object
+    const payload = req.body && typeof req.body === 'object' ? req.body : {};
 
-    // If later you add CreateBy column to Gilingan,
-    // you can auto-fill from token here (similar to Crusher)
-    // if (!payload?.header?.CreateBy && req.username) {
-    //   payload.header = { ...(payload.header || {}), CreateBy: req.username };
-    // }
+    const actorId = getActorId(req);
+    if (!actorId) {
+      return res.status(401).json({ success: false, message: 'Unauthorized (idUsername missing)' });
+    }
 
-    const result = await service.createGilingan(payload);
+    // ✅ audit fields (ID only)
+    payload.actorId = actorId;
+    payload.requestId = makeRequestId(req);
+
+    // ✅ business field CreateBy (username), overwrite supaya tidak spoof dari client
+    payload.header = payload.header && typeof payload.header === 'object' ? payload.header : {};
+    payload.header.CreateBy = getActorUsername(req) || 'system';
+
+    const result = await service.createGilinganCascade(payload);
 
     return res.status(201).json({
       success: true,
-      message: 'Gilingan created successfully',
+      message: 'Gilingan berhasil dibuat',
       data: result,
     });
   } catch (err) {
     console.error('Create Gilingan Error:', err);
-    return res.status(err.statusCode || 500).json({
+    const status = err.statusCode || 500;
+    return res.status(status).json({
       success: false,
-      message: err.message || 'Internal Server Error',
+      message: err.message || 'Terjadi kesalahan server',
     });
   }
 };
 
-
-
 exports.update = async (req, res) => {
+  const { nogilingan, noGilingan } = req.params;
+
   try {
-    const { noGilingan } = req.params;
-    if (!noGilingan) {
-      return res.status(400).json({
-        success: false,
-        message: 'noGilingan parameter is required',
-      });
+    const NoGilingan = String(nogilingan || noGilingan || '').trim();
+    if (!NoGilingan) {
+      return res.status(400).json({ success: false, message: 'nogilingan wajib diisi' });
     }
 
-    const payload = req.body || {};
+    const actorId = getActorId(req);
+    if (!actorId) {
+      return res.status(401).json({ success: false, message: 'Unauthorized (idUsername missing)' });
+    }
 
-    // Accept both { header: {...} } and plain {...}
-    const header = payload.header || payload;
+    const actorUsername = getActorUsername(req) || 'system';
 
-    const result = await service.updateGilingan(noGilingan, header);
+    // ✅ pastikan body object
+    const body = req.body && typeof req.body === 'object' ? req.body : {};
+
+    // ✅ jangan percaya audit fields dari client
+    const { actorId: _clientActorId, requestId: _clientRequestId, ...safeBody } = body;
+
+    const payload = {
+      ...safeBody,
+      NoGilingan,
+      actorId, // ✅ audit pakai ID
+      requestId: makeRequestId(req),
+    };
+
+    // =========================================
+    // ✅ BACKWARD COMPATIBILITY:
+    // kalau client lama kirim field flat,
+    // pindahkan ke payload.header supaya cocok dengan service cascade
+    // =========================================
+    payload.header = payload.header && typeof payload.header === 'object' ? payload.header : {};
+
+    const liftKeys = [
+      'Berat',
+      'IdGilingan',
+      'IsPartial',
+      'IdStatus',
+      'DateCreate',
+      'DateUsage',
+      'Blok',
+      'IdLokasi',
+    ];
+
+    for (const k of liftKeys) {
+      if (Object.prototype.hasOwnProperty.call(payload, k) && payload.header[k] === undefined) {
+        payload.header[k] = payload[k];
+        delete payload[k];
+      }
+    }
+
+    // ✅ business field (username) — overwrite dari token
+    payload.header.UpdateBy = actorUsername;
+
+    const result = await service.updateGilinganCascade(payload);
 
     return res.status(200).json({
       success: true,
-      message: 'Gilingan updated successfully',
-      data: {
-        noGilingan,
-        updatedFields: result.updatedFields,
-      },
+      message: 'Gilingan berhasil diupdate',
+      data: result,
     });
   } catch (err) {
     console.error('Update Gilingan Error:', err);
-    return res.status(err.statusCode || 500).json({
+    const status = err.statusCode || 500;
+    return res.status(status).json({
       success: false,
-      message: err.message || 'Internal Server Error',
+      message: err.message || 'Terjadi kesalahan server',
     });
   }
 };
-  
-
-// routes/labels/gilingan-controller.js
 
 exports.delete = async (req, res) => {
-    try {
-      const { noGilingan } = req.params;
-  
-      if (!noGilingan) {
-        return res.status(400).json({
-          success: false,
-          message: 'noGilingan parameter is required',
-        });
-      }
-  
-      const result = await service.deleteGilinganCascade(noGilingan);
-  
-      return res.status(200).json({
-        success: true,
-        message: 'Gilingan deleted successfully',
-        data: result,
-      });
-    } catch (err) {
-      console.error('Delete Gilingan Error:', err);
-      return res.status(err.statusCode || 500).json({
+  const { nogilingan, noGilingan } = req.params;
+
+  try {
+    const NoGilingan = String(nogilingan || noGilingan || '').trim();
+    if (!NoGilingan) {
+      return res.status(400).json({ success: false, message: 'nogilingan wajib diisi' });
+    }
+
+    const actorId = getActorId(req);
+    if (!actorId) {
+      return res.status(401).json({ success: false, message: 'Unauthorized (idUsername missing)' });
+    }
+
+    const payload = {
+      NoGilingan,
+      actorId,
+      requestId: makeRequestId(req),
+    };
+
+    const result = await service.deleteGilinganCascade(payload);
+
+    return res.status(200).json({
+      success: true,
+      message: `Gilingan ${NoGilingan} berhasil dihapus`,
+      data: result,
+    });
+  } catch (err) {
+    console.error('Delete Gilingan Error:', err);
+    const status = err.statusCode || 500;
+    return res.status(status).json({
+      success: false,
+      message: err.message || 'Terjadi kesalahan server',
+    });
+  }
+};
+
+exports.getGilinganPartialInfo = async (req, res) => {
+  const { nogilingan, noGilingan } = req.params;
+
+  try {
+    const NoGilingan = String(nogilingan || noGilingan || '').trim();
+    if (!NoGilingan) {
+      return res.status(400).json({
         success: false,
-        message: err.message || 'Internal Server Error',
+        message: 'NoGilingan is required.',
       });
     }
-  };
-  
 
+    const data = await service.getPartialInfoByGilingan(NoGilingan);
 
-  exports.getGilinganPartialInfo = async (req, res) => {
-    const { nogilingan } = req.params;
-  
-    try {
-      if (!nogilingan) {
-        return res.status(400).json({
-          success: false,
-          message: 'NoGilingan is required.',
-        });
-      }
-  
-      const data = await service.getPartialInfoByGilingan(nogilingan);
-  
-      if (!data.rows || data.rows.length === 0) {
-        return res.status(200).json({
-          success: true,
-          message: `No partial data for NoGilingan ${nogilingan}`,
-          totalRows: 0,
-          totalPartialWeight: 0,
-          data: [],
-          meta: { nogilingan },
-        });
-      }
-  
+    if (!data.rows || data.rows.length === 0) {
       return res.status(200).json({
         success: true,
-        message: 'Gilingan partial info retrieved successfully',
-        totalRows: data.rows.length,
-        totalPartialWeight: data.totalPartialWeight,
-        data: data.rows,
-        meta: { nogilingan },
-      });
-    } catch (err) {
-      console.error('Get Gilingan Partial Info Error:', err);
-      return res.status(500).json({
-        success: false,
-        message: 'Internal Server Error',
-        error: err.message,
+        message: `No partial data for NoGilingan ${NoGilingan}`,
+        totalRows: 0,
+        totalPartialWeight: 0,
+        data: [],
+        meta: { NoGilingan },
       });
     }
-  };
+
+    return res.status(200).json({
+      success: true,
+      message: 'Gilingan partial info retrieved successfully',
+      totalRows: data.rows.length,
+      totalPartialWeight: data.totalPartialWeight,
+      data: data.rows,
+      meta: { NoGilingan },
+    });
+  } catch (err) {
+    console.error('Get Gilingan Partial Info Error:', err);
+    return res.status(500).json({
+      success: false,
+      message: 'Internal Server Error',
+      error: err.message,
+    });
+  }
+};

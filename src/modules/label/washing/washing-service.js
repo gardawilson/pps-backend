@@ -11,6 +11,10 @@ const {
   formatYMD,
 } = require('../../../core/shared/tutup-transaksi-guard');
 
+const { generateNextCode } = require('../../../core/utils/sequence-code-helper'); 
+const { badReq, conflict } = require('../../../core/utils/http-error'); 
+
+
 
 // GET all header with pagination & search
 exports.getAll = async ({ page, limit, search }) => {
@@ -106,36 +110,6 @@ exports.getWashingDetailByNoWashing = async (nowashing) => {
 };
 
 
-// ... getAll & getWashingDetailByNoWashing tetap
-
-// util zero-pad
-function padLeft(num, width) {
-  const s = String(num);
-  return s.length >= width ? s : '0'.repeat(width - s.length) + s;
-}
-
-// Generate NoWashing dengan format: "B." + 10 digit
-async function generateNextNoWashing(tx, prefix = 'B.', width = 10) {
-  const rq = new sql.Request(tx);
-  const q = `
-    -- Kunci range baca nomor terakhir agar tidak balapan
-    SELECT TOP 1 h.NoWashing
-    FROM Washing_h AS h WITH (UPDLOCK, HOLDLOCK)
-    WHERE h.NoWashing LIKE @prefix + '%'
-    ORDER BY TRY_CONVERT(BIGINT, SUBSTRING(h.NoWashing, LEN(@prefix) + 1, 50)) DESC, h.NoWashing DESC
-  `;
-  const r = await rq.input('prefix', sql.VarChar, prefix).query(q);
-
-  let lastNum = 0;
-  if (r.recordset.length > 0) {
-    const last = r.recordset[0].NoWashing; // e.g. "B.0000031863"
-    const numericPart = last.substring(prefix.length); // "0000031863"
-    lastNum = parseInt(numericPart, 10) || 0;
-  }
-  const next = lastNum + 1;
-  return prefix + padLeft(next, width);
-}
-
 
 exports.createWashingCascade = async (payload) => {
   const pool = await poolPromise;
@@ -148,53 +122,66 @@ exports.createWashingCascade = async (payload) => {
   const NoBongkarSusun = payload?.NoBongkarSusun?.toString().trim() || null;
 
   // ---- Validasi dasar
-  const badReq = (msg) => {
-    const e = new Error(msg);
-    e.statusCode = 400;
-    return e;
-  };
-
   if (!header.IdJenisPlastik) throw badReq('IdJenisPlastik wajib diisi');
   if (!header.IdWarehouse) throw badReq('IdWarehouse wajib diisi');
-  if (!header.CreateBy) throw badReq('CreateBy wajib diisi');
-  if (!Array.isArray(details) || details.length === 0)
-    throw badReq('Details wajib berisi minimal 1 item');
+  if (!header.CreateBy) throw badReq('CreateBy wajib diisi'); // business field, controller harus overwrite dari token
+  if (!Array.isArray(details) || details.length === 0) throw badReq('Details wajib berisi minimal 1 item');
 
   // Mutually exclusive check
   const hasProduksi = !!NoProduksi;
   const hasBongkar = !!NoBongkarSusun;
-  if (hasProduksi && hasBongkar) {
-    const err = new Error('NoProduksi dan NoBongkarSusun tidak boleh diisi bersamaan');
-    err.statusCode = 400;
-    throw err;
+  if (hasProduksi && hasBongkar) throw badReq('NoProduksi dan NoBongkarSusun tidak boleh diisi bersamaan');
+
+  // =====================================================
+  // [AUDIT] Pakai actorId dari controller (token)
+  // =====================================================
+  const actorIdNum = Number(payload?.actorId);
+  const actorId = Number.isFinite(actorIdNum) && actorIdNum > 0 ? actorIdNum : null;
+
+  const requestId = String(payload?.requestId || `${Date.now()}-${Math.random().toString(16).slice(2)}`);
+
+  if (!actorId) throw badReq('actorId kosong. Controller harus inject payload.actorId dari token.');
+
+  // =====================================================
+  // [DETAILS] normalize + validate sekali (NO INSERT LOOP)
+  // =====================================================
+  const normalizedDetails = details.map((d) => {
+    const noSak = Number(d?.NoSak);
+    if (!Number.isFinite(noSak) || noSak <= 0) {
+      throw badReq(`NoSak tidak valid: ${d?.NoSak}`);
+    }
+
+    const berat = d?.Berat == null ? 0 : Number(d.Berat);
+    if (!Number.isFinite(berat) || berat < 0) {
+      throw badReq(`Berat tidak valid pada NoSak ${noSak}: ${d?.Berat}`);
+    }
+
+    return { NoSak: Math.trunc(noSak), Berat: berat };
+  });
+
+  // optional tapi recommended: cegah NoSak duplikat dalam payload
+  {
+    const set = new Set();
+    for (const x of normalizedDetails) {
+      const k = String(x.NoSak);
+      if (set.has(k)) throw badReq(`NoSak duplikat di payload: ${x.NoSak}`);
+      set.add(k);
+    }
   }
 
-  // =====================================================
-  // [AUDIT] Buat sekali di awal (biar konsisten dipakai)
-  // =====================================================
-  const actor =
-    String(payload?.actor || '').trim() ||
-    String(header.CreateBy || '').trim() ||
-    null;
-
-  const requestId =
-    String(payload?.requestId || `${Date.now()}-${Math.random().toString(16).slice(2)}`);
-
-  // (Opsional tapi recommended) paksa actor tidak kosong
-  // kalau kamu sudah punya token, seharusnya actor selalu ada.
-  if (!actor) throw badReq('actor kosong. Kirim actor dari token (payload.actor).');
+  const detailsJson = JSON.stringify(normalizedDetails);
 
   try {
     await tx.begin(sql.ISOLATION_LEVEL.SERIALIZABLE);
 
     // =====================================================
-    // [AUDIT CTX] Set actor + request_id untuk trigger audit
+    // [AUDIT CTX] Set actor_id + request_id untuk trigger audit
     // =====================================================
     await new sql.Request(tx)
-      .input('actor', sql.NVarChar(128), actor)
+      .input('actorId', sql.Int, actorId)
       .input('rid', sql.NVarChar(64), requestId)
       .query(`
-        EXEC sys.sp_set_session_context @key=N'actor', @value=@actor;
+        EXEC sys.sp_set_session_context @key=N'actor_id', @value=@actorId;
         EXEC sys.sp_set_session_context @key=N'request_id', @value=@rid;
       `);
 
@@ -220,10 +207,7 @@ exports.createWashingCascade = async (payload) => {
 
       let lokasi = null;
       if (kodeRef) {
-        lokasi = await getBlokLokasiFromKodeProduksi({
-          kode: kodeRef,
-          runner: tx,
-        });
+        lokasi = await getBlokLokasiFromKodeProduksi({ kode: kodeRef, runner: tx });
       }
 
       if (lokasi) {
@@ -233,25 +217,31 @@ exports.createWashingCascade = async (payload) => {
     }
 
     // ===============================
-    // 1) Generate NoWashing
+    // 1) Generate NoWashing (PAKAI generateNextCode)
     // ===============================
-    const generatedNo = await generateNextNoWashing(tx, 'B.', 10);
+    const gen = async () =>
+      generateNextCode(tx, {
+        tableName: 'Washing_h',
+        columnName: 'NoWashing',
+        prefix: 'B.',
+        width: 10,
+      });
 
-    // 2) Double-check belum dipakai
+    const generatedNo = await gen();
+
+    // 2) Double-check belum dipakai (lock supaya konsisten)
     const exist = await new sql.Request(tx)
-      .input('NoWashing', sql.VarChar, generatedNo)
+      .input('NoWashing', sql.VarChar(50), generatedNo)
       .query(`SELECT 1 FROM Washing_h WITH (UPDLOCK, HOLDLOCK) WHERE NoWashing = @NoWashing`);
 
     if (exist.recordset.length > 0) {
-      const retryNo = await generateNextNoWashing(tx, 'B.', 10);
+      const retryNo = await gen();
       const exist2 = await new sql.Request(tx)
-        .input('NoWashing', sql.VarChar, retryNo)
+        .input('NoWashing', sql.VarChar(50), retryNo)
         .query(`SELECT 1 FROM Washing_h WITH (UPDLOCK, HOLDLOCK) WHERE NoWashing = @NoWashing`);
 
       if (exist2.recordset.length > 0) {
-        const err = new Error('Gagal generate NoWashing unik, coba lagi.');
-        err.statusCode = 409;
-        throw err;
+        throw conflict('Gagal generate NoWashing unik, coba lagi.');
       }
       header.NoWashing = retryNo;
     } else {
@@ -277,12 +267,12 @@ exports.createWashingCascade = async (payload) => {
     `;
 
     await new sql.Request(tx)
-      .input('NoWashing', sql.VarChar, header.NoWashing)
+      .input('NoWashing', sql.VarChar(50), header.NoWashing)
       .input('IdJenisPlastik', sql.Int, header.IdJenisPlastik)
       .input('IdWarehouse', sql.Int, header.IdWarehouse)
       .input('DateCreate', sql.Date, effectiveDateCreate)
       .input('IdStatus', sql.Int, header.IdStatus ?? 1)
-      .input('CreateBy', sql.VarChar, header.CreateBy)
+      .input('CreateBy', sql.VarChar(50), header.CreateBy) // overwritten by controller
       .input('DateTimeCreate', sql.DateTime, nowDateTime)
       .input('Density', sql.Decimal(10, 3), header.Density ?? null)
       .input('Moisture', sql.Decimal(10, 3), header.Moisture ?? null)
@@ -290,75 +280,77 @@ exports.createWashingCascade = async (payload) => {
       .input('Density3', sql.Decimal(10, 3), header.Density3 ?? null)
       .input('Moisture2', sql.Decimal(10, 3), header.Moisture2 ?? null)
       .input('Moisture3', sql.Decimal(10, 3), header.Moisture3 ?? null)
-      .input('Blok', sql.VarChar, header.Blok ?? null)
+      .input('Blok', sql.VarChar(50), header.Blok ?? null)
       .input('IdLokasi', sql.Int, header.IdLokasi ?? null)
       .query(insertHeaderSql);
 
     // ===============================
-    // 4) Insert details
+    // 4) Insert details (BULK)
     // ===============================
-    const insertDetailSql = `
+    const insertDetailsBulkSql = `
       INSERT INTO Washing_d (NoWashing, NoSak, Berat, DateUsage)
-      VALUES (@NoWashing, @NoSak, @Berat, NULL)
+      SELECT
+        @NoWashing,
+        j.NoSak,
+        j.Berat,
+        NULL
+      FROM OPENJSON(@DetailsJson)
+      WITH (
+        NoSak int '$.NoSak',
+        Berat decimal(18,3) '$.Berat'
+      ) AS j;
     `;
 
-    let detailCount = 0;
+    await new sql.Request(tx)
+      .input('NoWashing', sql.VarChar(50), header.NoWashing)
+      .input('DetailsJson', sql.NVarChar(sql.MAX), detailsJson)
+      .query(insertDetailsBulkSql);
 
-    for (const d of details) {
-      const noSak = Number(d?.NoSak);
-      if (!Number.isFinite(noSak) || noSak <= 0) {
-        throw badReq(`NoSak tidak valid: ${d?.NoSak}`);
-      }
-
-      const berat = d?.Berat == null ? 0 : Number(d.Berat);
-      if (!Number.isFinite(berat) || berat < 0) {
-        throw badReq(`Berat tidak valid pada NoSak ${noSak}: ${d?.Berat}`);
-      }
-
-      await new sql.Request(tx)
-        .input('NoWashing', sql.VarChar, header.NoWashing)
-        .input('NoSak', sql.Int, noSak)
-        .input('Berat', sql.Decimal(18, 3), berat)
-        .query(insertDetailSql);
-
-      detailCount++;
-    }
+    const detailCount = normalizedDetails.length;
 
     // ===============================
-    // 5) Conditional output
+    // 5) Conditional output (BULK)
     // ===============================
     let outputTarget = null;
     let outputCount = 0;
 
     if (hasProduksi) {
-      const insertWpoSql = `
+      const insertWpoBulkSql = `
         INSERT INTO WashingProduksiOutput (NoProduksi, NoWashing, NoSak)
-        VALUES (@NoProduksi, @NoWashing, @NoSak)
+        SELECT
+          @NoProduksi,
+          @NoWashing,
+          j.NoSak
+        FROM OPENJSON(@DetailsJson)
+        WITH (NoSak int '$.NoSak') AS j;
       `;
 
-      for (const d of details) {
-        await new sql.Request(tx)
-          .input('NoProduksi', sql.VarChar, NoProduksi)
-          .input('NoWashing', sql.VarChar, header.NoWashing)
-          .input('NoSak', sql.Int, Number(d.NoSak))
-          .query(insertWpoSql);
-        outputCount++;
-      }
+      await new sql.Request(tx)
+        .input('NoProduksi', sql.VarChar(50), NoProduksi)
+        .input('NoWashing', sql.VarChar(50), header.NoWashing)
+        .input('DetailsJson', sql.NVarChar(sql.MAX), detailsJson)
+        .query(insertWpoBulkSql);
+
+      outputCount = detailCount;
       outputTarget = 'WashingProduksiOutput';
     } else if (hasBongkar) {
-      const insertBsoSql = `
+      const insertBsoBulkSql = `
         INSERT INTO BongkarSusunOutputWashing (NoBongkarSusun, NoWashing, NoSak)
-        VALUES (@NoBongkarSusun, @NoWashing, @NoSak)
+        SELECT
+          @NoBongkarSusun,
+          @NoWashing,
+          j.NoSak
+        FROM OPENJSON(@DetailsJson)
+        WITH (NoSak int '$.NoSak') AS j;
       `;
 
-      for (const d of details) {
-        await new sql.Request(tx)
-          .input('NoBongkarSusun', sql.VarChar, NoBongkarSusun)
-          .input('NoWashing', sql.VarChar, header.NoWashing)
-          .input('NoSak', sql.Int, Number(d.NoSak))
-          .query(insertBsoSql);
-        outputCount++;
-      }
+      await new sql.Request(tx)
+        .input('NoBongkarSusun', sql.VarChar(50), NoBongkarSusun)
+        .input('NoWashing', sql.VarChar(50), header.NoWashing)
+        .input('DetailsJson', sql.NVarChar(sql.MAX), detailsJson)
+        .query(insertBsoBulkSql);
+
+      outputCount = detailCount;
       outputTarget = 'BongkarSusunOutputWashing';
     }
 
@@ -387,9 +379,7 @@ exports.createWashingCascade = async (payload) => {
         outputInserted: outputCount,
       },
       outputTarget,
-
-      // boleh dihapus, tapi berguna buat debug grouping audit
-      audit: { actor, requestId },
+      audit: { actorId, requestId }, // ✅ sekarang id
     };
   } catch (e) {
     try { await tx.rollback(); } catch (_) {}
@@ -404,10 +394,7 @@ exports.updateWashingCascade = async (payload) => {
   const tx = new sql.Transaction(pool);
 
   const NoWashing = payload?.NoWashing?.toString().trim();
-  if (!NoWashing) {
-    const e = new Error('NoWashing (path) wajib diisi');
-    e.statusCode = 400; throw e;
-  }
+  if (!NoWashing) throw badReq('NoWashing (path) wajib diisi');
 
   const header = payload?.header || {};
   const details = Array.isArray(payload?.details) ? payload.details : null; // null => tidak sentuh details
@@ -416,21 +403,97 @@ exports.updateWashingCascade = async (payload) => {
   const NoBongkarSusun = payload?.NoBongkarSusun?.toString().trim() || null;
 
   const hasProduksi = !!NoProduksi;
-  const hasBongkar  = !!NoBongkarSusun;
+  const hasBongkar = !!NoBongkarSusun;
   if (hasProduksi && hasBongkar) {
-    const e = new Error('NoProduksi dan NoBongkarSusun tidak boleh diisi bersamaan');
-    e.statusCode = 400; throw e;
+    throw badReq('NoProduksi dan NoBongkarSusun tidak boleh diisi bersamaan');
   }
 
-  const badReq = (msg) => { const e = new Error(msg); e.statusCode = 400; return e; };
+  // =====================================================
+  // [AUDIT] actorId + requestId (ID only)
+  // =====================================================
+  const actorIdNum = Number(payload?.actorId);
+  const actorId = Number.isFinite(actorIdNum) && actorIdNum > 0 ? actorIdNum : null;
+
+  const requestId = String(payload?.requestId || `${Date.now()}-${Math.random().toString(16).slice(2)}`);
+
+  if (!actorId) throw badReq('actorId kosong. Controller harus inject payload.actorId dari token.');
+
+  // =====================================================
+  // [DETAILS] normalize + validate untuk bulk insert (kalau details dikirim)
+  // - IdLokasi boleh "-" / "" / null => dianggap kosong => fallback header.IdLokasi / null
+  // =====================================================
+  let normalizedDetails = null;
+  let detailsJson = null;
+
+  if (details) {
+    normalizedDetails = details.map((d) => {
+      const noSak = Number(d?.NoSak);
+      if (!Number.isFinite(noSak) || noSak <= 0) {
+        throw badReq(`NoSak tidak valid: ${d?.NoSak}`);
+      }
+
+      const berat = d?.Berat == null ? 0 : Number(d.Berat);
+      if (!Number.isFinite(berat) || berat < 0) {
+        throw badReq(`Berat tidak valid pada NoSak ${noSak}: ${d?.Berat}`);
+      }
+
+      const rawLok = d?.IdLokasi;
+      let idLokasi = null;
+
+      if (rawLok === undefined || rawLok === null) {
+        idLokasi = header.IdLokasi ?? null;
+      } else {
+        const s = String(rawLok).trim();
+        if (s === '' || s === '-') {
+          idLokasi = header.IdLokasi ?? null;
+        } else {
+          const n = Number(s);
+          if (!Number.isFinite(n)) {
+            throw badReq(`IdLokasi tidak valid pada NoSak ${Math.trunc(noSak)}: ${rawLok}`);
+          }
+          idLokasi = Math.trunc(n);
+        }
+      }
+
+      if (idLokasi !== null && !Number.isFinite(Number(idLokasi))) {
+        throw badReq(`IdLokasi tidak valid pada NoSak ${Math.trunc(noSak)}: ${rawLok}`);
+      }
+
+      return {
+        NoSak: Math.trunc(noSak),
+        Berat: berat,
+        IdLokasi: idLokasi === null ? null : Math.trunc(Number(idLokasi)),
+      };
+    });
+
+    // optional: cegah NoSak duplikat
+    const set = new Set();
+    for (const x of normalizedDetails) {
+      const k = String(x.NoSak);
+      if (set.has(k)) throw badReq(`NoSak duplikat di payload: ${x.NoSak}`);
+      set.add(k);
+    }
+
+    detailsJson = JSON.stringify(normalizedDetails);
+  }
 
   try {
     await tx.begin(sql.ISOLATION_LEVEL.SERIALIZABLE);
 
+    // =====================================================
+    // [AUDIT CTX] Set actor_id + request_id untuk trigger audit
+    // =====================================================
+    await new sql.Request(tx)
+      .input('actorId', sql.Int, actorId)
+      .input('rid', sql.NVarChar(64), requestId)
+      .query(`
+        EXEC sys.sp_set_session_context @key=N'actor_id', @value=@actorId;
+        EXEC sys.sp_set_session_context @key=N'request_id', @value=@rid;
+      `);
+
     // 0) Pastikan header exist + ambil DateCreate existing (LOCK)
-    const rqCheck = new sql.Request(tx);
-    const exist = await rqCheck
-      .input('NoWashing', sql.VarChar, NoWashing)
+    const exist = await new sql.Request(tx)
+      .input('NoWashing', sql.VarChar(50), NoWashing)
       .query(`
         SELECT TOP 1 NoWashing, DateCreate
         FROM dbo.Washing_h WITH (UPDLOCK, HOLDLOCK)
@@ -439,16 +502,15 @@ exports.updateWashingCascade = async (payload) => {
 
     if (exist.recordset.length === 0) {
       const e = new Error(`NoWashing ${NoWashing} tidak ditemukan`);
-      e.statusCode = 404; throw e;
+      e.statusCode = 404;
+      throw e;
     }
 
-    const existingDateCreate = exist.recordset[0]?.DateCreate; // Date dari DB (dokumen ini)
+    const existingDateCreate = exist.recordset[0]?.DateCreate;
     const existingDateOnly = toDateOnly(existingDateCreate);
 
     // ===============================
     // [A] TUTUP TRANSAKSI CHECK (UPDATE)
-    // RULE: trxDate <= lastClosed => reject
-    // Pakai tanggal existing di DB (dokumen ini)
     // ===============================
     await assertNotLocked({
       date: existingDateOnly,
@@ -457,12 +519,10 @@ exports.updateWashingCascade = async (payload) => {
       useLock: true,
     });
 
-    // Kalau client mengirim DateCreate baru, cek juga (dan jangan izinkan null->GETDATE)
+    // Jika client kirim DateCreate baru, cek juga
     let newDateOnly = null;
     if (header.DateCreate !== undefined) {
-      if (header.DateCreate === null) {
-        throw badReq('DateCreate tidak boleh null pada UPDATE.');
-      }
+      if (header.DateCreate === null) throw badReq('DateCreate tidak boleh null pada UPDATE.');
       newDateOnly = toDateOnly(header.DateCreate);
       if (!newDateOnly) throw badReq('DateCreate tidak valid.');
 
@@ -474,9 +534,9 @@ exports.updateWashingCascade = async (payload) => {
       });
     }
 
-    // 1) Update header (partial / dynamic)
+    // 1) Update header (partial/dynamic)
     const setParts = [];
-    const reqHeader = new sql.Request(tx).input('NoWashing', sql.VarChar, NoWashing);
+    const reqHeader = new sql.Request(tx).input('NoWashing', sql.VarChar(50), NoWashing);
 
     const setIf = (col, param, type, val) => {
       if (val !== undefined) {
@@ -486,108 +546,154 @@ exports.updateWashingCascade = async (payload) => {
     };
 
     setIf('IdJenisPlastik', 'IdJenisPlastik', sql.Int, header.IdJenisPlastik);
-    setIf('IdWarehouse',    'IdWarehouse',    sql.Int, header.IdWarehouse);
+    setIf('IdWarehouse', 'IdWarehouse', sql.Int, header.IdWarehouse);
 
-    // DateCreate: hanya di-set kalau client mengirim, dan kita pakai hasil parse (bukan GETDATE)
     if (header.DateCreate !== undefined) {
       setIf('DateCreate', 'DateCreate', sql.Date, newDateOnly);
     }
 
-    setIf('IdStatus',   'IdStatus',   sql.Int, header.IdStatus);
-    setIf('Density',    'Density',    sql.Decimal(10,3), header.Density ?? null);
-    setIf('Moisture',   'Moisture',   sql.Decimal(10,3), header.Moisture ?? null);
-    setIf('Density2',   'Density2',   sql.Decimal(10,3), header.Density2 ?? null);
-    setIf('Density3',   'Density3',   sql.Decimal(10,3), header.Density3 ?? null);
-    setIf('Moisture2',  'Moisture2',  sql.Decimal(10,3), header.Moisture2 ?? null);
-    setIf('Moisture3',  'Moisture3',  sql.Decimal(10,3), header.Moisture3 ?? null);
-    setIf('Blok',       'Blok',       sql.VarChar, header.Blok ?? null);
-    setIf('IdLokasi',   'IdLokasi',   sql.VarChar, header.IdLokasi ?? null);
+    setIf('IdStatus', 'IdStatus', sql.Int, header.IdStatus);
+    setIf('Density', 'Density', sql.Decimal(10, 3), header.Density ?? null);
+    setIf('Moisture', 'Moisture', sql.Decimal(10, 3), header.Moisture ?? null);
+    setIf('Density2', 'Density2', sql.Decimal(10, 3), header.Density2 ?? null);
+    setIf('Density3', 'Density3', sql.Decimal(10, 3), header.Density3 ?? null);
+    setIf('Moisture2', 'Moisture2', sql.Decimal(10, 3), header.Moisture2 ?? null);
+    setIf('Moisture3', 'Moisture3', sql.Decimal(10, 3), header.Moisture3 ?? null);
+    // setIf('Blok', 'Blok', sql.VarChar(50), header.Blok ?? null);
+    // setIf('IdLokasi', 'IdLokasi', sql.Int, header.IdLokasi ?? null);
 
     if (setParts.length > 0) {
-      const sqlUpdateHeader = `
-        UPDATE dbo.Washing_h SET ${setParts.join(', ')}
+      await reqHeader.query(`
+        UPDATE dbo.Washing_h
+        SET ${setParts.join(', ')}
         WHERE NoWashing = @NoWashing
-      `;
-      await reqHeader.query(sqlUpdateHeader);
+      `);
     }
 
-    // 2) Replace details (yang DateUsage IS NULL) — kalau dikirim
-    let detailAffected = 0;
+    // =====================================================
+    // [IMPORTANT FIX] Jika details akan diganti, output yang bergantung HARUS dihapus dulu
+    // =====================================================
     if (details) {
       await new sql.Request(tx)
-        .input('NoWashing', sql.VarChar, NoWashing)
+        .input('NoWashing', sql.VarChar(50), NoWashing)
+        .query(`DELETE FROM dbo.WashingProduksiOutput WHERE NoWashing = @NoWashing`);
+
+      await new sql.Request(tx)
+        .input('NoWashing', sql.VarChar(50), NoWashing)
+        .query(`DELETE FROM dbo.BongkarSusunOutputWashing WHERE NoWashing = @NoWashing`);
+    }
+
+    // 2) Replace details (DateUsage IS NULL) — BULK (kalau dikirim)
+    let detailAffected = 0;
+
+    if (details) {
+      await new sql.Request(tx)
+        .input('NoWashing', sql.VarChar(50), NoWashing)
         .query(`
           DELETE FROM dbo.Washing_d
           WHERE NoWashing = @NoWashing AND DateUsage IS NULL
         `);
 
-      const insertDetailSql = `
+      const insertDetailsBulkSql = `
         INSERT INTO dbo.Washing_d (NoWashing, NoSak, Berat, DateUsage, IdLokasi)
-        VALUES (@NoWashing, @NoSak, @Berat, NULL, @IdLokasi)
+        SELECT
+          @NoWashing,
+          j.NoSak,
+          j.Berat,
+          NULL,
+          j.IdLokasi
+        FROM OPENJSON(@DetailsJson)
+        WITH (
+          NoSak int '$.NoSak',
+          Berat decimal(18,3) '$.Berat',
+          IdLokasi int '$.IdLokasi'
+        ) AS j;
       `;
 
-      for (const d of details) {
-        await new sql.Request(tx)
-          .input('NoWashing', sql.VarChar, NoWashing)
-          .input('NoSak', sql.Int, d.NoSak)
-          .input('Berat', sql.Decimal(18,3), d.Berat ?? 0)
-          .input('IdLokasi', sql.VarChar, d.IdLokasi ?? header.IdLokasi ?? null)
-          .query(insertDetailSql);
-        detailAffected++;
-      }
+      await new sql.Request(tx)
+        .input('NoWashing', sql.VarChar(50), NoWashing)
+        .input('DetailsJson', sql.NVarChar(sql.MAX), detailsJson)
+        .query(insertDetailsBulkSql);
+
+      detailAffected = normalizedDetails.length;
     }
 
-    // 3) Conditional outputs (tidak berubah logic)
+    // 3) Conditional outputs (bulk juga)
     let outputTarget = null;
     let outputCount = 0;
 
-    const sentAnyOutputField = (payload.hasOwnProperty('NoProduksi') || payload.hasOwnProperty('NoBongkarSusun'));
+    const sentAnyOutputField =
+      Object.prototype.hasOwnProperty.call(payload, 'NoProduksi') ||
+      Object.prototype.hasOwnProperty.call(payload, 'NoBongkarSusun');
+
     if (sentAnyOutputField) {
+      // reset outputs (idempotent)
       await new sql.Request(tx)
-        .input('NoWashing', sql.VarChar, NoWashing)
+        .input('NoWashing', sql.VarChar(50), NoWashing)
         .query(`DELETE FROM dbo.WashingProduksiOutput WHERE NoWashing = @NoWashing`);
 
       await new sql.Request(tx)
-        .input('NoWashing', sql.VarChar, NoWashing)
+        .input('NoWashing', sql.VarChar(50), NoWashing)
         .query(`DELETE FROM dbo.BongkarSusunOutputWashing WHERE NoWashing = @NoWashing`);
 
-      if (hasProduksi) {
-        const dets = await new sql.Request(tx)
-          .input('NoWashing', sql.VarChar, NoWashing)
-          .query(`SELECT NoSak FROM dbo.Washing_d WHERE NoWashing = @NoWashing AND DateUsage IS NULL ORDER BY NoSak`);
+      // Ambil NoSak sumber:
+      let noSakJson = null;
 
-        const insertWpoSql = `
+      if (details) {
+        noSakJson = JSON.stringify(normalizedDetails.map((x) => ({ NoSak: x.NoSak })));
+      } else {
+        const dets = await new sql.Request(tx)
+          .input('NoWashing', sql.VarChar(50), NoWashing)
+          .query(`
+            SELECT NoSak
+            FROM dbo.Washing_d
+            WHERE NoWashing = @NoWashing AND DateUsage IS NULL
+            ORDER BY NoSak
+          `);
+
+        noSakJson = JSON.stringify(dets.recordset.map((r) => ({ NoSak: r.NoSak })));
+      }
+
+      const parsed = JSON.parse(noSakJson);
+      const noSakCount = Array.isArray(parsed) ? parsed.length : 0;
+
+      if (hasProduksi) {
+        const insertWpoBulkSql = `
           INSERT INTO dbo.WashingProduksiOutput (NoProduksi, NoWashing, NoSak)
-          VALUES (@NoProduksi, @NoWashing, @NoSak)
+          SELECT
+            @NoProduksi,
+            @NoWashing,
+            j.NoSak
+          FROM OPENJSON(@NoSakJson)
+          WITH (NoSak int '$.NoSak') AS j;
         `;
 
-        for (const row of dets.recordset) {
-          await new sql.Request(tx)
-            .input('NoProduksi', sql.VarChar, NoProduksi)
-            .input('NoWashing', sql.VarChar, NoWashing)
-            .input('NoSak', sql.Int, row.NoSak)
-            .query(insertWpoSql);
-          outputCount++;
-        }
+        await new sql.Request(tx)
+          .input('NoProduksi', sql.VarChar(50), NoProduksi)
+          .input('NoWashing', sql.VarChar(50), NoWashing)
+          .input('NoSakJson', sql.NVarChar(sql.MAX), noSakJson)
+          .query(insertWpoBulkSql);
+
+        outputCount = noSakCount;
         outputTarget = 'WashingProduksiOutput';
       } else if (hasBongkar) {
-        const dets = await new sql.Request(tx)
-          .input('NoWashing', sql.VarChar, NoWashing)
-          .query(`SELECT NoSak FROM dbo.Washing_d WHERE NoWashing = @NoWashing AND DateUsage IS NULL ORDER BY NoSak`);
-
-        const insertBsoSql = `
+        const insertBsoBulkSql = `
           INSERT INTO dbo.BongkarSusunOutputWashing (NoBongkarSusun, NoWashing, NoSak)
-          VALUES (@NoBongkarSusun, @NoWashing, @NoSak)
+          SELECT
+            @NoBongkarSusun,
+            @NoWashing,
+            j.NoSak
+          FROM OPENJSON(@NoSakJson)
+          WITH (NoSak int '$.NoSak') AS j;
         `;
 
-        for (const row of dets.recordset) {
-          await new sql.Request(tx)
-            .input('NoBongkarSusun', sql.VarChar, NoBongkarSusun)
-            .input('NoWashing', sql.VarChar, NoWashing)
-            .input('NoSak', sql.Int, row.NoSak)
-            .query(insertBsoSql);
-          outputCount++;
-        }
+        await new sql.Request(tx)
+          .input('NoBongkarSusun', sql.VarChar(50), NoBongkarSusun)
+          .input('NoWashing', sql.VarChar(50), NoWashing)
+          .input('NoSakJson', sql.NVarChar(sql.MAX), noSakJson)
+          .query(insertBsoBulkSql);
+
+        outputCount = noSakCount;
         outputTarget = 'BongkarSusunOutputWashing';
       }
     }
@@ -598,45 +704,73 @@ exports.updateWashingCascade = async (payload) => {
       header: {
         NoWashing,
         ...header,
-        // optional: info tanggal dokumen
         existingDateCreate: formatYMD(existingDateOnly),
         ...(newDateOnly ? { newDateCreate: formatYMD(newDateOnly) } : {}),
       },
       counts: {
         detailsAffected: detailAffected,
-        outputInserted: outputCount
+        outputInserted: outputCount,
       },
       outputTarget,
+      audit: { actorId, requestId }, // ✅ ID only
       note: details
-        ? 'Details (yang DateUsage IS NULL) diganti sesuai payload.'
-        : 'Details tidak diubah.'
+        ? 'Details (yang DateUsage IS NULL) diganti sesuai payload (bulk). Output dependent direset dulu untuk menghindari FK.'
+        : 'Details tidak diubah.',
     };
   } catch (e) {
-    try { await tx.rollback(); } catch (_) {}
+    try {
+      await tx.rollback();
+    } catch (_) {}
     throw e;
   }
 };
 
 
 
-
-// Hapus 1 header + semua output + details (jika aman + tidak melewati tutup transaksi)
-exports.deleteWashingCascade = async (nowashing) => {
+exports.deleteWashingCascade = async (payload) => {
   const pool = await poolPromise;
   const tx = new sql.Transaction(pool);
 
-  const NoWashing = (nowashing || '').toString().trim();
-  if (!NoWashing) {
-    const e = new Error('NoWashing wajib diisi');
-    e.statusCode = 400; throw e;
-  }
+  // payload bisa string (legacy) atau object
+  const NoWashing =
+    typeof payload === 'string'
+      ? String(payload || '').trim()
+      : String(payload?.NoWashing || payload?.nowashing || '').trim();
+
+  if (!NoWashing) throw badReq('NoWashing wajib diisi');
+
+  // =====================================================
+  // [AUDIT] actorId + requestId (ID only)
+  // =====================================================
+  // ✅ rekomendasi: wajib object supaya audit jelas
+  const actorIdNum = typeof payload === 'object' ? Number(payload?.actorId) : NaN;
+  const actorId = Number.isFinite(actorIdNum) && actorIdNum > 0 ? actorIdNum : null;
+
+  const requestId =
+    typeof payload === 'object'
+      ? String(payload?.requestId || `${Date.now()}-${Math.random().toString(16).slice(2)}`)
+      : String(`${Date.now()}-${Math.random().toString(16).slice(2)}`);
+
+  // 🔒 delete sebaiknya wajib actorId (kalau tidak, audit bisa jatuh ke SUSER_SNAME())
+  if (!actorId) throw badReq('actorId kosong. Controller harus inject payload.actorId dari token.');
 
   try {
     await tx.begin(sql.ISOLATION_LEVEL.SERIALIZABLE);
 
+    // =====================================================
+    // [AUDIT CTX] Set actor_id + request_id untuk trigger audit
+    // =====================================================
+    await new sql.Request(tx)
+      .input('actorId', sql.Int, actorId)
+      .input('rid', sql.NVarChar(64), requestId)
+      .query(`
+        EXEC sys.sp_set_session_context @key=N'actor_id', @value=@actorId;
+        EXEC sys.sp_set_session_context @key=N'request_id', @value=@rid;
+      `);
+
     // 0) pastikan exist + lock + ambil DateCreate existing
     const headRes = await new sql.Request(tx)
-      .input('NoWashing', sql.VarChar, NoWashing)
+      .input('NoWashing', sql.VarChar(50), NoWashing)
       .query(`
         SELECT TOP 1 NoWashing, DateCreate
         FROM dbo.Washing_h WITH (UPDLOCK, HOLDLOCK)
@@ -645,7 +779,8 @@ exports.deleteWashingCascade = async (nowashing) => {
 
     if (headRes.recordset.length === 0) {
       const e = new Error(`NoWashing ${NoWashing} tidak ditemukan`);
-      e.statusCode = 404; throw e;
+      e.statusCode = 404;
+      throw e;
     }
 
     const existingDateCreate = headRes.recordset[0]?.DateCreate;
@@ -653,8 +788,6 @@ exports.deleteWashingCascade = async (nowashing) => {
 
     // ===============================
     // [A] TUTUP TRANSAKSI CHECK (DELETE)
-    // RULE: trxDate <= lastClosed => reject
-    // berdasarkan tanggal dokumen (DateCreate) yang tersimpan di DB
     // ===============================
     await assertNotLocked({
       date: existingDateOnly,
@@ -665,7 +798,7 @@ exports.deleteWashingCascade = async (nowashing) => {
 
     // 1) cek apakah ada detail terpakai
     const used = await new sql.Request(tx)
-      .input('NoWashing', sql.VarChar, NoWashing)
+      .input('NoWashing', sql.VarChar(50), NoWashing)
       .query(`
         SELECT TOP 1 1
         FROM dbo.Washing_d WITH (UPDLOCK, HOLDLOCK)
@@ -673,27 +806,26 @@ exports.deleteWashingCascade = async (nowashing) => {
       `);
 
     if (used.recordset.length > 0) {
-      const e = new Error('Tidak bisa hapus: terdapat detail yang sudah terpakai (DateUsage IS NOT NULL).');
-      e.statusCode = 409; throw e;
+      throw conflict('Tidak bisa hapus: terdapat detail yang sudah terpakai (DateUsage IS NOT NULL).');
     }
 
     // 2) hapus output dulu (hindari FK)
-    await new sql.Request(tx)
-      .input('NoWashing', sql.VarChar, NoWashing)
+    const delWpo = await new sql.Request(tx)
+      .input('NoWashing', sql.VarChar(50), NoWashing)
       .query(`DELETE FROM dbo.WashingProduksiOutput WHERE NoWashing = @NoWashing`);
 
-    await new sql.Request(tx)
-      .input('NoWashing', sql.VarChar, NoWashing)
+    const delBso = await new sql.Request(tx)
+      .input('NoWashing', sql.VarChar(50), NoWashing)
       .query(`DELETE FROM dbo.BongkarSusunOutputWashing WHERE NoWashing = @NoWashing`);
 
     // 3) hapus semua details (yg belum terpakai)
     const delDet = await new sql.Request(tx)
-      .input('NoWashing', sql.VarChar, NoWashing)
+      .input('NoWashing', sql.VarChar(50), NoWashing)
       .query(`DELETE FROM dbo.Washing_d WHERE NoWashing = @NoWashing AND DateUsage IS NULL`);
 
     // 4) hapus header
     const delHead = await new sql.Request(tx)
-      .input('NoWashing', sql.VarChar, NoWashing)
+      .input('NoWashing', sql.VarChar(50), NoWashing)
       .query(`DELETE FROM dbo.Washing_h WHERE NoWashing = @NoWashing`);
 
     await tx.commit();
@@ -704,11 +836,17 @@ exports.deleteWashingCascade = async (nowashing) => {
       deleted: {
         header: delHead.rowsAffected?.[0] ?? 0,
         details: delDet.rowsAffected?.[0] ?? 0,
-        outputs: 'WashingProduksiOutput + BongkarSusunOutputWashing',
+        outputs: {
+          WashingProduksiOutput: delWpo.rowsAffected?.[0] ?? 0,
+          BongkarSusunOutputWashing: delBso.rowsAffected?.[0] ?? 0,
+        },
       },
+      audit: { actorId, requestId }, // ✅ ID only
     };
   } catch (e) {
-    try { await tx.rollback(); } catch (_) {}
+    try {
+      await tx.rollback();
+    } catch (_) {}
 
     // mapping FK error jika ada constraint lain di DB
     if (e.number === 547) {
@@ -718,3 +856,4 @@ exports.deleteWashingCascade = async (nowashing) => {
     throw e;
   }
 };
+

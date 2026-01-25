@@ -1,7 +1,6 @@
-// routes/labels/furniture-wip-controller.js
-const service = require('./furniture-wip-service'); 
-// ⬆️ sesuaikan path dengan struktur project-mu
-// kalau sama seperti gilingan, mungkin: require('./furniture-wip-service');
+// controllers/furniture-wip-controller.js
+const service = require('./furniture-wip-service');
+const { getActorId, getActorUsername, makeRequestId } = require('../../../core/utils/http-context');
 
 // GET /labels/furniture-wip?page=&limit=&search=
 exports.getAll = async (req, res) => {
@@ -13,69 +12,39 @@ exports.getAll = async (req, res) => {
     const { data, total } = await service.getAll({ page, limit, search });
     const totalPages = Math.max(Math.ceil(total / limit), 1);
 
-    res.status(200).json({
+    return res.status(200).json({
       success: true,
       data,
       meta: { page, limit, total, totalPages },
     });
   } catch (err) {
     console.error('Get Furniture WIP List Error:', err);
-    res
-      .status(500)
-      .json({ success: false, message: 'Terjadi kesalahan server' });
+    return res.status(500).json({ success: false, message: 'Terjadi kesalahan server' });
   }
 };
 
-
-/**
- * Expected body:
- * {
- *   "header": {
- *     "IdFurnitureWIP": 1,          // required UNTUK NON-INJECT
- *                                   // untuk INJECT boleh null → auto-mapping multi-label
- *     "Pcs": 10,                    // optional
- *     "Berat": 25.5,                // optional
- *     "DateCreate": "2025-10-28",   // optional (default GETDATE() on server)
- *     "IsPartial": 0,               // optional (default 0)
- *     "IdWarna": 1,                 // optional
- *     "Blok": "A",                  // optional
- *     "IdLokasi": "A1"              // optional
- *     // "CreateBy": "user"         // optional, will default from token if available
- *   },
- *   "outputCode": "BH.0000001234"   // required: prefix-based source label
- *                                   // contoh Inject: "S.0000023471"
- * }
- *
- * Response (contoh):
- * {
- *   "success": true,
- *   "message": "2 Furniture WIP labels created successfully",
- *   "data": {
- *     "headers": [ {..}, {..} ],    // selalu array, 1 atau >1
- *     "output": {
- *       "code": "S.0000023471",
- *       "type": "INJECT",
- *       "mappingTable": "InjectProduksiOutputFurnitureWIP",
- *       "count": 2,
- *       "isMulti": true
- *     }
- *   }
- * }
- */
 exports.create = async (req, res) => {
   try {
-    const payload = req.body || {};
+    const payload = req.body && typeof req.body === 'object' ? req.body : {};
 
-    // Otomatis isi CreateBy dari token kalau belum ada
-    if (!payload?.header?.CreateBy && req.username) {
-      payload.header = { ...(payload.header || {}), CreateBy: req.username };
+    const actorId = getActorId(req);
+    if (!actorId) {
+      return res.status(401).json({ success: false, message: 'Unauthorized (idUsername missing)' });
     }
+
+    // ✅ audit fields
+    payload.actorId = actorId;
+    payload.requestId = makeRequestId(req);
+
+    // ✅ business field CreateBy — overwrite dari token
+    payload.header = payload.header && typeof payload.header === 'object' ? payload.header : {};
+    payload.header.CreateBy = getActorUsername(req) || 'system';
 
     const result = await service.createFurnitureWip(payload);
 
     const headers = Array.isArray(result?.headers) ? result.headers : [];
     const count =
-      (result?.output && typeof result.output.count === 'number')
+      typeof result?.output?.count === 'number'
         ? result.output.count
         : (headers.length || 1);
 
@@ -91,152 +60,163 @@ exports.create = async (req, res) => {
     });
   } catch (err) {
     console.error('Create Furniture WIP Error:', err);
-    return res.status(err.statusCode || 500).json({
+    const status = err.statusCode || 500;
+    return res.status(status).json({
       success: false,
-      message: err.message || 'Internal Server Error',
+      message: err.message || 'Terjadi kesalahan server',
     });
   }
 };
 
-
-
-
-
-  
-/**
- * PUT /labels/furniture-wip/:noFurnitureWip
- *
- * Body (partial update allowed):
- * {
- *   "header": {
- *     "IdFurnitureWIP": 1,   // optional
- *     "Pcs": 10,             // optional
- *     "Berat": 25.5,         // optional
- *     "IsPartial": 0,        // optional
- *     "IdWarna": 3,          // optional
- *     "Blok": "A1",          // optional
- *     "IdLokasi": "R01",     // optional
- *     "DateCreate": "2025-12-01", // optional
- *     "CreateBy": "ganda"    // optional
- *   },
- *   // "outputCode": "BH.0000001234"  // optional
- * }
- *
- * - If "outputCode" is NOT sent at all -> mapping tidak diubah.
- * - If "outputCode": "" (string kosong) -> mapping dihapus.
- * - If "outputCode": "BH.****" / "BI.****" / "BG.****" / "L.****" -> mapping diganti.
- */
 exports.update = async (req, res) => {
-    try {
-      const noFurnitureWip = req.params.noFurnitureWip;
-      if (!noFurnitureWip) {
-        return res.status(400).json({
-          success: false,
-          message: 'noFurnitureWip is required in URL',
-        });
-      }
-  
-      const payload = req.body || {};
-  
-      // auto-fill CreateBy jika mau (optional)
-      if (!payload?.header?.CreateBy && req.username) {
-        payload.header = { ...(payload.header || {}), CreateBy: req.username };
-      }
-  
-      const result = await service.updateFurnitureWip(noFurnitureWip, payload);
-  
-      return res.status(200).json({
-        success: true,
-        message: 'Furniture WIP updated successfully',
-        data: result,
-      });
-    } catch (err) {
-      console.error('Update Furniture WIP Error:', err);
-      return res.status(err.statusCode || 500).json({
-        success: false,
-        message: err.message || 'Internal Server Error',
-      });
+  const { noFurnitureWip, nofurniturewip } = req.params;
+
+  try {
+    const NoFurnitureWIP = String(noFurnitureWip || nofurniturewip || '').trim();
+    if (!NoFurnitureWIP) {
+      return res.status(400).json({ success: false, message: 'noFurnitureWip wajib diisi' });
     }
-  };
 
+    const actorId = getActorId(req);
+    if (!actorId) {
+      return res.status(401).json({ success: false, message: 'Unauthorized (idUsername missing)' });
+    }
 
+    const actorUsername = getActorUsername(req) || 'system';
 
-  // DELETE /labels/furniture-wip/:noFurnitureWip
+    // ✅ pastikan body object
+    const body = req.body && typeof req.body === 'object' ? req.body : {};
+
+    // ✅ jangan percaya audit fields dari client
+    const { actorId: _clientActorId, requestId: _clientRequestId, ...safeBody } = body;
+
+    const payload = {
+      ...safeBody,
+      actorId, // ✅ audit pakai ID
+      requestId: makeRequestId(req),
+    };
+
+    // backward compatibility:
+    // kalau client lama kirim field flat (Pcs, Berat, IdFurnitureWIP, dll),
+    // angkat ke payload.header
+    payload.header = payload.header && typeof payload.header === 'object' ? payload.header : {};
+
+    const liftKeys = [
+      'IDFurnitureWIP', 'IdFurnitureWIP',
+      'IdWarehouse',
+      'Jam',
+      'Pcs',
+      'Berat',
+      'IsPartial',
+      'IdWarna',
+      'Blok',
+      'IdLokasi',
+      'DateCreate',
+      'CreateBy',
+    ];
+
+    for (const k of liftKeys) {
+      if (Object.prototype.hasOwnProperty.call(payload, k) && payload.header[k] === undefined) {
+        payload.header[k] = payload[k];
+        delete payload[k];
+      }
+    }
+
+    // ✅ business field CreateBy — overwrite dari token
+    // (untuk update, kamu sebelumnya pakai CreateBy; kalau kamu punya kolom UpdateBy di tabel, ganti ke UpdateBy)
+    payload.header.CreateBy = actorUsername;
+
+    const result = await service.updateFurnitureWip(NoFurnitureWIP, payload);
+
+    return res.status(200).json({
+      success: true,
+      message: 'Furniture WIP berhasil diupdate',
+      data: result,
+    });
+  } catch (err) {
+    console.error('Update Furniture WIP Error:', err);
+    const status = err.statusCode || 500;
+    return res.status(status).json({
+      success: false,
+      message: err.message || 'Terjadi kesalahan server',
+    });
+  }
+};
+
 exports.delete = async (req, res) => {
-    const { noFurnitureWip } = req.params;
-  
-    if (!noFurnitureWip) {
-      return res.status(400).json({
-        success: false,
-        message: 'NoFurnitureWIP is required in URL',
-      });
-    }
-  
-    try {
-      const result = await service.deleteFurnitureWip(noFurnitureWip);
-  
-      return res.status(200).json({
-        success: true,
-        message: 'Furniture WIP deleted successfully',
-        data: result, // { noFurnitureWip, deleted: true }
-      });
-    } catch (err) {
-      console.error('Delete Furniture WIP Error:', err);
-  
-      if (err.statusCode === 404) {
-        return res.status(404).json({
-          success: false,
-          message: err.message || 'Furniture WIP not found',
-        });
-      }
-  
-      return res.status(500).json({
-        success: false,
-        message: 'Internal Server Error',
-      });
-    }
-  };
+  const { noFurnitureWip, nofurniturewip } = req.params;
 
+  try {
+    const NoFurnitureWIP = String(noFurnitureWip || nofurniturewip || '').trim();
+    if (!NoFurnitureWIP) {
+      return res.status(400).json({ success: false, message: 'noFurnitureWip wajib diisi' });
+    }
 
-  // GET /labels/furniture-wip/partials/:nofurniturewip
+    const actorId = getActorId(req);
+    if (!actorId) {
+      return res.status(401).json({ success: false, message: 'Unauthorized (idUsername missing)' });
+    }
+
+    // ✅ audit payload untuk delete (karena service delete butuh actorId/requestId)
+    const payload = {
+      actorId,
+      requestId: makeRequestId(req),
+    };
+
+    const result = await service.deleteFurnitureWip(NoFurnitureWIP, payload);
+
+    return res.status(200).json({
+      success: true,
+      message: `Furniture WIP ${NoFurnitureWIP} berhasil dihapus`,
+      data: result,
+    });
+  } catch (err) {
+    console.error('Delete Furniture WIP Error:', err);
+    const status = err.statusCode || 500;
+    return res.status(status).json({
+      success: false,
+      message: err.message || 'Terjadi kesalahan server',
+    });
+  }
+};
+
+// GET /labels/furniture-wip/partials/:nofurniturewip
 exports.getFurnitureWipPartialInfo = async (req, res) => {
-    const { nofurniturewip } = req.params;
-  
-    try {
-      if (!nofurniturewip) {
-        return res.status(400).json({
-          success: false,
-          message: 'NoFurnitureWIP is required.',
-        });
-      }
-  
-      const data = await service.getPartialInfoByFurnitureWip(nofurniturewip);
-  
-      if (!data.rows || data.rows.length === 0) {
-        return res.status(200).json({
-          success: true,
-          message: `No partial data for NoFurnitureWIP ${nofurniturewip}`,
-          totalRows: 0,
-          totalPartialPcs: 0,
-          data: [],
-          meta: { noFurnitureWIP: nofurniturewip },
-        });
-      }
-  
+  const { nofurniturewip, noFurnitureWip } = req.params;
+
+  try {
+    const NoFurnitureWIP = String(nofurniturewip || noFurnitureWip || '').trim();
+    if (!NoFurnitureWIP) {
+      return res.status(400).json({ success: false, message: 'NoFurnitureWIP is required.' });
+    }
+
+    const data = await service.getPartialInfoByFurnitureWip(NoFurnitureWIP);
+
+    if (!data?.rows || data.rows.length === 0) {
       return res.status(200).json({
         success: true,
-        message: 'FurnitureWIP partial info retrieved successfully',
-        totalRows: data.rows.length,
-        totalPartialPcs: data.totalPartialPcs,
-        data: data.rows,
-        meta: { noFurnitureWIP: nofurniturewip },
-      });
-    } catch (err) {
-      console.error('Get FurnitureWIP Partial Info Error:', err);
-      return res.status(500).json({
-        success: false,
-        message: 'Internal Server Error',
-        error: err.message,
+        message: `No partial data for NoFurnitureWIP ${NoFurnitureWIP}`,
+        totalRows: 0,
+        totalPartialPcs: 0,
+        data: [],
+        meta: { noFurnitureWIP: NoFurnitureWIP },
       });
     }
-  };
+
+    return res.status(200).json({
+      success: true,
+      message: 'FurnitureWIP partial info retrieved successfully',
+      totalRows: data.rows.length,
+      totalPartialPcs: data.totalPartialPcs,
+      data: data.rows,
+      meta: { noFurnitureWIP: NoFurnitureWIP },
+    });
+  } catch (err) {
+    console.error('Get FurnitureWIP Partial Info Error:', err);
+    return res.status(500).json({
+      success: false,
+      message: 'Internal Server Error',
+      error: err.message,
+    });
+  }
+};

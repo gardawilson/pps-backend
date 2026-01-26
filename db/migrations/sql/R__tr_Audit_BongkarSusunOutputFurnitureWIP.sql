@@ -4,6 +4,13 @@ SET QUOTED_IDENTIFIER ON;
 GO
 
 /* ===== [dbo].[tr_Audit_BongkarSusunOutputFurnitureWIP] ON [dbo].[BongkarSusunOutputFurnitureWIP] ===== */
+-- =============================================
+-- TRIGGER: tr_Audit_BongkarSusunOutputFurnitureWIP
+-- AFTER INSERT, UPDATE, DELETE
+-- Actor: SESSION_CONTEXT('actor_id') fallback SESSION_CONTEXT('actor') fallback SUSER_SNAME()
+-- RequestId: SESSION_CONTEXT('request_id')
+-- ✅ PK: NoFurnitureWIP (parent document)
+-- =============================================
 CREATE OR ALTER TRIGGER [dbo].[tr_Audit_BongkarSusunOutputFurnitureWIP]
 ON [dbo].[BongkarSusunOutputFurnitureWIP]
 AFTER INSERT, UPDATE, DELETE
@@ -21,29 +28,32 @@ BEGIN
   DECLARE @rid nvarchar(64) =
     CAST(SESSION_CONTEXT(N'request_id') AS nvarchar(64));
 
+  /* =========================================================
+     ✅ Helper: PK ringkas (NoFurnitureWIP tunggal / list)
+  ========================================================= */
   DECLARE @pk nvarchar(max);
 
   ;WITH x AS (
-    SELECT NoBongkarSusun FROM inserted
+    SELECT NoFurnitureWIP FROM inserted
     UNION
-    SELECT NoBongkarSusun FROM deleted
+    SELECT NoFurnitureWIP FROM deleted
   )
   SELECT
     @pk =
       CASE
-        WHEN COUNT(DISTINCT NoBongkarSusun) = 1
-          THEN CONCAT('{"NoBongkarSusun":"', MAX(NoBongkarSusun), '"}')
+        WHEN COUNT(DISTINCT NoFurnitureWIP) = 1
+          THEN CONCAT('{"NoFurnitureWIP":"', MAX(NoFurnitureWIP), '"}')
         ELSE
           CONCAT(
-            '{"NoBongkarSusunList":',
-            (SELECT DISTINCT NoBongkarSusun FROM x FOR JSON PATH),
+            '{"NoFurnitureWIPList":',
+            (SELECT DISTINCT NoFurnitureWIP FROM x FOR JSON PATH),
             '}'
           )
       END
   FROM x;
 
   /* =====================
-     INSERT
+     INSERT (1 row audit)
   ===================== */
   IF EXISTS (SELECT 1 FROM inserted) AND NOT EXISTS (SELECT 1 FROM deleted)
   BEGIN
@@ -56,15 +66,17 @@ BEGIN
       @pk,
       NULL,
       (
-        SELECT i.NoBongkarSusun, i.NoFurnitureWIP
+        SELECT
+          i.NoBongkarSusun,
+          i.NoFurnitureWIP
         FROM inserted i
-        ORDER BY i.NoBongkarSusun, i.NoFurnitureWIP
+        ORDER BY i.NoFurnitureWIP, i.NoBongkarSusun
         FOR JSON PATH
       );
   END
 
   /* =====================
-     DELETE
+     DELETE (1 row audit)
   ===================== */
   IF EXISTS (SELECT 1 FROM deleted) AND NOT EXISTS (SELECT 1 FROM inserted)
   BEGIN
@@ -76,16 +88,18 @@ BEGIN
       @rid,
       @pk,
       (
-        SELECT d.NoBongkarSusun, d.NoFurnitureWIP
+        SELECT
+          d.NoBongkarSusun,
+          d.NoFurnitureWIP
         FROM deleted d
-        ORDER BY d.NoBongkarSusun, d.NoFurnitureWIP
+        ORDER BY d.NoFurnitureWIP, d.NoBongkarSusun
         FOR JSON PATH
       ),
       NULL;
   END
 
   /* =====================
-     UPDATE
+     UPDATE (1 row audit)
   ===================== */
   IF EXISTS (SELECT 1 FROM inserted) AND EXISTS (SELECT 1 FROM deleted)
   BEGIN
@@ -97,15 +111,19 @@ BEGIN
       @rid,
       @pk,
       (
-        SELECT d.NoBongkarSusun, d.NoFurnitureWIP
+        SELECT
+          d.NoBongkarSusun,
+          d.NoFurnitureWIP
         FROM deleted d
-        ORDER BY d.NoBongkarSusun, d.NoFurnitureWIP
+        ORDER BY d.NoFurnitureWIP, d.NoBongkarSusun
         FOR JSON PATH
       ),
       (
-        SELECT i.NoBongkarSusun, i.NoFurnitureWIP
+        SELECT
+          i.NoBongkarSusun,
+          i.NoFurnitureWIP
         FROM inserted i
-        ORDER BY i.NoBongkarSusun, i.NoFurnitureWIP
+        ORDER BY i.NoFurnitureWIP, i.NoBongkarSusun
         FOR JSON PATH
       );
   END

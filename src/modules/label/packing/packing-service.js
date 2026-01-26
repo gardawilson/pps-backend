@@ -11,6 +11,14 @@ const {
   formatYMD,
 } = require('../../../core/shared/tutup-transaksi-guard');
 
+const { generateNextCode } = require('../../../core/utils/sequence-code-helper'); 
+const { badReq, conflict } = require('../../../core/utils/http-error'); 
+
+function hasOwn(obj, key) {
+  return Object.prototype.hasOwnProperty.call(obj, key);
+}
+
+
 
 exports.getAll = async ({ page, limit, search }) => {
   const pool = await poolPromise;
@@ -240,43 +248,6 @@ exports.getAll = async ({ page, limit, search }) => {
 // ==================== CREATE (POST /labels/packing) ====================
 //
 
-// helper pad left
-function padLeft(num, width) {
-  const s = String(num);
-  return s.length >= width ? s : '0'.repeat(width - s.length) + s;
-}
-
-// Generate next NoBJ: e.g. 'BA.0000000002' (GANTI prefix kalau beda)
-async function generateNextNoBJ(
-  tx,
-  { prefix = 'BA.', width = 10 } = {}
-) {
-  const rq = new sql.Request(tx);
-  const q = `
-    SELECT TOP 1 bj.NoBJ
-    FROM [dbo].[BarangJadi] AS bj WITH (UPDLOCK, HOLDLOCK)
-    WHERE bj.NoBJ LIKE @prefix + '%'
-    ORDER BY TRY_CONVERT(BIGINT, SUBSTRING(bj.NoBJ, LEN(@prefix) + 1, 50)) DESC,
-             bj.NoBJ DESC;
-  `;
-  const r = await rq.input('prefix', sql.VarChar, prefix).query(q);
-
-  let lastNum = 0;
-  if (r.recordset.length > 0) {
-    const last = r.recordset[0].NoBJ;
-    const numericPart = last.substring(prefix.length);
-    lastNum = parseInt(numericPart, 10) || 0;
-  }
-  const next = lastNum + 1;
-  return prefix + padLeft(next, width);
-}
-
-
-
-
-/**
- * Helper: insert 1 row BarangJadi + mapping ke table output
- */
 async function insertSingleBarangJadi({
   tx,
   header,
@@ -284,135 +255,131 @@ async function insertSingleBarangJadi({
   outputCode,
   outputType,
   mappingTable,
+  effectiveDateCreate,
+  nowDateTime,
 }) {
-  // 1) Generate NoBJ
-  const generatedNo = await generateNextNoBJ(tx, {
-    prefix: 'BA.', 
-    width: 10,
-  });
+  const gen = async () =>
+    generateNextCode(tx, {
+      tableName: 'dbo.BarangJadi',
+      columnName: 'NoBJ',
+      prefix: 'BA.',
+      width: 10,
+    });
 
-  // Double-check uniqueness (rare)
-  const rqCheck = new sql.Request(tx);
-  const exist = await rqCheck
-    .input('NoBJ', sql.VarChar, generatedNo)
+  const generatedNo = await gen();
+
+  const exist = await new sql.Request(tx)
+    .input('NoBJ', sql.VarChar(50), generatedNo)
     .query(`
       SELECT 1
       FROM [dbo].[BarangJadi] WITH (UPDLOCK, HOLDLOCK)
       WHERE NoBJ = @NoBJ
     `);
 
-  const noBJ =
-    exist.recordset.length > 0
-      ? await generateNextNoBJ(tx, { prefix: 'BA.', width: 10 })
-      : generatedNo;
+  let noBJ = generatedNo;
 
-  // 2) Insert header ke dbo.BarangJadi
-  const nowDateOnly = header.DateCreate || null; // null -> GETDATE() (date only)
+  if (exist.recordset.length > 0) {
+    const retryNo = await gen();
+    const exist2 = await new sql.Request(tx)
+      .input('NoBJ', sql.VarChar(50), retryNo)
+      .query(`
+        SELECT 1
+        FROM [dbo].[BarangJadi] WITH (UPDLOCK, HOLDLOCK)
+        WHERE NoBJ = @NoBJ
+      `);
+
+    if (exist2.recordset.length > 0) {
+      throw conflict('Gagal generate NoBJ unik, coba lagi.');
+    }
+    noBJ = retryNo;
+  }
+
   const insertHeaderSql = `
     INSERT INTO [dbo].[BarangJadi] (
       NoBJ,
       IdBJ,
       DateCreate,
-      DateUsage,
       Jam,
       Pcs,
       Berat,
+      IsPartial,
+      DateUsage,
       IdWarehouse,
       CreateBy,
       DateTimeCreate,
-      IsPartial,
       Blok,
       IdLokasi
     )
     VALUES (
       @NoBJ,
       @IdBJ,
-      ${nowDateOnly ? '@DateCreate' : 'CONVERT(date, GETDATE())'},
-      NULL,
+      @DateCreate,
       @Jam,
       @Pcs,
       @Berat,
+      @IsPartial,
+      NULL,
       @IdWarehouse,
       @CreateBy,
-      GETDATE(),
-      @IsPartial,
+      @DateTimeCreate,
       @Blok,
       @IdLokasi
     );
   `;
 
-  const rqHeader = new sql.Request(tx);
-
-  // normalize IdLokasi
-  const rawIdLokasi = header.IdLokasi;
-  let idLokasiVal = null;
-  if (rawIdLokasi !== undefined && rawIdLokasi !== null) {
-    idLokasiVal = String(rawIdLokasi).trim();
-    if (idLokasiVal.length === 0) {
-      idLokasiVal = null;
-    }
-  }
-
-  rqHeader
-    .input('NoBJ', sql.VarChar, noBJ)
+  await new sql.Request(tx)
+    .input('NoBJ', sql.VarChar(50), noBJ)
     .input('IdBJ', sql.Int, idBJ)
+    .input('DateCreate', sql.Date, effectiveDateCreate)
+    .input('Jam', sql.VarChar(20), header.Jam ?? null)
     .input('Pcs', sql.Decimal(18, 3), header.Pcs ?? null)
     .input('Berat', sql.Decimal(18, 3), header.Berat ?? null)
-    .input('Jam', sql.VarChar, header.Jam ?? null)
-    .input('IdWarehouse', sql.Int, header.IdWarehouse ?? null)
     .input('IsPartial', sql.Bit, header.IsPartial ?? 0)
-    .input('CreateBy', sql.VarChar, header.CreateBy ?? null)
-    .input('Blok', sql.VarChar, header.Blok ?? null)
-    .input('IdLokasi', sql.VarChar, idLokasiVal);
+    .input('IdWarehouse', sql.Int, header.IdWarehouse)
+    .input('CreateBy', sql.VarChar(50), header.CreateBy)
+    .input('DateTimeCreate', sql.DateTime, nowDateTime)
+    .input('Blok', sql.VarChar(50), header.Blok ?? null)
+    .input('IdLokasi', sql.Int, header.IdLokasi ?? null)
+    .query(insertHeaderSql);
 
-  if (nowDateOnly) {
-    rqHeader.input('DateCreate', sql.Date, new Date(nowDateOnly));
-  }
-
-  await rqHeader.query(insertHeaderSql);
-
-  // 3) Insert mapping berdasarkan outputType / mappingTable
   const rqMap = new sql.Request(tx)
-    .input('OutputCode', sql.VarChar, outputCode)
-    .input('NoBJ', sql.VarChar, noBJ);
+    .input('OutputCode', sql.VarChar(50), outputCode)
+    .input('NoBJ', sql.VarChar(50), noBJ);
 
   if (mappingTable === 'PackingProduksiOutputLabelBJ') {
-    const q = `
+    await rqMap.query(`
       INSERT INTO [dbo].[PackingProduksiOutputLabelBJ] (NoPacking, NoBJ)
       VALUES (@OutputCode, @NoBJ);
-    `;
-    await rqMap.query(q);
+    `);
   } else if (mappingTable === 'InjectProduksiOutputBarangJadi') {
-    const q = `
+    await rqMap.query(`
       INSERT INTO [dbo].[InjectProduksiOutputBarangJadi] (NoProduksi, NoBJ)
       VALUES (@OutputCode, @NoBJ);
-    `;
-    await rqMap.query(q);
+    `);
   } else if (mappingTable === 'BongkarSusunOutputBarangjadi') {
-    const q = `
+    await rqMap.query(`
       INSERT INTO [dbo].[BongkarSusunOutputBarangjadi] (NoBongkarSusun, NoBJ)
       VALUES (@OutputCode, @NoBJ);
-    `;
-    await rqMap.query(q);
+    `);
   } else if (mappingTable === 'BJReturBarangJadi_d') {
-    const q = `
+    await rqMap.query(`
       INSERT INTO [dbo].[BJReturBarangJadi_d] (NoRetur, NoBJ)
       VALUES (@OutputCode, @NoBJ);
-    `;
-    await rqMap.query(q);
+    `);
   }
 
-  // Return header shape yang dikirim ke controller
   return {
     NoBJ: noBJ,
-    DateCreate: nowDateOnly || 'GETDATE()',
+    DateCreate: formatYMD(effectiveDateCreate),
     IdBJ: idBJ,
+    Jam: header.Jam ?? null,
     Pcs: header.Pcs ?? null,
     Berat: header.Berat ?? null,
-    Jam: header.Jam ?? null,
-    IdWarehouse: header.IdWarehouse ?? null,
     IsPartial: header.IsPartial ?? 0,
-    CreateBy: header.CreateBy ?? null,
+    DateUsage: null,
+    IdWarehouse: header.IdWarehouse,
+    CreateBy: header.CreateBy,
+    DateTimeCreate: nowDateTime,
     Blok: header.Blok ?? null,
     IdLokasi: header.IdLokasi ?? null,
     OutputCode: outputCode,
@@ -420,151 +387,112 @@ async function insertSingleBarangJadi({
   };
 }
 
-
-/**
- * Helper khusus: INJECT tanpa IdBJ → multi-label
- * - Cari InjectProduksi_h by NoProduksi
- * - Cari semua mapping di CetakanWarnaToProduk_d
- * - Loop insertSingleBarangJadi untuk tiap IdBarangJadi (IdBJ)
- */
-async function createFromInjectMappingBJ({
+async function createFromInjectMapping({
   tx,
   header,
   outputCode,
   mappingTable,
   outputType,
-  badReq,
-  effectiveDateCreate, // ✅ tambahan
+  effectiveDateCreate,
+  nowDateTime,
 }) {
-  // 1) Ambil InjectProduksi_h
-  const rqInject = new sql.Request(tx);
-  rqInject.input('NoProduksi', sql.VarChar, outputCode);
+  const injRes = await new sql.Request(tx)
+    .input('NoProduksi', sql.VarChar(50), outputCode)
+    .query(`
+      SELECT TOP 1 IdCetakan, IdWarna, IdFurnitureMaterial
+      FROM dbo.InjectProduksi_h WITH (UPDLOCK, HOLDLOCK)
+      WHERE NoProduksi = @NoProduksi
+        AND IdCetakan IS NOT NULL;
+    `);
 
-  const injRes = await rqInject.query(`
-    SELECT TOP 1
-      IdCetakan,
-      IdWarna,
-      IdFurnitureMaterial
-    FROM dbo.InjectProduksi_h WITH (UPDLOCK, HOLDLOCK)
-    WHERE NoProduksi = @NoProduksi
-      AND IdCetakan IS NOT NULL;
-  `);
-
-  if (injRes.recordset.length === 0) {
-    throw badReq(`InjectProduksi_h ${outputCode} not found or IdCetakan is NULL`);
+  if (!injRes.recordset.length) {
+    throw badReq(`InjectProduksi_h ${outputCode} tidak ditemukan atau IdCetakan NULL`);
   }
 
   const inj = injRes.recordset[0];
 
-  // 2) Ambil mapping ke Produk (BarangJadi)
-  const rqMap = new sql.Request(tx);
-  rqMap
+  const mapRes = await new sql.Request(tx)
     .input('IdCetakan', sql.Int, inj.IdCetakan)
     .input('IdWarna', sql.Int, inj.IdWarna)
-    .input('IdFurnitureMaterial', sql.Int, inj.IdFurnitureMaterial ?? 0);
+    .input('IdFurnitureMaterial', sql.Int, inj.IdFurnitureMaterial ?? 0)
+    .query(`
+      SELECT IdBarangJadi
+      FROM dbo.CetakanWarnaToProduk_d
+      WHERE IdCetakan = @IdCetakan
+        AND IdWarna = @IdWarna
+        AND (
+          (IdFurnitureMaterial IS NULL AND @IdFurnitureMaterial = 0)
+          OR IdFurnitureMaterial = @IdFurnitureMaterial
+        );
+    `);
 
-  const mapRes = await rqMap.query(`
-    SELECT IdBarangJadi
-    FROM dbo.CetakanWarnaToProduk_d
-    WHERE IdCetakan = @IdCetakan
-      AND IdWarna = @IdWarna
-      AND (
-        (IdFurnitureMaterial IS NULL AND @IdFurnitureMaterial = 0)
-        OR IdFurnitureMaterial = @IdFurnitureMaterial
-      );
-  `);
-
-  if (mapRes.recordset.length === 0) {
+  if (!mapRes.recordset.length) {
     throw badReq(
-      `No Produk mapping found for Inject ${outputCode} (IdCetakan=${inj.IdCetakan}, IdWarna=${inj.IdWarna})`
+      `Mapping Produk tidak ditemukan untuk Inject ${outputCode} (IdCetakan=${inj.IdCetakan}, IdWarna=${inj.IdWarna})`
     );
   }
 
-  const createdHeaders = [];
-
+  const created = [];
   for (const row of mapRes.recordset) {
-    const idBJ = row.IdBarangJadi;
-
-    const created = await insertSingleBarangJadi({
-      tx,
-      header,
-      idBJ,
-      outputCode,
-      outputType,
-      mappingTable,
-      effectiveDateCreate, // ✅ pass-through UTC date-only
-    });
-
-    createdHeaders.push(created);
-  }
-
-  return createdHeaders;
-}
-
-
-
-function resolveOutputByPrefix(outputCode, badReq) {
-  let outputType = null;
-  let mappingTable = null;
-
-  if (outputCode.startsWith('BD.')) {
-    outputType = 'PACKING';
-    mappingTable = 'PackingProduksiOutputLabelBJ';
-  } else if (outputCode.startsWith('S.')) {
-    outputType = 'INJECT';
-    mappingTable = 'InjectProduksiOutputBarangJadi';
-  } else if (outputCode.startsWith('BG.')) {
-    outputType = 'BONGKAR_SUSUN';
-    mappingTable = 'BongkarSusunOutputBarangjadi';
-  } else if (outputCode.startsWith('L.')) {
-    outputType = 'RETUR';
-    mappingTable = 'BJReturBarangJadi_d';
-  } else {
-    throw badReq(
-      'outputCode prefix not recognized (supported: BD., S., BG., L.)'
+    created.push(
+      await insertSingleBarangJadi({
+        tx,
+        header,
+        idBJ: row.IdBarangJadi,
+        outputCode,
+        outputType,
+        mappingTable,
+        effectiveDateCreate,
+        nowDateTime,
+      })
     );
   }
 
-  return { outputType, mappingTable };
+  return created;
 }
-
 
 exports.createPacking = async (payload) => {
   const pool = await poolPromise;
   const tx = new sql.Transaction(pool);
 
   const header = payload?.header || {};
-  const outputCode = (payload?.outputCode || '').toString().trim();
+  const outputCode = String(payload?.outputCode || '').trim();
 
-  const badReq = (msg) => {
-    const e = new Error(msg);
-    e.statusCode = 400;
-    return e;
-  };
+  if (!outputCode) throw badReq('outputCode wajib diisi (BD., S., BG., L.)');
+  if (!header.CreateBy) throw badReq('CreateBy wajib diisi (controller harus overwrite dari token)');
 
-  // ===============================
-  // 0) Validasi outputCode
-  // ===============================
-  if (!outputCode) {
-    throw badReq('outputCode is required (BD., S., BG., L., etc.)');
-  }
+  const actorIdNum = Number(payload?.actorId);
+  const actorId = Number.isFinite(actorIdNum) && actorIdNum > 0 ? actorIdNum : null;
+  const requestId = String(payload?.requestId || `${Date.now()}-${Math.random().toString(16).slice(2)}`);
 
-  // Prefix → outputType + mappingTable
-  const { outputType, mappingTable } = resolveOutputByPrefix(outputCode, badReq);
+  if (!actorId) throw badReq('actorId kosong. Controller harus inject payload.actorId dari token.');
+
+  let outputType = null;
+  let mappingTable = null;
+
+  if (outputCode.startsWith('BD.')) { outputType = 'PACKING'; mappingTable = 'PackingProduksiOutputLabelBJ'; }
+  else if (outputCode.startsWith('S.')) { outputType = 'INJECT'; mappingTable = 'InjectProduksiOutputBarangJadi'; }
+  else if (outputCode.startsWith('BG.')) { outputType = 'BONGKAR_SUSUN'; mappingTable = 'BongkarSusunOutputBarangjadi'; }
+  else if (outputCode.startsWith('L.')) { outputType = 'RETUR'; mappingTable = 'BJReturBarangJadi_d'; }
+  else throw badReq('outputCode prefix tidak dikenali (BD., S., BG., L.)');
+
   const isInject = outputType === 'INJECT';
 
-  if (!header.IdBJ && !isInject) {
-    throw badReq('IdBJ is required for non-INJECT modes');
-  }
+  const idBJSingle = header.IdBJ ?? null;
+  if (!isInject && !idBJSingle) throw badReq('IdBJ wajib diisi untuk mode non-INJECT');
 
   try {
     await tx.begin(sql.ISOLATION_LEVEL.SERIALIZABLE);
 
-    // ===============================
-    // 1) Resolve DateCreate (UTC date-only) + tutup transaksi
-    // ===============================
-    const effectiveDateCreate = resolveEffectiveDateForCreate(header.DateCreate);
+    await new sql.Request(tx)
+      .input('actorId', sql.Int, actorId)
+      .input('rid', sql.NVarChar(64), requestId)
+      .query(`
+        EXEC sys.sp_set_session_context @key=N'actor_id', @value=@actorId;
+        EXEC sys.sp_set_session_context @key=N'request_id', @value=@rid;
+      `);
 
+    const effectiveDateCreate = resolveEffectiveDateForCreate(header.DateCreate);
     await assertNotLocked({
       date: effectiveDateCreate,
       runner: tx,
@@ -572,75 +500,58 @@ exports.createPacking = async (payload) => {
       useLock: true,
     });
 
-    let result;
+    const needBlok = header.Blok == null || String(header.Blok).trim() === '';
+    const needLokasi = header.IdLokasi == null;
 
-    // ===============================
-    // 2) Auto-isi Blok & IdLokasi (kalau kosong)
-    // ===============================
-    if (!header.Blok || !header.IdLokasi) {
-      const lokasi = await getBlokLokasiFromKodeProduksi({
-        kode: outputCode,
-        runner: tx,
-      });
-
+    if (needBlok || needLokasi) {
+      const lokasi = await getBlokLokasiFromKodeProduksi({ kode: outputCode, runner: tx });
       if (lokasi) {
-        if (!header.Blok) header.Blok = lokasi.Blok;
-        if (!header.IdLokasi) header.IdLokasi = lokasi.IdLokasi;
+        if (needBlok) header.Blok = lokasi.Blok;
+        if (needLokasi) header.IdLokasi = lokasi.IdLokasi;
       }
     }
 
-    // ===============================
-    // 3) Jalur INJECT multi-create
-    // ===============================
-    if (isInject && !header.IdBJ) {
-      const createdHeaders = await createFromInjectMappingBJ({
+    const nowDateTime = new Date();
+
+    let headers = [];
+
+    if (isInject && !idBJSingle) {
+      headers = await createFromInjectMapping({
         tx,
         header,
         outputCode,
         mappingTable,
         outputType,
-        badReq,
-        effectiveDateCreate, // ✅ penting
+        effectiveDateCreate,
+        nowDateTime,
       });
-
-      result = {
-        headers: createdHeaders,
-        output: {
-          code: outputCode,
-          type: outputType,
-          mappingTable,
-          isMulti: createdHeaders.length > 1,
-          count: createdHeaders.length,
-        },
-      };
     } else {
-      // ===============================
-      // 4) Jalur single-create
-      // ===============================
-      const createdHeader = await insertSingleBarangJadi({
+      const created = await insertSingleBarangJadi({
         tx,
         header,
-        idBJ: header.IdBJ,
+        idBJ: idBJSingle,
         outputCode,
         outputType,
         mappingTable,
-        effectiveDateCreate, // ✅ penting
+        effectiveDateCreate,
+        nowDateTime,
       });
-
-      result = {
-        headers: [createdHeader],
-        output: {
-          code: outputCode,
-          type: outputType,
-          mappingTable,
-          isMulti: false,
-          count: 1,
-        },
-      };
+      headers = [created];
     }
 
     await tx.commit();
-    return result;
+
+    return {
+      headers,
+      output: {
+        code: outputCode,
+        type: outputType,
+        mappingTable,
+        isMulti: headers.length > 1,
+        count: headers.length,
+      },
+      audit: { actorId, requestId },
+    };
   } catch (e) {
     try { await tx.rollback(); } catch (_) {}
     throw e;
@@ -661,208 +572,221 @@ exports.createPacking = async (payload) => {
  * - Tidak pakai auto-mapping inject (CetakanWarnaToProduk_d) di sini.
  *   Kalau mau multi-create Inject, tetap pakai POST.
  */
+async function deleteAllMappingsBJ(tx, noBJ) {
+  await new sql.Request(tx)
+    .input('NoBJ', sql.VarChar(50), noBJ)
+    .query(`
+      DELETE FROM [dbo].[PackingProduksiOutputLabelBJ] WHERE NoBJ = @NoBJ;
+      DELETE FROM [dbo].[InjectProduksiOutputBarangJadi] WHERE NoBJ = @NoBJ;
+      DELETE FROM [dbo].[BongkarSusunOutputBarangjadi] WHERE NoBJ = @NoBJ;
+      DELETE FROM [dbo].[BJReturBarangJadi_d] WHERE NoBJ = @NoBJ;
+    `);
+}
+
 exports.updatePacking = async (noBJ, payload) => {
   const pool = await poolPromise;
   const tx = new sql.Transaction(pool);
 
   const header = payload?.header || {};
-  const rawOutputCode = (payload?.outputCode || '').toString().trim();
+  const hasOutputCodeField = hasOwn(payload, 'outputCode');
+  const outputCode = String(payload?.outputCode || '').trim();
 
-  const badReq = (msg) => {
-    const e = new Error(msg);
-    e.statusCode = 400;
-    return e;
-  };
+  const actorIdNum = Number(payload?.actorId);
+  const actorId = Number.isFinite(actorIdNum) && actorIdNum > 0 ? actorIdNum : null;
+  const requestId = String(payload?.requestId || `${Date.now()}-${Math.random().toString(16).slice(2)}`);
 
-  if (!noBJ) throw badReq('NoBJ is required');
-  if (!header.IdBJ) throw badReq('IdBJ is required for update');
-
-  // Siapkan info mapping baru (jika ada outputCode baru)
-  let mappingInfo = null;
-  if (rawOutputCode) mappingInfo = resolveOutputByPrefix(rawOutputCode, badReq);
-
-  const hasDateCreateField = Object.prototype.hasOwnProperty.call(header, 'DateCreate');
+  if (!actorId) throw badReq('actorId kosong. Controller harus inject payload.actorId dari token.');
 
   try {
     await tx.begin(sql.ISOLATION_LEVEL.SERIALIZABLE);
 
-    // 1) Lock + ambil DateCreate (date-only) + ensure belum dipakai
+    await new sql.Request(tx)
+      .input('actorId', sql.Int, actorId)
+      .input('rid', sql.NVarChar(64), requestId)
+      .query(`
+        EXEC sys.sp_set_session_context @key=N'actor_id', @value=@actorId;
+        EXEC sys.sp_set_session_context @key=N'request_id', @value=@rid;
+      `);
+
     const existingRes = await new sql.Request(tx)
-      .input('NoBJ', sql.VarChar, noBJ)
+      .input('NoBJ', sql.VarChar(50), noBJ)
       .query(`
         SELECT TOP 1
           NoBJ,
           CONVERT(date, DateCreate) AS DateCreate,
+          Jam,
+          Pcs,
+          IdBJ,
+          Berat,
+          IsPartial,
           DateUsage,
-          IdBJ, Pcs, Berat, Jam, IdWarehouse, IsPartial, Blok, IdLokasi
+          IdWarehouse,
+          CreateBy,
+          DateTimeCreate,
+          Blok,
+          IdLokasi
         FROM [dbo].[BarangJadi] WITH (UPDLOCK, HOLDLOCK)
-        WHERE NoBJ = @NoBJ
-          AND DateUsage IS NULL;
+        WHERE NoBJ = @NoBJ;
       `);
 
     if (existingRes.recordset.length === 0) {
-      const e = new Error('BarangJadi not found or already used (DateUsage not NULL)');
-      e.statusCode = 404;
-      throw e;
+      throw notFound('Barang Jadi not found');
     }
 
     const current = existingRes.recordset[0];
 
-    // 2) TUTUP TRANSAKSI CHECK
-    // - kalau DateCreate dikirim → cek tanggal baru
-    // - kalau tidak dikirim → cek tanggal existing (karena tetap update transaksi itu)
-    let effectiveDateUpdate = null;
-
-    if (hasDateCreateField) {
-      const v = header.DateCreate;
-
-      if (v === null || v === '') {
-        // reset ke UTC today
-        effectiveDateUpdate = toDateOnly(new Date());
-      } else {
-        const d = toDateOnly(v);
-        if (!d) {
-          const e = new Error('Invalid DateCreate');
-          e.statusCode = 400;
-          e.meta = { field: 'DateCreate', value: v };
-          throw e;
-        }
-        effectiveDateUpdate = d;
-      }
-    } else {
-      effectiveDateUpdate = current.DateCreate ? toDateOnly(current.DateCreate) : null;
-    }
+    const existingDateCreate = current.DateCreate ? toDateOnly(current.DateCreate) : null;
 
     await assertNotLocked({
-      date: effectiveDateUpdate,
+      date: existingDateCreate,
       runner: tx,
       action: 'update packing',
       useLock: true,
     });
 
-    // 3) Update header BarangJadi
-    const rqUpdate = new sql.Request(tx);
-    rqUpdate
-      .input('NoBJ', sql.VarChar, noBJ)
-      .input('IdBJ', sql.Int, header.IdBJ)
-      .input('Pcs', sql.Decimal(18, 3), header.Pcs ?? null)
-      .input('Berat', sql.Decimal(18, 3), header.Berat ?? null)
-      .input('Jam', sql.VarChar, header.Jam ?? null)
-      .input('IdWarehouse', sql.Int, header.IdWarehouse ?? null)
-      .input('IsPartial', sql.Bit, header.IsPartial ?? 0)
-      .input('Blok', sql.VarChar, header.Blok ?? null);
+    const merged = {
+      IdBJ: header.IdBJ ?? current.IdBJ,
 
-    // normalize IdLokasi
-    const rawIdLokasi = header.IdLokasi;
-    let idLokasiVal = null;
-    if (rawIdLokasi !== undefined && rawIdLokasi !== null) {
-      const s = String(rawIdLokasi).trim();
-      idLokasiVal = s.length === 0 ? null : s;
+      Jam: hasOwn(header, 'Jam') ? header.Jam : current.Jam,
+      Pcs: hasOwn(header, 'Pcs') ? header.Pcs : current.Pcs,
+      Berat: hasOwn(header, 'Berat') ? header.Berat : current.Berat,
+      IsPartial: hasOwn(header, 'IsPartial') ? header.IsPartial : current.IsPartial,
+      IdWarehouse: hasOwn(header, 'IdWarehouse') ? header.IdWarehouse : current.IdWarehouse,
+      Blok: hasOwn(header, 'Blok') ? header.Blok : current.Blok,
+      IdLokasi: hasOwn(header, 'IdLokasi') ? header.IdLokasi : current.IdLokasi,
+
+      DateCreate: hasOwn(header, 'DateCreate') ? header.DateCreate : current.DateCreate,
+
+      CreateBy: hasOwn(header, 'CreateBy') ? header.CreateBy : current.CreateBy,
+    };
+
+    if (!merged.IdBJ) throw badReq('IdBJ cannot be empty');
+
+    let dateCreateParam = null;
+
+    if (hasOwn(header, 'DateCreate')) {
+      if (header.DateCreate === null || header.DateCreate === '') {
+        dateCreateParam = toDateOnly(new Date());
+      } else {
+        dateCreateParam = toDateOnly(header.DateCreate);
+        if (!dateCreateParam) {
+          throw badReq('Invalid DateCreate');
+        }
+      }
+
+      await assertNotLocked({
+        date: dateCreateParam,
+        runner: tx,
+        action: 'update packing (DateCreate)',
+        useLock: true,
+      });
     }
-    rqUpdate.input('IdLokasi', sql.VarChar, idLokasiVal);
 
-    let updateSql = `
+    const rqUpdate = new sql.Request(tx)
+      .input('NoBJ', sql.VarChar(50), noBJ)
+      .input('IdBJ', sql.Int, merged.IdBJ)
+      .input('Jam', sql.VarChar(20), merged.Jam ?? null)
+      .input('Pcs', sql.Decimal(18, 3), merged.Pcs ?? null)
+      .input('Berat', sql.Decimal(18, 3), merged.Berat ?? null)
+      .input('IsPartial', sql.Bit, merged.IsPartial ?? 0)
+      .input('IdWarehouse', sql.Int, merged.IdWarehouse)
+      .input('Blok', sql.VarChar(50), merged.Blok ?? null)
+      .input('IdLokasi', sql.Int, merged.IdLokasi ?? null)
+      .input('CreateBy', sql.VarChar(50), merged.CreateBy ?? null);
+
+    if (hasOwn(header, 'DateCreate')) {
+      rqUpdate.input('DateCreate', sql.Date, dateCreateParam);
+    }
+
+    const updateSql = `
       UPDATE [dbo].[BarangJadi]
       SET
         IdBJ = @IdBJ,
         Jam = @Jam,
         Pcs = @Pcs,
         Berat = @Berat,
-        IdWarehouse = @IdWarehouse,
         IsPartial = @IsPartial,
+        IdWarehouse = @IdWarehouse,
         Blok = @Blok,
-        IdLokasi = @IdLokasi
+        IdLokasi = @IdLokasi,
+        CreateBy = @CreateBy
+        ${hasOwn(header, 'DateCreate') ? ', DateCreate = @DateCreate' : ''}
+      WHERE NoBJ = @NoBJ;
     `;
-
-    // DateCreate update hanya kalau field dikirim
-    if (hasDateCreateField) {
-      updateSql += `, DateCreate = @DateCreate`;
-      rqUpdate.input('DateCreate', sql.Date, effectiveDateUpdate); // ✅ UTC date-only
-    }
-
-    updateSql += `
-      WHERE NoBJ = @NoBJ
-        AND DateUsage IS NULL;
-    `;
-
     await rqUpdate.query(updateSql);
 
-    // 4) Mapping update (kalau outputCode dikirim dan valid)
-    let output = null;
+    let outputType = null;
+    let mappingTable = null;
 
-    if (mappingInfo && rawOutputCode) {
-      const { outputType, mappingTable } = mappingInfo;
+    if (hasOutputCodeField) {
+      if (!outputCode) {
+        await deleteAllMappingsBJ(tx, noBJ);
+      } else {
+        if (outputCode.startsWith('BD.')) { outputType = 'PACKING'; mappingTable = 'PackingProduksiOutputLabelBJ'; }
+        else if (outputCode.startsWith('S.')) { outputType = 'INJECT'; mappingTable = 'InjectProduksiOutputBarangJadi'; }
+        else if (outputCode.startsWith('BG.')) { outputType = 'BONGKAR_SUSUN'; mappingTable = 'BongkarSusunOutputBarangjadi'; }
+        else if (outputCode.startsWith('L.')) { outputType = 'RETUR'; mappingTable = 'BJReturBarangJadi_d'; }
+        else throw badReq('outputCode prefix not recognized (supported: BD., S., BG., L.)');
 
-      // Hapus semua mapping lama
-      await new sql.Request(tx)
-        .input('NoBJ', sql.VarChar, noBJ)
-        .query(`
-          DELETE FROM [dbo].[PackingProduksiOutputLabelBJ] WHERE NoBJ = @NoBJ;
-          DELETE FROM [dbo].[InjectProduksiOutputBarangJadi] WHERE NoBJ = @NoBJ;
-          DELETE FROM [dbo].[BongkarSusunOutputBarangjadi] WHERE NoBJ = @NoBJ;
-          DELETE FROM [dbo].[BJReturBarangJadi_d]        WHERE NoBJ = @NoBJ;
-        `);
+        await deleteAllMappingsBJ(tx, noBJ);
 
-      const rqMap = new sql.Request(tx)
-        .input('OutputCode', sql.VarChar, rawOutputCode)
-        .input('NoBJ', sql.VarChar, noBJ);
+        const rqMap = new sql.Request(tx)
+          .input('OutputCode', sql.VarChar(50), outputCode)
+          .input('NoBJ', sql.VarChar(50), noBJ);
 
-      if (mappingTable === 'PackingProduksiOutputLabelBJ') {
-        await rqMap.query(`
-          INSERT INTO [dbo].[PackingProduksiOutputLabelBJ] (NoPacking, NoBJ)
-          VALUES (@OutputCode, @NoBJ);
-        `);
-      } else if (mappingTable === 'InjectProduksiOutputBarangJadi') {
-        await rqMap.query(`
-          INSERT INTO [dbo].[InjectProduksiOutputBarangJadi] (NoProduksi, NoBJ)
-          VALUES (@OutputCode, @NoBJ);
-        `);
-      } else if (mappingTable === 'BongkarSusunOutputBarangjadi') {
-        await rqMap.query(`
-          INSERT INTO [dbo].[BongkarSusunOutputBarangjadi] (NoBongkarSusun, NoBJ)
-          VALUES (@OutputCode, @NoBJ);
-        `);
-      } else if (mappingTable === 'BJReturBarangJadi_d') {
-        await rqMap.query(`
-          INSERT INTO [dbo].[BJReturBarangJadi_d] (NoRetur, NoBJ)
-          VALUES (@OutputCode, @NoBJ);
-        `);
+        if (mappingTable === 'PackingProduksiOutputLabelBJ') {
+          await rqMap.query(`
+            INSERT INTO [dbo].[PackingProduksiOutputLabelBJ] (NoPacking, NoBJ)
+            VALUES (@OutputCode, @NoBJ);
+          `);
+        } else if (mappingTable === 'InjectProduksiOutputBarangJadi') {
+          await rqMap.query(`
+            INSERT INTO [dbo].[InjectProduksiOutputBarangJadi] (NoProduksi, NoBJ)
+            VALUES (@OutputCode, @NoBJ);
+          `);
+        } else if (mappingTable === 'BongkarSusunOutputBarangjadi') {
+          await rqMap.query(`
+            INSERT INTO [dbo].[BongkarSusunOutputBarangjadi] (NoBongkarSusun, NoBJ)
+            VALUES (@OutputCode, @NoBJ);
+          `);
+        } else if (mappingTable === 'BJReturBarangJadi_d') {
+          await rqMap.query(`
+            INSERT INTO [dbo].[BJReturBarangJadi_d] (NoRetur, NoBJ)
+            VALUES (@OutputCode, @NoBJ);
+          `);
+        }
       }
-
-      output = {
-        code: rawOutputCode,
-        type: outputType,
-        mappingTable,
-        isMulti: false,
-        count: 1,
-      };
     }
 
     await tx.commit();
 
-    // response mirip createPacking
     return {
-      headers: [
-        {
-          NoBJ: noBJ,
-          DateCreate: hasDateCreateField ? effectiveDateUpdate : current.DateCreate,
-          IdBJ: header.IdBJ,
-          Pcs: header.Pcs ?? current.Pcs,
-          Berat: header.Berat ?? current.Berat,
-          Jam: header.Jam ?? current.Jam,
-          IdWarehouse: header.IdWarehouse ?? current.IdWarehouse,
-          IsPartial: header.IsPartial ?? current.IsPartial,
-          Blok: header.Blok ?? current.Blok,
-          IdLokasi: header.IdLokasi ?? current.IdLokasi,
-        },
-      ],
-      output,
+      header: {
+        NoBJ: noBJ,
+        DateCreate: hasOwn(header, 'DateCreate')
+          ? (dateCreateParam ? formatYMD(dateCreateParam) : null)
+          : formatYMD(current.DateCreate),
+        Jam: merged.Jam ?? null,
+        Pcs: merged.Pcs ?? null,
+        IdBJ: merged.IdBJ,
+        Berat: merged.Berat ?? null,
+        IsPartial: merged.IsPartial ?? 0,
+        IdWarehouse: merged.IdWarehouse,
+        CreateBy: merged.CreateBy ?? null,
+        Blok: merged.Blok ?? null,
+        IdLokasi: merged.IdLokasi ?? null,
+      },
+      output: hasOutputCodeField
+        ? { code: outputCode || null, type: outputType, mappingTable }
+        : undefined,
+      audit: { actorId, requestId },
     };
   } catch (err) {
     try { await tx.rollback(); } catch (_) {}
     throw err;
   }
 };
+
 
 
 
@@ -875,43 +799,46 @@ exports.updatePacking = async (noBJ, payload) => {
  *   - semua mapping (Packing, Inject, Bongkar Susun, Retur)
  *   - header BarangJadi
  */
-exports.deletePacking = async (noBJ) => {
+exports.deletePacking = async (noBJ, payload) => {
   const pool = await poolPromise;
   const tx = new sql.Transaction(pool);
 
-  const badReq = (msg) => {
-    const e = new Error(msg);
-    e.statusCode = 400;
-    return e;
-  };
-
   if (!noBJ) throw badReq('NoBJ is required');
+
+  const actorIdNum = Number(payload?.actorId);
+  const actorId = Number.isFinite(actorIdNum) && actorIdNum > 0 ? actorIdNum : null;
+  const requestId = String(payload?.requestId || `${Date.now()}-${Math.random().toString(16).slice(2)}`);
+
+  if (!actorId) throw badReq('actorId kosong. Controller harus inject payload.actorId dari token.');
 
   try {
     await tx.begin(sql.ISOLATION_LEVEL.SERIALIZABLE);
 
-    // 1) Lock & cek record masih ada dan belum dipakai + ambil DateCreate (date-only)
+    await new sql.Request(tx)
+      .input('actorId', sql.Int, actorId)
+      .input('rid', sql.NVarChar(64), requestId)
+      .query(`
+        EXEC sys.sp_set_session_context @key=N'actor_id', @value=@actorId;
+        EXEC sys.sp_set_session_context @key=N'request_id', @value=@rid;
+      `);
+
     const existingRes = await new sql.Request(tx)
-      .input('NoBJ', sql.VarChar, noBJ)
+      .input('NoBJ', sql.VarChar(50), noBJ)
       .query(`
         SELECT TOP 1
           NoBJ,
           CONVERT(date, DateCreate) AS DateCreate,
           DateUsage
         FROM [dbo].[BarangJadi] WITH (UPDLOCK, HOLDLOCK)
-        WHERE NoBJ = @NoBJ
-          AND DateUsage IS NULL;
+        WHERE NoBJ = @NoBJ;
       `);
 
     if (existingRes.recordset.length === 0) {
-      const e = new Error('BarangJadi not found or already used (DateUsage not NULL)');
-      e.statusCode = 404;
-      throw e;
+      throw notFound('Barang Jadi not found');
     }
 
     const current = existingRes.recordset[0];
 
-    // 2) ✅ TUTUP TRANSAKSI CHECK (pakai tanggal transaksi record)
     const trxDate = current.DateCreate ? toDateOnly(current.DateCreate) : null;
 
     await assertNotLocked({
@@ -921,36 +848,34 @@ exports.deletePacking = async (noBJ) => {
       useLock: true,
     });
 
-    // 3) Hapus partial & mapping
     await new sql.Request(tx)
-      .input('NoBJ', sql.VarChar, noBJ)
+      .input('NoBJ', sql.VarChar(50), noBJ)
       .query(`
-        DELETE FROM [dbo].[BarangJadiPartial]              WHERE NoBJ = @NoBJ;
-        DELETE FROM [dbo].[PackingProduksiOutputLabelBJ]   WHERE NoBJ = @NoBJ;
+        DELETE FROM [dbo].[BarangJadiPartial] WHERE NoBJ = @NoBJ;
+        DELETE FROM [dbo].[PackingProduksiOutputLabelBJ] WHERE NoBJ = @NoBJ;
         DELETE FROM [dbo].[InjectProduksiOutputBarangJadi] WHERE NoBJ = @NoBJ;
-        DELETE FROM [dbo].[BongkarSusunOutputBarangjadi]   WHERE NoBJ = @NoBJ;
-        DELETE FROM [dbo].[BJReturBarangJadi_d]            WHERE NoBJ = @NoBJ;
+        DELETE FROM [dbo].[BongkarSusunOutputBarangjadi] WHERE NoBJ = @NoBJ;
+        DELETE FROM [dbo].[BJReturBarangJadi_d] WHERE NoBJ = @NoBJ;
       `);
 
-    // 4) Hapus header BarangJadi
     const delRes = await new sql.Request(tx)
-      .input('NoBJ', sql.VarChar, noBJ)
+      .input('NoBJ', sql.VarChar(50), noBJ)
       .query(`
         DELETE FROM [dbo].[BarangJadi]
-        WHERE NoBJ = @NoBJ
-          AND DateUsage IS NULL;
+        WHERE NoBJ = @NoBJ;
       `);
 
     await tx.commit();
 
     if ((delRes.rowsAffected?.[0] ?? 0) === 0) {
-      // harusnya tidak kejadian karena sudah lock, tapi tetap defensif
-      const e = new Error('BarangJadi not found or already used (DateUsage not NULL)');
-      e.statusCode = 404;
-      throw e;
+      throw notFound('Barang Jadi not found');
     }
 
-    return { deleted: true, NoBJ: noBJ };
+    return {
+      deleted: true,
+      NoBJ: noBJ,
+      audit: { actorId, requestId },
+    };
   } catch (err) {
     try { await tx.rollback(); } catch (_) {}
     throw err;

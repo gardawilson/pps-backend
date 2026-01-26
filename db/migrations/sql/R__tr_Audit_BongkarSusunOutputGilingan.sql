@@ -1,4 +1,11 @@
 /* ===== [dbo].[tr_Audit_BongkarSusunOutputGilingan] ON [dbo].[BongkarSusunOutputGilingan] ===== */
+-- =============================================
+-- TRIGGER: tr_Audit_BongkarSusunOutputGilingan
+-- AFTER INSERT, UPDATE, DELETE
+-- Actor: SESSION_CONTEXT('actor_id') fallback SESSION_CONTEXT('actor') fallback SUSER_SNAME()
+-- RequestId: SESSION_CONTEXT('request_id')
+-- ✅ PK: NoGilingan (parent document)
+-- =============================================
 CREATE OR ALTER TRIGGER [dbo].[tr_Audit_BongkarSusunOutputGilingan]
 ON [dbo].[BongkarSusunOutputGilingan]
 AFTER INSERT, UPDATE, DELETE
@@ -6,11 +13,10 @@ AS
 BEGIN
   SET NOCOUNT ON;
 
-  -- ✅ actor = actor_id (ID user) dari SESSION_CONTEXT
   DECLARE @actor nvarchar(128) =
     COALESCE(
       CONVERT(nvarchar(128), TRY_CONVERT(int, SESSION_CONTEXT(N'actor_id'))),
-      CAST(SESSION_CONTEXT(N'actor') AS nvarchar(128)),  -- fallback lama
+      CAST(SESSION_CONTEXT(N'actor') AS nvarchar(128)),
       SUSER_SNAME()
     );
 
@@ -18,24 +24,24 @@ BEGIN
     CAST(SESSION_CONTEXT(N'request_id') AS nvarchar(64));
 
   /* =========================================================
-     Helper: PK ringkas (NoBongkarSusun tunggal / list)
+     ✅ Helper: PK ringkas (NoGilingan tunggal / list)
   ========================================================= */
   DECLARE @pk nvarchar(max);
 
   ;WITH x AS (
-    SELECT NoBongkarSusun FROM inserted
+    SELECT NoGilingan FROM inserted
     UNION
-    SELECT NoBongkarSusun FROM deleted
+    SELECT NoGilingan FROM deleted
   )
   SELECT
     @pk =
       CASE
-        WHEN COUNT(DISTINCT NoBongkarSusun) = 1
-          THEN CONCAT('{"NoBongkarSusun":"', MAX(NoBongkarSusun), '"}')
+        WHEN COUNT(DISTINCT NoGilingan) = 1
+          THEN CONCAT('{"NoGilingan":"', MAX(NoGilingan), '"}')
         ELSE
           CONCAT(
-            '{"NoBongkarSusunList":',
-            (SELECT DISTINCT NoBongkarSusun FROM x FOR JSON PATH),
+            '{"NoGilinganList":',
+            (SELECT DISTINCT NoGilingan FROM x FOR JSON PATH),
             '}'
           )
       END
@@ -59,7 +65,7 @@ BEGIN
           i.NoBongkarSusun,
           i.NoGilingan
         FROM inserted i
-        ORDER BY i.NoBongkarSusun, i.NoGilingan
+        ORDER BY i.NoGilingan, i.NoBongkarSusun
         FOR JSON PATH
       );
   END
@@ -81,7 +87,7 @@ BEGIN
           d.NoBongkarSusun,
           d.NoGilingan
         FROM deleted d
-        ORDER BY d.NoBongkarSusun, d.NoGilingan
+        ORDER BY d.NoGilingan, d.NoBongkarSusun
         FOR JSON PATH
       ),
       NULL;
@@ -104,7 +110,7 @@ BEGIN
           d.NoBongkarSusun,
           d.NoGilingan
         FROM deleted d
-        ORDER BY d.NoBongkarSusun, d.NoGilingan
+        ORDER BY d.NoGilingan, d.NoBongkarSusun
         FOR JSON PATH
       ),
       (
@@ -112,7 +118,7 @@ BEGIN
           i.NoBongkarSusun,
           i.NoGilingan
         FROM inserted i
-        ORDER BY i.NoBongkarSusun, i.NoGilingan
+        ORDER BY i.NoGilingan, i.NoBongkarSusun
         FOR JSON PATH
       );
   END

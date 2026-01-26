@@ -1,13 +1,13 @@
-/* ===== [dbo].[tr_Audit_InjectProduksiOutputFurnitureWIP] ON [dbo].[InjectProduksiOutputFurnitureWIP] ===== */
+/* ===== [dbo].[tr_Audit_BongkarSusunOutputBarangjadi] ON [dbo].[BongkarSusunOutputBarangjadi] ===== */
 -- =============================================
--- TRIGGER: tr_Audit_InjectProduksiOutputFurnitureWIP
+-- TRIGGER: tr_Audit_BongkarSusunOutputBarangjadi
 -- AFTER INSERT, UPDATE, DELETE
 -- Actor: SESSION_CONTEXT('actor_id') fallback SESSION_CONTEXT('actor') fallback SUSER_SNAME()
 -- RequestId: SESSION_CONTEXT('request_id')
--- ✅ PK: NoFurnitureWIP (parent document)
+-- ✅ PK: NoBJ (parent document)
 -- =============================================
-CREATE OR ALTER TRIGGER [dbo].[tr_Audit_InjectProduksiOutputFurnitureWIP]
-ON [dbo].[InjectProduksiOutputFurnitureWIP]
+CREATE OR ALTER TRIGGER [dbo].[tr_Audit_BongkarSusunOutputBarangjadi]
+ON [dbo].[BongkarSusunOutputBarangjadi]
 AFTER INSERT, UPDATE, DELETE
 AS
 BEGIN
@@ -24,24 +24,24 @@ BEGIN
     CAST(SESSION_CONTEXT(N'request_id') AS nvarchar(64));
 
   /* =========================================================
-     ✅ Helper: PK menggunakan NoFurnitureWIP (parent)
+     ✅ Helper: PK menggunakan NoBJ (parent)
   ========================================================= */
   DECLARE @pk nvarchar(max);
 
   ;WITH x AS (
-    SELECT NoFurnitureWIP FROM inserted
+    SELECT NoBJ FROM inserted
     UNION
-    SELECT NoFurnitureWIP FROM deleted
+    SELECT NoBJ FROM deleted
   )
   SELECT
     @pk =
       CASE
-        WHEN COUNT(DISTINCT NoFurnitureWIP) = 1
-          THEN CONCAT('{"NoFurnitureWIP":"', MAX(NoFurnitureWIP), '"}')
+        WHEN COUNT(DISTINCT NoBJ) = 1
+          THEN CONCAT('{"NoBJ":"', MAX(NoBJ), '"}')
         ELSE
           CONCAT(
-            '{"NoFurnitureWIPList":',
-            (SELECT DISTINCT NoFurnitureWIP FROM x FOR JSON PATH),
+            '{"NoBJList":',
+            (SELECT DISTINCT NoBJ FROM x FOR JSON PATH),
             '}'
           )
       END
@@ -55,17 +55,17 @@ BEGIN
     INSERT dbo.AuditTrail(Action, TableName, Actor, RequestId, PK, OldData, NewData)
     SELECT
       'INSERT',
-      'InjectProduksiOutputFurnitureWIP',
+      'BongkarSusunOutputBarangjadi',
       @actor,
       @rid,
       @pk,
       NULL,
       (
         SELECT
-          i.NoProduksi,
-          i.NoFurnitureWIP
+          i.NoBongkarSusun,
+          i.NoBJ
         FROM inserted i
-        ORDER BY i.NoFurnitureWIP, i.NoProduksi
+        ORDER BY i.NoBJ, i.NoBongkarSusun
         FOR JSON PATH
       );
   END
@@ -78,16 +78,16 @@ BEGIN
     INSERT dbo.AuditTrail(Action, TableName, Actor, RequestId, PK, OldData, NewData)
     SELECT
       'DELETE',
-      'InjectProduksiOutputFurnitureWIP',
+      'BongkarSusunOutputBarangjadi',
       @actor,
       @rid,
       @pk,
       (
         SELECT
-          d.NoProduksi,
-          d.NoFurnitureWIP
+          d.NoBongkarSusun,
+          d.NoBJ
         FROM deleted d
-        ORDER BY d.NoFurnitureWIP, d.NoProduksi
+        ORDER BY d.NoBJ, d.NoBongkarSusun
         FOR JSON PATH
       ),
       NULL;
@@ -101,24 +101,24 @@ BEGIN
     INSERT dbo.AuditTrail(Action, TableName, Actor, RequestId, PK, OldData, NewData)
     SELECT
       'UPDATE',
-      'InjectProduksiOutputFurnitureWIP',
+      'BongkarSusunOutputBarangjadi',
       @actor,
       @rid,
       @pk,
       (
         SELECT
-          d.NoProduksi,
-          d.NoFurnitureWIP
+          d.NoBongkarSusun,
+          d.NoBJ
         FROM deleted d
-        ORDER BY d.NoFurnitureWIP, d.NoProduksi
+        ORDER BY d.NoBJ, d.NoBongkarSusun
         FOR JSON PATH
       ),
       (
         SELECT
-          i.NoProduksi,
-          i.NoFurnitureWIP
+          i.NoBongkarSusun,
+          i.NoBJ
         FROM inserted i
-        ORDER BY i.NoFurnitureWIP, i.NoProduksi
+        ORDER BY i.NoBJ, i.NoBongkarSusun
         FOR JSON PATH
       );
   END

@@ -1,6 +1,6 @@
-// routes/labels/packing-controller.js
-const service = require('./packing-service'); 
-// ⬆️ sesuaikan path dengan struktur project-mu
+// controllers/packing-controller.js
+const service = require('./packing-service');
+const { getActorId, getActorUsername, makeRequestId } = require('../../../core/utils/http-context');
 
 // GET /labels/packing?page=&limit=&search=
 exports.getAll = async (req, res) => {
@@ -12,61 +12,46 @@ exports.getAll = async (req, res) => {
     const { data, total } = await service.getAll({ page, limit, search });
     const totalPages = Math.max(Math.ceil(total / limit), 1);
 
-    res.status(200).json({
+    return res.status(200).json({
       success: true,
       data,
       meta: { page, limit, total, totalPages },
     });
   } catch (err) {
     console.error('Get Packing List Error:', err);
-    res
-      .status(500)
-      .json({ success: false, message: 'Terjadi kesalahan server' });
+    return res.status(500).json({ success: false, message: 'Terjadi kesalahan server' });
   }
 };
 
-
-
-/**
- * Expected body:
- * {
- *   "header": {
- *     "IdBJ": 1,                  // required
- *     "Pcs": 10,                  // optional
- *     "Berat": 25.5,              // optional
- *     "DateCreate": "2025-10-28", // optional (default GETDATE() on server)
- *     "Jam": "08:00",             // optional
- *     "IsPartial": 0,             // optional (default 0)
- *     "IdWarehouse": 3,           // optional
- *     "Blok": "A",                // optional
- *     "IdLokasi": "A1"            // optional
- *     // "CreateBy": "user"       // optional, default from token if available
- *   },
- *   "outputCode": "BD.0000001234"   // required: prefix-based source label
- *                                   // BD.=Packing, S.=Inject, BG.=Bongkar Susun, L.=Retur
- * }
- */
 exports.create = async (req, res) => {
   try {
-    const payload = req.body || {};
+    const payload = req.body && typeof req.body === 'object' ? req.body : {};
 
-    // Otomatis isi CreateBy dari token kalau belum ada
-    if (!payload?.header?.CreateBy && req.username) {
-      payload.header = { ...(payload.header || {}), CreateBy: req.username };
+    const actorId = getActorId(req);
+    if (!actorId) {
+      return res.status(401).json({ success: false, message: 'Unauthorized (idUsername missing)' });
     }
+
+    // ✅ audit fields
+    payload.actorId = actorId;
+    payload.requestId = makeRequestId(req);
+
+    // ✅ business field CreateBy — overwrite dari token
+    payload.header = payload.header && typeof payload.header === 'object' ? payload.header : {};
+    payload.header.CreateBy = getActorUsername(req) || 'system';
 
     const result = await service.createPacking(payload);
 
     const headers = Array.isArray(result?.headers) ? result.headers : [];
     const count =
-      (result?.output && typeof result.output.count === 'number')
+      typeof result?.output?.count === 'number'
         ? result.output.count
         : (headers.length || 1);
 
     const msg =
       count > 1
-        ? `${count} Packing / BarangJadi labels created successfully`
-        : 'Packing / BarangJadi created successfully';
+        ? `${count} Packing labels created successfully`
+        : 'Packing created successfully';
 
     return res.status(201).json({
       success: true,
@@ -75,120 +60,144 @@ exports.create = async (req, res) => {
     });
   } catch (err) {
     console.error('Create Packing Error:', err);
-    return res.status(err.statusCode || 500).json({
+    const status = err.statusCode || 500;
+    return res.status(status).json({
       success: false,
-      message: err.message || 'Internal Server Error',
+      message: err.message || 'Terjadi kesalahan server',
     });
   }
 };
 
-
-
-/**
- * PUT /labels/packing/:noBJ
- *
- * Expected body (contoh):
- * {
- *   "header": {
- *     "IdBJ": 1,                  // required
- *     "Pcs": 12,
- *     "Berat": 27.5,
- *     "DateCreate": "2025-12-05",
- *     "Jam": "09:00",
- *     "IsPartial": 0,
- *     "IdWarehouse": 3,
- *     "Blok": "A",
- *     "IdLokasi": "1"
- *   },
- *   "outputCode": "BD.0000001234"   // optional; jika diisi → ganti mapping
- * }
- */
 exports.update = async (req, res) => {
+  const { noBJ, nobj } = req.params;
+
   try {
-    const noBJ = (req.params.noBJ || '').trim();
-    if (!noBJ) {
-      return res.status(400).json({
-        success: false,
-        message: 'NoBJ is required in URL parameter',
-      });
+    const NoBJ = String(noBJ || nobj || '').trim();
+    if (!NoBJ) {
+      return res.status(400).json({ success: false, message: 'noBJ wajib diisi' });
     }
 
-    const payload = req.body || {};
-
-    // Auto isi CreateBy kalau mau kamu simpan user yang edit (opsional)
-    if (!payload?.header?.CreateBy && req.username) {
-      payload.header = { ...(payload.header || {}), CreateBy: req.username };
+    const actorId = getActorId(req);
+    if (!actorId) {
+      return res.status(401).json({ success: false, message: 'Unauthorized (idUsername missing)' });
     }
 
-    const result = await service.updatePacking(noBJ, payload);
+    const actorUsername = getActorUsername(req) || 'system';
+
+    // ✅ pastikan body object
+    const body = req.body && typeof req.body === 'object' ? req.body : {};
+
+    // ✅ jangan percaya audit fields dari client
+    const { actorId: _clientActorId, requestId: _clientRequestId, ...safeBody } = body;
+
+    const payload = {
+      ...safeBody,
+      actorId, // ✅ audit pakai ID
+      requestId: makeRequestId(req),
+    };
+
+    // backward compatibility:
+    // kalau client lama kirim field flat (Pcs, Berat, IdBJ, dll),
+    // angkat ke payload.header
+    payload.header = payload.header && typeof payload.header === 'object' ? payload.header : {};
+
+    const liftKeys = [
+      'IdBJ',
+      'IdWarehouse',
+      'Jam',
+      'Pcs',
+      'Berat',
+      'IsPartial',
+      'Blok',
+      'IdLokasi',
+      'DateCreate',
+      'CreateBy',
+    ];
+
+    for (const k of liftKeys) {
+      if (Object.prototype.hasOwnProperty.call(payload, k) && payload.header[k] === undefined) {
+        payload.header[k] = payload[k];
+        delete payload[k];
+      }
+    }
+
+    // ✅ business field CreateBy — overwrite dari token
+    payload.header.CreateBy = actorUsername;
+
+    const result = await service.updatePacking(NoBJ, payload);
 
     return res.status(200).json({
       success: true,
-      message: 'Packing / BarangJadi updated successfully',
+      message: 'Packing berhasil diupdate',
       data: result,
     });
   } catch (err) {
     console.error('Update Packing Error:', err);
-    return res.status(err.statusCode || 500).json({
+    const status = err.statusCode || 500;
+    return res.status(status).json({
       success: false,
-      message: err.message || 'Internal Server Error',
+      message: err.message || 'Terjadi kesalahan server',
     });
   }
 };
 
+exports.delete = async (req, res) => {
+  const { noBJ, nobj } = req.params;
 
-/**
- * DELETE /labels/packing/:noBJ
- */
-exports.remove = async (req, res) => {
   try {
-    const noBJ = (req.params.noBJ || '').trim();
-    if (!noBJ) {
-      return res.status(400).json({
-        success: false,
-        message: 'NoBJ is required in URL parameter',
-      });
+    const NoBJ = String(noBJ || nobj || '').trim();
+    if (!NoBJ) {
+      return res.status(400).json({ success: false, message: 'noBJ wajib diisi' });
     }
 
-    const result = await service.deletePacking(noBJ);
+    const actorId = getActorId(req);
+    if (!actorId) {
+      return res.status(401).json({ success: false, message: 'Unauthorized (idUsername missing)' });
+    }
+
+    // ✅ audit payload untuk delete (karena service delete butuh actorId/requestId)
+    const payload = {
+      actorId,
+      requestId: makeRequestId(req),
+    };
+
+    const result = await service.deletePacking(NoBJ, payload);
 
     return res.status(200).json({
       success: true,
-      message: 'Packing / BarangJadi deleted successfully',
+      message: `Packing ${NoBJ} berhasil dihapus`,
       data: result,
     });
   } catch (err) {
     console.error('Delete Packing Error:', err);
-    return res.status(err.statusCode || 500).json({
+    const status = err.statusCode || 500;
+    return res.status(status).json({
       success: false,
-      message: err.message || 'Internal Server Error',
+      message: err.message || 'Terjadi kesalahan server',
     });
   }
 };
 
-
 // GET /labels/packing/partials/:nobj
 exports.getPackingPartialInfo = async (req, res) => {
-  const { nobj } = req.params;
+  const { nobj, noBJ } = req.params;
 
   try {
-    if (!nobj) {
-      return res.status(400).json({
-        success: false,
-        message: 'NoBJ is required.',
-      });
+    const NoBJ = String(nobj || noBJ || '').trim();
+    if (!NoBJ) {
+      return res.status(400).json({ success: false, message: 'NoBJ is required.' });
     }
 
-    const data = await service.getPartialInfoByBJ(nobj);
+    const data = await service.getPartialInfoByBJ(NoBJ);
 
-    if (!data.rows || data.rows.length === 0) {
+    if (!data?.rows || data.rows.length === 0) {
       return res.status(200).json({
         success: true,
-        message: `No partial data for NoBJ ${nobj}`,
+        message: `No partial data for NoBJ ${NoBJ}`,
         totalRows: 0,
         totalPartialPcs: 0,
         data: [],
-        meta: { NoBJ: nobj },
+        meta: { NoBJ: NoBJ },
       });
     }
 
@@ -198,7 +207,7 @@ exports.getPackingPartialInfo = async (req, res) => {
       totalRows: data.rows.length,
       totalPartialPcs: data.totalPartialPcs,
       data: data.rows,
-      meta: { NoBJ: nobj },
+      meta: { NoBJ: NoBJ },
     });
   } catch (err) {
     console.error('Get Packing Partial Info Error:', err);

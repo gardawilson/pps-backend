@@ -5,17 +5,17 @@ const MODULE_CONFIG = {
     pkField: 'NoWashing',
     headerTable: 'Washing_h',
     detailTable: 'Washing_d',
-    outputTables: ['BongkarSusunOutputWashing', 'WashingProduksiOutput'],
+    outputTables: ['WashingProduksiOutput', 'BongkarSusunOutputWashing'],
     
     // ✅ NEW: Output display config
     outputDisplayConfig: {
-      'BongkarSusunOutputWashing': { 
-        displayField: 'NoBongkarSusun',
-        label: 'Bongkar Susun'
-      },
       'WashingProduksiOutput': { 
         displayField: 'NoProduksi',
         label: 'Washing Produksi'
+      },
+      'BongkarSusunOutputWashing': { 
+        displayField: 'NoBongkarSusun',
+        label: 'Bongkar Susun'
       }
     },
     
@@ -44,15 +44,20 @@ const MODULE_CONFIG = {
     pkField: 'NoBroker',
     headerTable: 'Broker_h',
     detailTable: 'Broker_d',
-    outputTables: ['BongkarSusunOutputBroker'],
+    outputTables: ['BrokerProduksiOutput', 'BongkarSusunOutputBroker'],
     
     // ✅ NEW
     outputDisplayConfig: {
+      'BrokerProduksiOutput': { 
+        displayField: 'NoProduksi',
+        label: 'Broker Produksi'
+      },
       'BongkarSusunOutputBroker': { 
         displayField: 'NoBongkarSusun',
         label: 'Bongkar Susun'
       }
     },
+    
     
     headerParseFields: [
       {
@@ -79,10 +84,14 @@ const MODULE_CONFIG = {
     pkField: 'NoCrusher',
     headerTable: 'Crusher',
     detailTable: null,
-    outputTables: ['BongkarSusunOutputCrusher'],
+    outputTables: ['CrusherProduksiOutput', 'BongkarSusunOutputCrusher'],
     
     // ✅ NEW
     outputDisplayConfig: {
+      'BongkarSusunOutputCrusher': { 
+        displayField: 'NoCrusherProduksi',
+        label: 'Crusher Produksi'
+      },
       'BongkarSusunOutputCrusher': { 
         displayField: 'NoBongkarSusun',
         label: 'Bongkar Susun'
@@ -114,10 +123,14 @@ const MODULE_CONFIG = {
     pkField: 'NoGilingan',
     headerTable: 'Gilingan',
     detailTable: null,
-    outputTables: ['BongkarSusunOutputGilingan'],
+    outputTables: ['GilinganProduksiOutput', 'BongkarSusunOutputGilingan'],
     
     // ✅ NEW
     outputDisplayConfig: {
+      'GilinganProduksiOutput': { 
+        displayField: 'NoProduksi',
+        label: 'Gilingan Produksi'
+      },
       'BongkarSusunOutputGilingan': { 
         displayField: 'NoBongkarSusun',
         label: 'Bongkar Susun'
@@ -149,11 +162,19 @@ const MODULE_CONFIG = {
     pkField: 'NoBonggolan',
     headerTable: 'Bonggolan',
     detailTable: null,
-    outputTables: ['BongkarSusunOutputBonggolan'],
+    outputTables: ['BrokerProduksiOutputBonggolan','InjectProduksiOutputBonggolan', 'BongkarSusunOutputBonggolan'],
     
     // ✅ NEW
     outputDisplayConfig: {
-      'BongkarSusunOutputBonggolan': { 
+      'BrokerProduksiOutputBonggolan': { 
+        displayField: 'NoProduksi',
+        label: 'Broker Produksi'
+      },
+      'InjectProduksiOutputBonggolan': { 
+        displayField: 'NoProduksi',
+        label: 'Inject Produksi'
+      },
+            'BongkarSusunOutputBonggolan': { 
         displayField: 'NoBongkarSusun',
         label: 'Bongkar Susun'
       }
@@ -184,10 +205,18 @@ const MODULE_CONFIG = {
     pkField: 'NoMixer',
     headerTable: 'Mixer_h',
     detailTable: 'Mixer_d',
-    outputTables: ['BongkarSusunOutputMixer'],
+    outputTables: ['MixerProduksiOutput', 'InjectProduksiOutputMixer', 'BongkarSusunOutputMixer'],
     
     // ✅ NEW
     outputDisplayConfig: {
+      'MixerProduksiOutput': { 
+        displayField: 'NoProduksi',
+        label: 'Mixer Produksi'
+      },
+      'InjectProduksiOutputMixer': { 
+        displayField: 'NoProduksi',
+        label: 'Inject Produksi'
+      },
       'BongkarSusunOutputMixer': { 
         displayField: 'NoBongkarSusun',
         label: 'Bongkar Susun'
@@ -219,13 +248,25 @@ const MODULE_CONFIG = {
     pkField: 'NoFurnitureWIP',
     headerTable: 'FurnitureWIP',
     detailTable: null,
-    outputTables: ['InjectProduksiOutputFurnitureWIP', 'BJReturFurnitureWIP_d', 'BongkarSusunOutputFurnitureWIP'],
+    outputTables: ['InjectProduksiOutputFurnitureWIP', 'HotStampingOutputLabelFWIP', 'PasangKunciOutputLabelFWIP', 'SpannerOutputLabelFWIP', 'BJReturFurnitureWIP_d', 'BongkarSusunOutputFurnitureWIP'],
     
     // ✅ NEW: Multiple output tables with different display fields
     outputDisplayConfig: {
       'InjectProduksiOutputFurnitureWIP': { 
         displayField: 'NoProduksi',
         label: 'Produksi Inject'
+      },
+      'HotStampingOutputLabelFWIP': { 
+        displayField: 'NoProduksi',
+        label: 'Hot Stamping'
+      },
+      'PasangKunciOutputLabelFWIP': { 
+        displayField: 'NoProduksi',
+        label: 'Pasang Kunci'
+      },
+      'SpannerOutputLabelFWIP': { 
+        displayField: 'NoProduksi',
+        label: 'Produksi Spanner'
       },
       'BJReturFurnitureWIP_d': { 
         displayField: 'NoRetur',
@@ -256,6 +297,46 @@ const MODULE_CONFIG = {
     scalarFields: ['Pcs', 'Berat', 'DateCreate', 'Blok', 'IdLokasi'],
     statusField: 'IdStatus',
     statusMapping: { '1': 'PASS', '0': 'HOLD' },
+  },
+
+    barangjadi: {
+    pkField: 'NoBJ',
+    headerTable: 'BarangJadi',
+    detailTable: null,
+    outputTables: ['InjectProduksiOutputBarangJadi', 'PackingProduksiOutputLabelBJ', 'BongkarSusunOutputBarangjadi', 'BJReturBarangJadi_d'],
+    
+    // ✅ NEW: Multiple output tables with different display fields
+    outputDisplayConfig: {
+      'InjectProduksiOutputBarangJadi': { 
+        displayField: 'NoProduksi',
+        label: 'Produksi Inject'
+      },
+      'PackingProduksiOutputLabelBJ': { 
+        displayField: 'NoPacking',
+        label: 'Produksi Packing'
+      },
+      'BongkarSusunOutputBarangjadi': { 
+        displayField: 'NoBongkarSusun',
+        label: 'Bongkar Susun'
+      },
+      'BJReturBarangJadi_d': { 
+        displayField: 'NoRetur',
+        label: 'Retur'
+      },
+    },
+    
+    headerParseFields: [
+      {
+        jsonField: 'IdBJ',
+        joinTable: 'MstBarangJadi',
+        joinKey: 'IdBJ',
+        displayField: 'NamaBJ',
+        alias: 'NamaBJ',
+      },
+    ],
+    scalarFields: ['Pcs', 'Berat', 'DateCreate', 'Blok', 'IdLokasi'],
+    // statusField: 'IdStatus',
+    // statusMapping: { '1': 'PASS', '0': 'HOLD' },
   },
 };
 

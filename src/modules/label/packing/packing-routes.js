@@ -35,7 +35,7 @@ router.put(
 router.delete(
   '/labels/packing/:noBJ',
   requirePermission('label_crusher:delete'),
-  ctrl.remove
+  ctrl.delete
 );
 
 

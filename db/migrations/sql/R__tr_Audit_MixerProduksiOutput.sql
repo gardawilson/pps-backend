@@ -18,24 +18,24 @@ BEGIN
     CAST(SESSION_CONTEXT(N'request_id') AS nvarchar(64));
 
   /* =========================================================
-     Helper: PK ringkas (NoProduksi tunggal / list)
+     ✅ FIXED: PK menggunakan NoMixer (parent document)
   ========================================================= */
   DECLARE @pk nvarchar(max);
 
   ;WITH x AS (
-    SELECT NoProduksi FROM inserted
+    SELECT NoMixer FROM inserted
     UNION
-    SELECT NoProduksi FROM deleted
+    SELECT NoMixer FROM deleted
   )
   SELECT
     @pk =
       CASE
-        WHEN COUNT(DISTINCT NoProduksi) = 1
-          THEN CONCAT('{"NoProduksi":"', MAX(NoProduksi), '"}')
+        WHEN COUNT(DISTINCT NoMixer) = 1
+          THEN CONCAT('{"NoMixer":"', MAX(NoMixer), '"}')
         ELSE
           CONCAT(
-            '{"NoProduksiList":',
-            (SELECT DISTINCT NoProduksi FROM x FOR JSON PATH),
+            '{"NoMixerList":',
+            (SELECT DISTINCT NoMixer FROM x FOR JSON PATH),
             '}'
           )
       END

@@ -11,6 +11,13 @@ const {
   formatYMD,
 } = require('../../../core/shared/tutup-transaksi-guard');
 
+const { generateNextCode } = require('../../../core/utils/sequence-code-helper'); 
+const { badReq, conflict } = require('../../../core/utils/http-error'); 
+
+function hasOwn(obj, key) {
+  return Object.prototype.hasOwnProperty.call(obj || {}, key);
+}
+
 
 exports.getAll = async ({ page, limit, search }) => {
   const pool = await poolPromise;
@@ -254,241 +261,224 @@ exports.getAll = async ({ page, limit, search }) => {
 
 
 
-// helper pad left
-function padLeft(num, width) {
-    const s = String(num);
-    return s.length >= width ? s : '0'.repeat(width - s.length) + s;
-  }
-  
-  // Generate next NoReject: misalnya 'R.0000000002' (GANTI prefix kalau beda)
-  async function generateNextNoReject(
-    tx,
-    { prefix = 'BF.', width = 10 } = {}
-  ) {
-    const rq = new sql.Request(tx);
-    const q = `
-      SELECT TOP 1 r.NoReject
-      FROM [dbo].[RejectV2] AS r WITH (UPDLOCK, HOLDLOCK)
-      WHERE r.NoReject LIKE @prefix + '%'
-      ORDER BY TRY_CONVERT(BIGINT, SUBSTRING(r.NoReject, LEN(@prefix) + 1, 50)) DESC,
-               r.NoReject DESC;
-    `;
-    const r = await rq.input('prefix', sql.VarChar, prefix).query(q);
-  
-    let lastNum = 0;
-    if (r.recordset.length > 0) {
-      const last = r.recordset[0].NoReject;
-      const numericPart = last.substring(prefix.length);
-      lastNum = parseInt(numericPart, 10) || 0;
-    }
-    const next = lastNum + 1;
-    return prefix + padLeft(next, width);
+function resolveOutputByPrefix(outputCode) {
+  let outputType = null;
+  let mappingTable = null;
+
+  if (outputCode.startsWith('S.')) {
+    outputType = 'INJECT';
+    mappingTable = 'InjectProduksiOutputRejectV2';
+  } else if (outputCode.startsWith('BH.')) {
+    outputType = 'HOT_STAMPING';
+    mappingTable = 'HotStampingOutputRejectV2';
+  } else if (outputCode.startsWith('BI.')) {
+    outputType = 'PASANG_KUNCI';
+    mappingTable = 'PasangKunciOutputRejectV2';
+  } else if (outputCode.startsWith('BJ.')) {
+    outputType = 'SPANNER';
+    mappingTable = 'SpannerOutputRejectV2';
+  } else if (outputCode.startsWith('J.')) {
+    outputType = 'BJ_SORTIR';
+    mappingTable = 'BJSortirRejectOutputLabelReject';
+  } else {
+    throw badReq('outputCode prefix tidak dikenali (S., BH., BI., BJ., J.)');
   }
 
+  return { outputType, mappingTable };
+}
 
-  function resolveOutputByPrefix(outputCode, badReq) {
-    let outputType = null;
-    let mappingTable = null;
-  
-    if (outputCode.startsWith('S.')) {
-      outputType = 'INJECT';
-      mappingTable = 'InjectProduksiOutputRejectV2';
-    } else if (outputCode.startsWith('BH.')) {
-      outputType = 'HOT_STAMPING';
-      mappingTable = 'HotStampingOutputRejectV2';
-    } else if (outputCode.startsWith('BI.')) {
-      outputType = 'PASANG_KUNCI';
-      mappingTable = 'PasangKunciOutputRejectV2';
-    } else if (outputCode.startsWith('BJ.')) {
-      outputType = 'SPANNER';
-      mappingTable = 'SpannerOutputRejectV2';
-    } else if (outputCode.startsWith('J.')) {
-      outputType = 'BJ_SORTIR';
-      mappingTable = 'BJSortirRejectOutputLabelReject';
-    } else {
-      throw badReq(
-        'outputCode prefix not recognized (supported: S., BH., BI., BJ., J.)'
-      );
-    }
-  
-    return { outputType, mappingTable };
-  }
-
-  
-  /**
- * Helper: insert 1 row RejectV2 + mapping ke table output
+/**
+ * insert 1 row RejectV2 + mapping output
+ * mengikuti pattern insertSingleFurnitureWip
  */
 async function insertSingleReject({
-    tx,
-    header,
-    idReject,
-    outputCode,
-    outputType,
-    mappingTable,
-  }) {
-    // 1) Generate NoReject
-    const generatedNo = await generateNextNoReject(tx, {
-      prefix: 'BF.',  // 🔁 ganti kalau prefix NoReject beda
+  tx,
+  header,
+  idReject,
+  outputCode,
+  outputType,
+  mappingTable,
+  effectiveDateCreate,
+  nowDateTime,
+}) {
+  // ===============================
+  // 1) Generate NoReject (pakai generateNextCode)
+  // ===============================
+  const gen = async () =>
+    generateNextCode(tx, {
+      tableName: 'dbo.RejectV2',
+      columnName: 'NoReject',
+      prefix: 'BF.',
       width: 10,
     });
-  
-    // Double-check uniqueness (rare)
-    const rqCheck = new sql.Request(tx);
-    const exist = await rqCheck
-      .input('NoReject', sql.VarChar, generatedNo)
+
+  const generatedNo = await gen();
+
+  // double-check belum dipakai (lock)
+  const exist = await new sql.Request(tx)
+    .input('NoReject', sql.VarChar(50), generatedNo)
+    .query(`
+      SELECT 1
+      FROM dbo.RejectV2 WITH (UPDLOCK, HOLDLOCK)
+      WHERE NoReject = @NoReject
+    `);
+
+  let noReject = generatedNo;
+
+  if (exist.recordset.length > 0) {
+    const retryNo = await gen();
+    const exist2 = await new sql.Request(tx)
+      .input('NoReject', sql.VarChar(50), retryNo)
       .query(`
         SELECT 1
-        FROM [dbo].[RejectV2] WITH (UPDLOCK, HOLDLOCK)
+        FROM dbo.RejectV2 WITH (UPDLOCK, HOLDLOCK)
         WHERE NoReject = @NoReject
       `);
-  
-    const noReject =
-      exist.recordset.length > 0
-        ? await generateNextNoReject(tx, { prefix: 'BF.', width: 10 })
-        : generatedNo;
-  
-    // 2) Insert header ke dbo.RejectV2
-    const nowDateOnly = header.DateCreate || null; // null -> GETDATE() (date only)
-    const insertHeaderSql = `
-      INSERT INTO [dbo].[RejectV2] (
-        NoReject,
-        IdReject,
-        DateCreate,
-        DateUsage,
-        IdWarehouse,
-        Berat,
-        Jam,
-        CreateBy,
-        DateTimeCreate,
-        IsPartial,
-        Blok,
-        IdLokasi
-      )
-      VALUES (
-        @NoReject,
-        @IdReject,
-        ${nowDateOnly ? '@DateCreate' : 'CONVERT(date, GETDATE())'},
-        NULL,
-        @IdWarehouse,
-        @Berat,
-        @Jam,
-        @CreateBy,
-        GETDATE(),
-        @IsPartial,
-        @Blok,
-        @IdLokasi
-      );
-    `;
-  
-    const rqHeader = new sql.Request(tx);
-  
-    // normalize IdLokasi
-    const rawIdLokasi = header.IdLokasi;
-    let idLokasiVal = null;
-    if (rawIdLokasi !== undefined && rawIdLokasi !== null) {
-      idLokasiVal = String(rawIdLokasi).trim();
-      if (idLokasiVal.length === 0) {
-        idLokasiVal = null;
-      }
+
+    if (exist2.recordset.length > 0) {
+      throw conflict('Gagal generate NoReject unik, coba lagi.');
     }
-  
-    rqHeader
-      .input('NoReject', sql.VarChar, noReject)
-      .input('IdReject', sql.Int, idReject)
-      .input('Berat', sql.Decimal(18, 3), header.Berat ?? null)
-      .input('Jam', sql.VarChar, header.Jam ?? null)
-      .input('IdWarehouse', sql.Int, header.IdWarehouse ?? null)
-      .input('IsPartial', sql.Bit, header.IsPartial ?? 0)
-      .input('CreateBy', sql.VarChar, header.CreateBy ?? null)
-      .input('Blok', sql.VarChar, header.Blok ?? null)
-      .input('IdLokasi', sql.VarChar, idLokasiVal);
-  
-    if (nowDateOnly) {
-      rqHeader.input('DateCreate', sql.Date, new Date(nowDateOnly));
-    }
-  
-    await rqHeader.query(insertHeaderSql);
-  
-    // 3) Insert mapping berdasarkan mappingTable
-    const rqMap = new sql.Request(tx)
-      .input('OutputCode', sql.VarChar, outputCode)
-      .input('NoReject', sql.VarChar, noReject);
-  
-    if (mappingTable === 'InjectProduksiOutputRejectV2') {
-      const q = `
-        INSERT INTO [dbo].[InjectProduksiOutputRejectV2] (NoProduksi, NoReject)
-        VALUES (@OutputCode, @NoReject);
-      `;
-      await rqMap.query(q);
-    } else if (mappingTable === 'HotStampingOutputRejectV2') {
-      const q = `
-        INSERT INTO [dbo].[HotStampingOutputRejectV2] (NoProduksi, NoReject)
-        VALUES (@OutputCode, @NoReject);
-      `;
-      await rqMap.query(q);
-    } else if (mappingTable === 'PasangKunciOutputRejectV2') {
-      const q = `
-        INSERT INTO [dbo].[PasangKunciOutputRejectV2] (NoProduksi, NoReject)
-        VALUES (@OutputCode, @NoReject);
-      `;
-      await rqMap.query(q);
-    } else if (mappingTable === 'SpannerOutputRejectV2') {
-      const q = `
-        INSERT INTO [dbo].[SpannerOutputRejectV2] (NoProduksi, NoReject)
-        VALUES (@OutputCode, @NoReject);
-      `;
-      await rqMap.query(q);
-    } else if (mappingTable === 'BJSortirRejectOutputLabelReject') {
-      const q = `
-        INSERT INTO [dbo].[BJSortirRejectOutputLabelReject] (NoBJSortir, NoReject)
-        VALUES (@OutputCode, @NoReject);
-      `;
-      await rqMap.query(q);
-    }
-  
-    // Return header shape yang dikirim ke controller
-    return {
-      NoReject: noReject,
-      DateCreate: nowDateOnly || 'GETDATE()',
-      IdReject: idReject,
-      IdWarehouse: header.IdWarehouse ?? null,
-      Berat: header.Berat ?? null,
-      Jam: header.Jam ?? null,
-      IsPartial: header.IsPartial ?? 0,
-      CreateBy: header.CreateBy ?? null,
-      Blok: header.Blok ?? null,
-      IdLokasi: header.IdLokasi ?? null,
-      OutputCode: outputCode,
-      OutputType: outputType,
-    };
+    noReject = retryNo;
   }
 
-  
- exports.createReject = async (payload) => {
+  // ===============================
+  // 2) Insert header (DateTimeCreate dari app, bukan GETDATE())
+  // ===============================
+  const insertHeaderSql = `
+    INSERT INTO dbo.RejectV2 (
+      NoReject,
+      IdReject,
+      DateCreate,
+      DateUsage,
+      IdWarehouse,
+      Berat,
+      Jam,
+      CreateBy,
+      DateTimeCreate,
+      IsPartial,
+      Blok,
+      IdLokasi
+    )
+    VALUES (
+      @NoReject,
+      @IdReject,
+      @DateCreate,
+      NULL,
+      @IdWarehouse,
+      @Berat,
+      @Jam,
+      @CreateBy,
+      @DateTimeCreate,
+      @IsPartial,
+      @Blok,
+      @IdLokasi
+    );
+  `;
+
+  await new sql.Request(tx)
+    .input('NoReject', sql.VarChar(50), noReject)
+    .input('IdReject', sql.Int, idReject)
+    .input('DateCreate', sql.Date, effectiveDateCreate)
+    .input('IdWarehouse', sql.Int, header.IdWarehouse) // wajib
+    .input('Berat', sql.Decimal(18, 3), header.Berat ?? null)
+    .input('Jam', sql.VarChar(20), header.Jam ?? null)
+    .input('CreateBy', sql.VarChar(50), header.CreateBy) // controller overwrite dari token
+    .input('DateTimeCreate', sql.DateTime, nowDateTime)
+    .input('IsPartial', sql.Bit, header.IsPartial ?? 0)
+    .input('Blok', sql.VarChar(50), header.Blok ?? null)
+    .input('IdLokasi', sql.Int, header.IdLokasi ?? null)
+    .query(insertHeaderSql);
+
+  // ===============================
+  // 3) Insert mapping berdasarkan mappingTable
+  // ===============================
+  const rqMap = new sql.Request(tx)
+    .input('OutputCode', sql.VarChar(50), outputCode)
+    .input('NoReject', sql.VarChar(50), noReject);
+
+  if (mappingTable === 'InjectProduksiOutputRejectV2') {
+    await rqMap.query(`
+      INSERT INTO dbo.InjectProduksiOutputRejectV2 (NoProduksi, NoReject)
+      VALUES (@OutputCode, @NoReject);
+    `);
+  } else if (mappingTable === 'HotStampingOutputRejectV2') {
+    await rqMap.query(`
+      INSERT INTO dbo.HotStampingOutputRejectV2 (NoProduksi, NoReject)
+      VALUES (@OutputCode, @NoReject);
+    `);
+  } else if (mappingTable === 'PasangKunciOutputRejectV2') {
+    await rqMap.query(`
+      INSERT INTO dbo.PasangKunciOutputRejectV2 (NoProduksi, NoReject)
+      VALUES (@OutputCode, @NoReject);
+    `);
+  } else if (mappingTable === 'SpannerOutputRejectV2') {
+    await rqMap.query(`
+      INSERT INTO dbo.SpannerOutputRejectV2 (NoProduksi, NoReject)
+      VALUES (@OutputCode, @NoReject);
+    `);
+  } else if (mappingTable === 'BJSortirRejectOutputLabelReject') {
+    await rqMap.query(`
+      INSERT INTO dbo.BJSortirRejectOutputLabelReject (NoBJSortir, NoReject)
+      VALUES (@OutputCode, @NoReject);
+    `);
+  }
+
+  return {
+    NoReject: noReject,
+    IdReject: idReject,
+    DateCreate: effectiveDateCreate, // date-only yang sudah “effective”
+    DateUsage: null,
+    IdWarehouse: header.IdWarehouse,
+    Berat: header.Berat ?? null,
+    Jam: header.Jam ?? null,
+    CreateBy: header.CreateBy,
+    DateTimeCreate: nowDateTime,
+    IsPartial: header.IsPartial ?? 0,
+    Blok: header.Blok ?? null,
+    IdLokasi: header.IdLokasi ?? null,
+    OutputCode: outputCode,
+    OutputType: outputType,
+  };
+}
+
+exports.createReject = async (payload) => {
   const pool = await poolPromise;
   const tx = new sql.Transaction(pool);
 
   const header = payload?.header || {};
-  const outputCode = (payload?.outputCode || '').toString().trim();
+  const outputCode = String(payload?.outputCode || '').trim();
 
-  const badReq = (msg) => {
-    const e = new Error(msg);
-    e.statusCode = 400;
-    return e;
-  };
+  // =========================
+  // validation dasar (samakan style FWIP)
+  // =========================
+  if (!outputCode) throw badReq('outputCode wajib diisi (S., BH., BI., BJ., J.)');
+  if (!header.CreateBy) throw badReq('CreateBy wajib diisi (controller harus overwrite dari token)');
+  if (!header.IdReject) throw badReq('IdReject wajib diisi');
 
-  if (!outputCode) {
-    throw badReq('outputCode is required (S., BH., BI., BJ., J., etc.)');
-  }
+  // =========================
+  // [AUDIT] actorId + requestId
+  // =========================
+  const actorIdNum = Number(payload?.actorId);
+  const actorId = Number.isFinite(actorIdNum) && actorIdNum > 0 ? actorIdNum : null;
+  const requestId = String(payload?.requestId || `${Date.now()}-${Math.random().toString(16).slice(2)}`);
 
-  const { outputType, mappingTable } = resolveOutputByPrefix(outputCode, badReq);
+  if (!actorId) throw badReq('actorId kosong. Controller harus inject payload.actorId dari token.');
 
-  if (!header.IdReject) {
-    throw badReq('IdReject is required');
-  }
+  const { outputType, mappingTable } = resolveOutputByPrefix(outputCode);
 
   try {
     await tx.begin(sql.ISOLATION_LEVEL.SERIALIZABLE);
+
+    // =========================
+    // [AUDIT CTX] set session context for triggers
+    // =========================
+    await new sql.Request(tx)
+      .input('actorId', sql.Int, actorId)
+      .input('rid', sql.NVarChar(64), requestId)
+      .query(`
+        EXEC sys.sp_set_session_context @key=N'actor_id', @value=@actorId;
+        EXEC sys.sp_set_session_context @key=N'request_id', @value=@rid;
+      `);
 
     // ===============================
     // [A] TUTUP TRANSAKSI CHECK (CREATE)
@@ -502,32 +492,37 @@ async function insertSingleReject({
       useLock: true,
     });
 
-    // 0) Auto-isi Blok & IdLokasi dari kode produksi (jika header belum isi)
-    if (!header.Blok || !header.IdLokasi) {
-      const lokasi = await getBlokLokasiFromKodeProduksi({
-        kode: outputCode,
-        runner: tx,
-      });
+    // ===============================
+    // 0) Auto-isi Blok & IdLokasi dari kode (jika belum ada)
+    // ===============================
+    const needBlok = header.Blok == null || String(header.Blok).trim() === '';
+    const needLokasi = header.IdLokasi == null;
 
+    if (needBlok || needLokasi) {
+      const lokasi = await getBlokLokasiFromKodeProduksi({ kode: outputCode, runner: tx });
       if (lokasi) {
-        if (!header.Blok) header.Blok = lokasi.Blok;
-        if (!header.IdLokasi) header.IdLokasi = lokasi.IdLokasi;
+        if (needBlok) header.Blok = lokasi.Blok;
+        if (needLokasi) header.IdLokasi = lokasi.IdLokasi;
       }
     }
 
-    // Single create
-    const createdHeader = await insertSingleReject({
+    const nowDateTime = new Date();
+
+    const created = await insertSingleReject({
       tx,
       header,
       idReject: header.IdReject,
       outputCode,
       outputType,
       mappingTable,
-      effectiveDateCreate, // ✅ pass UTC date-only
+      effectiveDateCreate,
+      nowDateTime,
     });
 
-    const result = {
-      headers: [createdHeader],
+    await tx.commit();
+
+    return {
+      headers: [created],
       output: {
         code: outputCode,
         type: outputType,
@@ -535,17 +530,27 @@ async function insertSingleReject({
         isMulti: false,
         count: 1,
       },
+      audit: { actorId, requestId }, // ✅ konsisten seperti module lain
     };
-
-    await tx.commit();
-    return result;
   } catch (e) {
     try { await tx.rollback(); } catch (_) {}
     throw e;
   }
 };
-
   
+
+
+async function deleteAllRejectMappings(tx, noReject) {
+  await new sql.Request(tx)
+    .input('NoReject', sql.VarChar(50), noReject)
+    .query(`
+      DELETE FROM dbo.InjectProduksiOutputRejectV2    WHERE NoReject = @NoReject;
+      DELETE FROM dbo.HotStampingOutputRejectV2       WHERE NoReject = @NoReject;
+      DELETE FROM dbo.PasangKunciOutputRejectV2       WHERE NoReject = @NoReject;
+      DELETE FROM dbo.SpannerOutputRejectV2           WHERE NoReject = @NoReject;
+      DELETE FROM dbo.BJSortirRejectOutputLabelReject WHERE NoReject = @NoReject;
+    `);
+}
 
 
   /**
@@ -556,200 +561,215 @@ exports.updateReject = async (noReject, payload) => {
   const tx = new sql.Transaction(pool);
 
   const header = payload?.header || {};
-  const rawOutputCode = payload?.outputCode;
+  const hasOutputCodeField = hasOwn(payload, 'outputCode');
+  const outputCode = String(payload?.outputCode || '').trim();
 
-  const badReq = (msg) => {
-    const e = new Error(msg);
-    e.statusCode = 400;
-    return e;
-  };
+  if (!noReject) throw badReq('NoReject wajib diisi');
 
-  if (!noReject) throw badReq('NoReject is required');
+  // =========================
+  // [AUDIT] actorId + requestId (WAJIB seperti create)
+  // =========================
+  const actorIdNum = Number(payload?.actorId);
+  const actorId = Number.isFinite(actorIdNum) && actorIdNum > 0 ? actorIdNum : null;
+  const requestId = String(payload?.requestId || `${Date.now()}-${Math.random().toString(16).slice(2)}`);
 
-  // Kalau outputCode dikirim tapi kosong → error
-  if (rawOutputCode !== undefined && String(rawOutputCode).trim() === '') {
-    throw badReq('outputCode cannot be empty string');
-  }
-
-  // Normalisasi outputCode (bisa undefined = tidak ganti mapping)
-  const outputCode =
-    rawOutputCode !== undefined ? String(rawOutputCode).trim() : undefined;
-
-  let outputType = null;
-  let mappingTable = null;
-
-  if (outputCode !== undefined) {
-    const resolved = resolveOutputByPrefix(outputCode, badReq);
-    outputType = resolved.outputType;
-    mappingTable = resolved.mappingTable;
-  }
-
-  const hasDateCreateField = Object.prototype.hasOwnProperty.call(
-    header,
-    'DateCreate'
-  );
+  if (!actorId) throw badReq('actorId kosong. Controller harus inject payload.actorId dari token.');
 
   try {
     await tx.begin(sql.ISOLATION_LEVEL.SERIALIZABLE);
 
-    // 1) Ambil row existing (lock) + DateCreate date-only
-    const curRes = await new sql.Request(tx)
-      .input('NoReject', sql.VarChar, noReject)
+    // =========================
+    // [AUDIT CTX] set session context for triggers
+    // =========================
+    await new sql.Request(tx)
+      .input('actorId', sql.Int, actorId)
+      .input('rid', sql.NVarChar(64), requestId)
+      .query(`
+        EXEC sys.sp_set_session_context @key=N'actor_id', @value=@actorId;
+        EXEC sys.sp_set_session_context @key=N'request_id', @value=@rid;
+      `);
+
+    // ===============================
+    // 1) Ambil data existing + lock
+    // ===============================
+    const existingRes = await new sql.Request(tx)
+      .input('NoReject', sql.VarChar(50), noReject)
       .query(`
         SELECT TOP 1
           NoReject,
           IdReject,
           CONVERT(date, DateCreate) AS DateCreate,
+          DateUsage,
           IdWarehouse,
           Berat,
+          Jam,
+          CreateBy,
+          DateTimeCreate,
           IsPartial,
           Blok,
           IdLokasi
-        FROM [dbo].[RejectV2] WITH (UPDLOCK, HOLDLOCK)
-        WHERE NoReject = @NoReject
-          AND DateUsage IS NULL;
+        FROM dbo.RejectV2 WITH (UPDLOCK, HOLDLOCK)
+        WHERE NoReject = @NoReject;
       `);
 
-    if (curRes.recordset.length === 0) {
-      const e = new Error(
-        `Reject with NoReject=${noReject} not found or already used`
-      );
-      e.statusCode = 404;
-      throw e;
+    if (existingRes.recordset.length === 0) {
+      throw notFound('Reject not found');
     }
 
-    const current = curRes.recordset[0];
+    const current = existingRes.recordset[0];
 
-    // 2) Merge (partial update)
-    const finalIdReject =
-      header.IdReject !== undefined ? header.IdReject : current.IdReject;
-
-    const finalBerat =
-      header.Berat !== undefined ? header.Berat : current.Berat;
-
-    const finalIsPartial =
-      header.IsPartial !== undefined ? header.IsPartial : current.IsPartial;
-
-    const finalIdWarehouse =
-      header.IdWarehouse !== undefined ? header.IdWarehouse : current.IdWarehouse;
-
-    const finalBlok = header.Blok !== undefined ? header.Blok : current.Blok;
-
-    // Normalisasi IdLokasi (anggap kolom INT di DB sesuai kode kamu)
-    let finalIdLokasi;
-    if (header.IdLokasi !== undefined) {
-      const raw = header.IdLokasi;
-      if (raw === null || String(raw).trim() === '') {
-        finalIdLokasi = null;
-      } else {
-        // kalau kolom INT, pastikan number
-        const n = Number(String(raw).trim());
-        finalIdLokasi = Number.isFinite(n) ? n : null;
-      }
-    } else {
-      finalIdLokasi = current.IdLokasi;
+    // optional: kalau kamu mau reject yg sudah used tidak boleh diupdate
+    if (current.DateUsage != null) {
+      throw badReq(`Reject ${noReject} sudah dipakai (DateUsage tidak NULL)`);
     }
 
-    if (finalIdReject == null) throw badReq('IdReject cannot be null');
-
-    // 3) ✅ DateCreate final (UTC date-only) + TUTUP TRANSAKSI CHECK
-    let finalDateCreate;
-
-    if (hasDateCreateField) {
-      const v = header.DateCreate;
-
-      if (v === null || v === '') {
-        // reset ke UTC today
-        finalDateCreate = toDateOnly(new Date());
-      } else {
-        const d = toDateOnly(v);
-        if (!d) {
-          const e = new Error('Invalid DateCreate');
-          e.statusCode = 400;
-          e.meta = { field: 'DateCreate', value: v };
-          throw e;
-        }
-        finalDateCreate = d;
-      }
-    } else {
-      finalDateCreate = current.DateCreate ? toDateOnly(current.DateCreate) : null;
-    }
+    // ===============================
+    // 1b) TUTUP TRANSAKSI CHECK (UPDATE) - cek tanggal existing
+    // ===============================
+    const existingDateCreate = current.DateCreate ? toDateOnly(current.DateCreate) : null;
 
     await assertNotLocked({
-      date: finalDateCreate,
+      date: existingDateCreate,
       runner: tx,
       action: 'update reject',
       useLock: true,
     });
 
-    // 4) UPDATE RejectV2 (pakai finalDateCreate yang sudah lolos lock)
-    const rqUpd = new sql.Request(tx);
-    rqUpd
-      .input('NoReject', sql.VarChar, noReject)
-      .input('IdReject', sql.Int, finalIdReject)
-      .input('DateCreate', sql.Date, finalDateCreate) // ✅ UTC date-only
-      .input('IdWarehouse', sql.Int, finalIdWarehouse ?? null)
-      .input('Berat', sql.Decimal(18, 3), finalBerat ?? null)
-      .input('IsPartial', sql.Bit, finalIsPartial ?? 0)
-      .input('Blok', sql.VarChar, finalBlok ?? null)
-      .input('IdLokasi', sql.Int, finalIdLokasi ?? null);
+    // ===============================
+    // 2) Merge field (partial update)
+    // ===============================
+    const merged = {
+      // required identity
+      IdReject: hasOwn(header, 'IdReject') ? header.IdReject : current.IdReject,
 
-    await rqUpd.query(`
-      UPDATE [dbo].[RejectV2]
+      // optional
+      DateCreate: hasOwn(header, 'DateCreate') ? header.DateCreate : current.DateCreate,
+      IdWarehouse: hasOwn(header, 'IdWarehouse') ? header.IdWarehouse : current.IdWarehouse,
+      Berat: hasOwn(header, 'Berat') ? header.Berat : current.Berat,
+      Jam: hasOwn(header, 'Jam') ? header.Jam : current.Jam,
+      IsPartial: hasOwn(header, 'IsPartial') ? header.IsPartial : current.IsPartial,
+      Blok: hasOwn(header, 'Blok') ? header.Blok : current.Blok,
+      IdLokasi: hasOwn(header, 'IdLokasi') ? header.IdLokasi : current.IdLokasi,
+
+      // CreateBy (biasanya overwrite dari token)
+      CreateBy: hasOwn(header, 'CreateBy') ? header.CreateBy : current.CreateBy,
+    };
+
+    if (merged.IdReject == null) throw badReq('IdReject cannot be empty');
+
+    // ===============================
+    // 2b) Jika DateCreate dikirim user, cek tutup transaksi untuk tanggal baru
+    // ===============================
+    let dateCreateParam = null;
+
+    if (hasOwn(header, 'DateCreate')) {
+      if (header.DateCreate === null || header.DateCreate === '') {
+        dateCreateParam = toDateOnly(new Date());
+      } else {
+        dateCreateParam = toDateOnly(header.DateCreate);
+        if (!dateCreateParam) throw badReq('Invalid DateCreate');
+      }
+
+      await assertNotLocked({
+        date: dateCreateParam,
+        runner: tx,
+        action: 'update reject (DateCreate)',
+        useLock: true,
+      });
+    }
+
+    // normalize IdLokasi (anggap INT)
+    let idLokasiParam = merged.IdLokasi;
+    if (hasOwn(header, 'IdLokasi')) {
+      const raw = header.IdLokasi;
+      if (raw === null || String(raw).trim() === '') idLokasiParam = null;
+      else {
+        const n = Number(String(raw).trim());
+        idLokasiParam = Number.isFinite(n) ? n : null;
+      }
+    }
+
+    // ===============================
+    // 3) UPDATE header
+    // ===============================
+    const rqUpdate = new sql.Request(tx)
+      .input('NoReject', sql.VarChar(50), noReject)
+      .input('IdReject', sql.Int, merged.IdReject)
+      .input('IdWarehouse', sql.Int, merged.IdWarehouse ?? null)
+      .input('Berat', sql.Decimal(18, 3), merged.Berat ?? null)
+      .input('Jam', sql.VarChar(20), merged.Jam ?? null)
+      .input('IsPartial', sql.Bit, merged.IsPartial ?? 0)
+      .input('Blok', sql.VarChar(50), merged.Blok ?? null)
+      .input('IdLokasi', sql.Int, idLokasiParam ?? null)
+      .input('CreateBy', sql.VarChar(50), merged.CreateBy ?? null);
+
+    if (hasOwn(header, 'DateCreate')) {
+      rqUpdate.input('DateCreate', sql.Date, dateCreateParam);
+    }
+
+    const updateSql = `
+      UPDATE dbo.RejectV2
       SET
-        IdReject    = @IdReject,
-        DateCreate  = @DateCreate,
+        IdReject = @IdReject,
         IdWarehouse = @IdWarehouse,
-        Berat       = @Berat,
-        IsPartial   = @IsPartial,
-        Blok        = @Blok,
-        IdLokasi    = @IdLokasi
+        Berat = @Berat,
+        Jam = @Jam,
+        IsPartial = @IsPartial,
+        Blok = @Blok,
+        IdLokasi = @IdLokasi,
+        CreateBy = @CreateBy
+        ${hasOwn(header, 'DateCreate') ? ', DateCreate = @DateCreate' : ''}
       WHERE NoReject = @NoReject;
-    `);
+    `;
+    await rqUpdate.query(updateSql);
 
-    // 5) Kalau user kirim outputCode → ganti mapping
-    if (outputCode !== undefined) {
-      // Hapus mapping lama
-      await new sql.Request(tx)
-        .input('NoReject', sql.VarChar, noReject)
-        .query(`
-          DELETE FROM [dbo].[InjectProduksiOutputRejectV2]         WHERE NoReject = @NoReject;
-          DELETE FROM [dbo].[HotStampingOutputRejectV2]            WHERE NoReject = @NoReject;
-          DELETE FROM [dbo].[PasangKunciOutputRejectV2]            WHERE NoReject = @NoReject;
-          DELETE FROM [dbo].[SpannerOutputRejectV2]                WHERE NoReject = @NoReject;
-          DELETE FROM [dbo].[BJSortirRejectOutputLabelReject]      WHERE NoReject = @NoReject;
-        `);
+    // ===============================
+    // 4) Mapping update (optional) - sama pattern FWIP
+    // ===============================
+    let outputType = null;
+    let mappingTable = null;
 
-      // Insert mapping baru (kalau outputCode memang ada)
-      const rqMap = new sql.Request(tx)
-        .input('OutputCode', sql.VarChar, outputCode)
-        .input('NoReject', sql.VarChar, noReject);
+    if (hasOutputCodeField) {
+      if (!outputCode) {
+        // kalau user kirim outputCode: "" / null -> hapus semua mapping
+        await deleteAllRejectMappings(tx, noReject);
+      } else {
+        const resolved = resolveOutputByPrefix(outputCode); // versi kamu yang tidak perlu badReq param
+        outputType = resolved.outputType;
+        mappingTable = resolved.mappingTable;
 
-      if (mappingTable === 'InjectProduksiOutputRejectV2') {
-        await rqMap.query(`
-          INSERT INTO [dbo].[InjectProduksiOutputRejectV2] (NoProduksi, NoReject)
-          VALUES (@OutputCode, @NoReject);
-        `);
-      } else if (mappingTable === 'HotStampingOutputRejectV2') {
-        await rqMap.query(`
-          INSERT INTO [dbo].[HotStampingOutputRejectV2] (NoProduksi, NoReject)
-          VALUES (@OutputCode, @NoReject);
-        `);
-      } else if (mappingTable === 'PasangKunciOutputRejectV2') {
-        await rqMap.query(`
-          INSERT INTO [dbo].[PasangKunciOutputRejectV2] (NoProduksi, NoReject)
-          VALUES (@OutputCode, @NoReject);
-        `);
-      } else if (mappingTable === 'SpannerOutputRejectV2') {
-        await rqMap.query(`
-          INSERT INTO [dbo].[SpannerOutputRejectV2] (NoProduksi, NoReject)
-          VALUES (@OutputCode, @NoReject);
-        `);
-      } else if (mappingTable === 'BJSortirRejectOutputLabelReject') {
-        await rqMap.query(`
-          INSERT INTO [dbo].[BJSortirRejectOutputLabelReject] (NoBJSortir, NoReject)
-          VALUES (@OutputCode, @NoReject);
-        `);
+        await deleteAllRejectMappings(tx, noReject);
+
+        const rqMap = new sql.Request(tx)
+          .input('OutputCode', sql.VarChar(50), outputCode)
+          .input('NoReject', sql.VarChar(50), noReject);
+
+        if (mappingTable === 'InjectProduksiOutputRejectV2') {
+          await rqMap.query(`
+            INSERT INTO dbo.InjectProduksiOutputRejectV2 (NoProduksi, NoReject)
+            VALUES (@OutputCode, @NoReject);
+          `);
+        } else if (mappingTable === 'HotStampingOutputRejectV2') {
+          await rqMap.query(`
+            INSERT INTO dbo.HotStampingOutputRejectV2 (NoProduksi, NoReject)
+            VALUES (@OutputCode, @NoReject);
+          `);
+        } else if (mappingTable === 'PasangKunciOutputRejectV2') {
+          await rqMap.query(`
+            INSERT INTO dbo.PasangKunciOutputRejectV2 (NoProduksi, NoReject)
+            VALUES (@OutputCode, @NoReject);
+          `);
+        } else if (mappingTable === 'SpannerOutputRejectV2') {
+          await rqMap.query(`
+            INSERT INTO dbo.SpannerOutputRejectV2 (NoProduksi, NoReject)
+            VALUES (@OutputCode, @NoReject);
+          `);
+        } else if (mappingTable === 'BJSortirRejectOutputLabelReject') {
+          await rqMap.query(`
+            INSERT INTO dbo.BJSortirRejectOutputLabelReject (NoBJSortir, NoReject)
+            VALUES (@OutputCode, @NoReject);
+          `);
+        }
       }
     }
 
@@ -758,24 +778,22 @@ exports.updateReject = async (noReject, payload) => {
     return {
       header: {
         NoReject: noReject,
-        DateCreate: finalDateCreate,
-        IdReject: finalIdReject,
-        IdWarehouse: finalIdWarehouse,
-        Berat: finalBerat,
-        IsPartial: finalIsPartial,
-        Blok: finalBlok,
-        IdLokasi: finalIdLokasi,
+        DateCreate: hasOwn(header, 'DateCreate')
+          ? (dateCreateParam ? formatYMD(dateCreateParam) : null)
+          : formatYMD(current.DateCreate),
+        IdReject: merged.IdReject,
+        IdWarehouse: merged.IdWarehouse ?? null,
+        Berat: merged.Berat ?? null,
+        Jam: merged.Jam ?? null,
+        IsPartial: merged.IsPartial ?? 0,
+        Blok: merged.Blok ?? null,
+        IdLokasi: idLokasiParam ?? null,
+        CreateBy: merged.CreateBy ?? null,
       },
-      output:
-        outputCode !== undefined
-          ? {
-              code: outputCode || null,
-              type: outputType ?? null,
-              mappingTable: mappingTable ?? null,
-              isMulti: false,
-              count: 1,
-            }
-          : undefined, // kalau tidak kirim outputCode, block output tidak dikirim
+      output: hasOutputCodeField
+        ? { code: outputCode || null, type: outputType, mappingTable }
+        : undefined,
+      audit: { actorId, requestId },
     };
   } catch (e) {
     try { await tx.rollback(); } catch (_) {}
@@ -784,56 +802,70 @@ exports.updateReject = async (noReject, payload) => {
 };
 
 
+
   /**
  * DELETE RejectV2 + semua mapping output
  */
-exports.deleteReject = async (noReject) => {
+exports.deleteReject = async (noReject, payload) => {
   const pool = await poolPromise;
   const tx = new sql.Transaction(pool);
 
-  const NoReject = (noReject || '').toString().trim();
-  if (!NoReject) {
-    const e = new Error('NoReject is required');
-    e.statusCode = 400;
-    throw e;
-  }
+  const NoReject = String(noReject || '').trim();
+  if (!NoReject) throw badReq('NoReject wajib diisi');
+
+  // =========================
+  // [AUDIT] actorId + requestId (WAJIB seperti create/update)
+  // =========================
+  const actorIdNum = Number(payload?.actorId);
+  const actorId = Number.isFinite(actorIdNum) && actorIdNum > 0 ? actorIdNum : null;
+  const requestId = String(payload?.requestId || `${Date.now()}-${Math.random().toString(16).slice(2)}`);
+
+  if (!actorId) throw badReq('actorId kosong. Controller harus inject payload.actorId dari token.');
 
   try {
     await tx.begin(sql.ISOLATION_LEVEL.SERIALIZABLE);
 
-    // 1) Pastikan data ada & belum dipakai (DateUsage IS NULL) + ambil DateCreate (date-only)
+    // =========================
+    // [AUDIT CTX] set session context for triggers
+    // =========================
+    await new sql.Request(tx)
+      .input('actorId', sql.Int, actorId)
+      .input('rid', sql.NVarChar(64), requestId)
+      .query(`
+        EXEC sys.sp_set_session_context @key=N'actor_id', @value=@actorId;
+        EXEC sys.sp_set_session_context @key=N'request_id', @value=@rid;
+      `);
+
+    // ===============================
+    // 1) Pastikan data ada & lock + ambil DateCreate
+    // ===============================
     const checkRes = await new sql.Request(tx)
-      .input('NoReject', sql.VarChar, NoReject)
+      .input('NoReject', sql.VarChar(50), NoReject)
       .query(`
         SELECT TOP 1
           NoReject,
           CONVERT(date, DateCreate) AS DateCreate,
           DateUsage
-        FROM [dbo].[RejectV2] WITH (UPDLOCK, HOLDLOCK)
+        FROM dbo.RejectV2 WITH (UPDLOCK, HOLDLOCK)
         WHERE NoReject = @NoReject;
       `);
 
     if (checkRes.recordset.length === 0) {
-      const e = new Error(`Reject with NoReject=${NoReject} not found`);
-      e.statusCode = 404;
-      throw e;
+      throw notFound(`Reject ${NoReject} tidak ditemukan`);
     }
 
     const row = checkRes.recordset[0];
 
     if (row.DateUsage !== null) {
-      const e = new Error(
-        `Reject ${NoReject} cannot be deleted because it has already been used (DateUsage is not NULL)`
-      );
-      e.statusCode = 400;
-      throw e;
+      throw badReq(`Reject ${NoReject} tidak bisa dihapus karena sudah dipakai (DateUsage tidak NULL)`);
     }
 
     // ===============================
-    // ✅ TUTUP TRANSAKSI CHECK (DELETE)
-    // date yang dicek = DateCreate dari row
+    // 1b) TUTUP TRANSAKSI CHECK (DELETE)
+    // date yang dicek = DateCreate existing
     // ===============================
-    const trxDate = toDateOnly(row.DateCreate);
+    const trxDate = row.DateCreate ? toDateOnly(row.DateCreate) : null;
+
     await assertNotLocked({
       date: trxDate,
       runner: tx,
@@ -841,36 +873,31 @@ exports.deleteReject = async (noReject) => {
       useLock: true,
     });
 
-    // 2) Hapus mapping dari semua tabel output
-    await new sql.Request(tx)
-      .input('NoReject', sql.VarChar, NoReject)
-      .query(`
-        DELETE FROM [dbo].[InjectProduksiOutputRejectV2]         WHERE NoReject = @NoReject;
-        DELETE FROM [dbo].[HotStampingOutputRejectV2]            WHERE NoReject = @NoReject;
-        DELETE FROM [dbo].[PasangKunciOutputRejectV2]            WHERE NoReject = @NoReject;
-        DELETE FROM [dbo].[SpannerOutputRejectV2]                WHERE NoReject = @NoReject;
-        DELETE FROM [dbo].[BJSortirRejectOutputLabelReject]      WHERE NoReject = @NoReject;
-      `);
+    // ===============================
+    // 2) Hapus mapping dulu
+    // ===============================
+    await deleteAllRejectMappings(tx, NoReject);
 
-    // 3) Hapus row utama dari RejectV2
+    // ===============================
+    // 3) Hapus row utama
+    // ===============================
     const delMainRes = await new sql.Request(tx)
-      .input('NoReject', sql.VarChar, NoReject)
+      .input('NoReject', sql.VarChar(50), NoReject)
       .query(`
-        DELETE FROM [dbo].[RejectV2]
+        DELETE FROM dbo.RejectV2
         WHERE NoReject = @NoReject;
       `);
 
-    await tx.commit();
-
     if ((delMainRes.rowsAffected?.[0] ?? 0) === 0) {
-      const e = new Error(`Reject with NoReject=${NoReject} not found`);
-      e.statusCode = 404;
-      throw e;
+      throw notFound(`Reject ${NoReject} tidak ditemukan`);
     }
+
+    await tx.commit();
 
     return {
       NoReject,
       deleted: true,
+      audit: { actorId, requestId },
     };
   } catch (e) {
     try { await tx.rollback(); } catch (_) {}

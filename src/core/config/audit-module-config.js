@@ -299,7 +299,7 @@ const MODULE_CONFIG = {
     statusMapping: { '1': 'PASS', '0': 'HOLD' },
   },
 
-    barangjadi: {
+  barangjadi: {
     pkField: 'NoBJ',
     headerTable: 'BarangJadi',
     detailTable: null,
@@ -335,6 +335,50 @@ const MODULE_CONFIG = {
       },
     ],
     scalarFields: ['Pcs', 'Berat', 'DateCreate', 'Blok', 'IdLokasi'],
+    // statusField: 'IdStatus',
+    // statusMapping: { '1': 'PASS', '0': 'HOLD' },
+  },
+
+   reject: {
+    pkField: 'NoReject',
+    headerTable: 'RejectV2',
+    detailTable: null,
+    outputTables: ['InjectProduksiOutputRejectV2', 'HotStampingOutputRejectV2', 'PasangKunciOutputRejectV2', 'SpannerOutputRejectV2', 'BJSortirRejectOutputLabelReject'],
+    
+    // ✅ NEW: Multiple output tables with different display fields
+    outputDisplayConfig: {
+      'InjectProduksiOutputRejectV2': { 
+        displayField: 'NoProduksi',
+        label: 'Produksi Inject'
+      },
+      'HotStampingOutputRejectV2': { 
+        displayField: 'NoProduksi',
+        label: 'Hot Stamping'
+      },
+      'PasangKunciOutputRejectV2': { 
+        displayField: 'NoProduksi',
+        label: 'Pasang Kunci'
+      },
+      'SpannerOutputRejectV2': { 
+        displayField: 'NoProduksi',
+        label: 'Spanner'
+      },
+      'BJSortirRejectOutputLabelReject': { 
+        displayField: 'NoBJSortir',
+        label: 'Sortir Reject'
+      },
+    },
+    
+    headerParseFields: [
+      {
+        jsonField: 'IdReject',
+        joinTable: 'MstReject',
+        joinKey: 'IdReject',
+        displayField: 'NamaReject',
+        alias: 'NamaReject',
+      },
+    ],
+    scalarFields: ['Berat', 'DateCreate', 'Blok', 'IdLokasi'],
     // statusField: 'IdStatus',
     // statusMapping: { '1': 'PASS', '0': 'HOLD' },
   },

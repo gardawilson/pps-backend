@@ -14,6 +14,10 @@ const {
 const { generateNextCode } = require('../../../core/utils/sequence-code-helper'); 
 const { badReq, conflict } = require('../../../core/utils/http-error'); 
 
+const hasOwn = (obj, key) =>
+  Object.prototype.hasOwnProperty.call(obj || {}, key);
+
+
 
 exports.getAll = async ({ page, limit, search }) => {
   const pool = await poolPromise;
@@ -282,7 +286,6 @@ exports.getAll = async ({ page, limit, search }) => {
 
   return { data, total };
 };
-
 
 
 
@@ -647,13 +650,6 @@ exports.createFurnitureWip = async (payload) => {
     throw e;
   }
 };
-
-
-
-
-
-  const hasOwn = (obj, key) =>
-    Object.prototype.hasOwnProperty.call(obj || {}, key);
   
   /**
    * Hapus semua mapping FurnitureWIP ke proses manapun

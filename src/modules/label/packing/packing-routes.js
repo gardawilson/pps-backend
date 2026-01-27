@@ -12,21 +12,21 @@ router.use(verifyToken, attachPermissions);
 // GET all (pagination + search ?page=&limit=&search=)
 router.get(
   '/labels/packing',
-  requirePermission('label_crusher:read'), // 🔁 sesuaikan dengan permission yang kamu pakai
+  requirePermission('label_barangjadi:read'), // 🔁 sesuaikan dengan permission yang kamu pakai
   ctrl.getAll
 );
 
 // CREATE Packing / BarangJadi
 router.post(
   '/labels/packing',
-  requirePermission('label_crusher:create'), // ganti sesuai permission-mu
+  requirePermission('label_barangjadi:create'), // ganti sesuai permission-mu
   ctrl.create
 );
 
 // UPDATE (EDIT)
 router.put(
   '/labels/packing/:noBJ',
-  requirePermission('label_crusher:update'), // sesuaikan permission
+  requirePermission('label_barangjadi:update'), // sesuaikan permission
   ctrl.update
 );
 
@@ -34,14 +34,14 @@ router.put(
 // DELETE
 router.delete(
   '/labels/packing/:noBJ',
-  requirePermission('label_crusher:delete'),
+  requirePermission('label_barangjadi:delete'),
   ctrl.delete
 );
 
 
 router.get(
   '/labels/packing/partials/:nobj',
-  requirePermission('label_crusher:read'),
+  requirePermission('label_barangjadi:read'),
   ctrl.getPackingPartialInfo
 );
 

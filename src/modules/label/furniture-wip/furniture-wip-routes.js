@@ -12,14 +12,14 @@ router.use(verifyToken, attachPermissions);
 // GET all (pagination + search ?page=&limit=&search=)
 router.get(
   '/labels/furniture-wip',
-  requirePermission('label_crusher:read'), // 🔁 sesuaikan dengan permission yang kamu pakai
+  requirePermission('label_furniturewip:read'), // 🔁 sesuaikan dengan permission yang kamu pakai
   ctrl.getAll
 );
 
 // CREATE Furniture WIP
 router.post(
     '/labels/furniture-wip',
-    requirePermission('label_crusher:create'), // ganti sesuai permission-mu
+    requirePermission('label_furniturewip:create'), // ganti sesuai permission-mu
     ctrl.create
   );
 
@@ -27,7 +27,7 @@ router.post(
   // UPDATE Furniture WIP
 router.put(
     '/labels/furniture-wip/:noFurnitureWip',
-    requirePermission('label_crusher:update'),
+    requirePermission('label_furniturewip:update'),
     ctrl.update
   );
 
@@ -35,7 +35,7 @@ router.put(
   // DELETE Furniture WIP
 router.delete(
     '/labels/furniture-wip/:noFurnitureWip',
-    requirePermission('label_crusher:delete'), // atau pakai permission lain yg kamu pakai
+    requirePermission('label_furniturewip:delete'), // atau pakai permission lain yg kamu pakai
     ctrl.delete
   );
 
@@ -44,7 +44,7 @@ router.delete(
   // Example: GET /api/labels/furniture-wip/partials/BB.0000000123
 router.get(
     '/labels/furniture-wip/partials/:nofurniturewip',
-    requirePermission('label_crusher:read'), // atau permission yang kamu pakai
+    requirePermission('label_furniturewip:read'), // atau permission yang kamu pakai
     ctrl.getFurnitureWipPartialInfo
   );
   

@@ -12,7 +12,7 @@ router.use(verifyToken, attachPermissions);
 // GET all (pagination + search ?page=&limit=&search=)
 router.get(
   '/labels/reject',
-  requirePermission('label_crusher:read'), // 🔁 sesuaikan dengan permission yang kamu pakai di sistem
+  requirePermission('label_reject:read'), // 🔁 sesuaikan dengan permission yang kamu pakai di sistem
   ctrl.getAll
 );
 
@@ -20,7 +20,7 @@ router.get(
 // CREATE Reject
 router.post(
     '/labels/reject',
-    requirePermission('label_crusher:create'), // sesuaikan dengan permission-mu
+    requirePermission('label_reject:create'), // sesuaikan dengan permission-mu
     ctrl.create
   );
 
@@ -28,7 +28,7 @@ router.post(
   // UPDATE satu Reject
 router.put(
     '/labels/reject/:noReject',
-    requirePermission('label_crusher:update'), // sesuaikan permission-mu
+    requirePermission('label_reject:update'), // sesuaikan permission-mu
     ctrl.update
   );
 
@@ -36,14 +36,14 @@ router.put(
   // DELETE
 router.delete(
     '/labels/reject/:noReject',
-    requirePermission('label_crusher:delete'), // sesuaikan dengan permission-mu
+    requirePermission('label_reject:delete'), // sesuaikan dengan permission-mu
     ctrl.delete
   );
   
   
   router.get(
     '/labels/reject/partials/:noreject',
-    requirePermission('label_crusher:read'),
+    requirePermission('label_reject:read'),
     ctrl.getRejectPartialInfo
   );
 

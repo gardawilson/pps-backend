@@ -13,7 +13,7 @@ router.use(verifyToken, attachPermissions);
 // GET all Mixer (pagination + search ?page=&limit=&search=)
 router.get(
   '/labels/mixer',
-  requirePermission('label_crusher:read'), // sesuaikan dengan permission-mu
+  requirePermission('label_mixer:read'), // sesuaikan dengan permission-mu
   ctrl.getAll
 );
 
@@ -21,7 +21,7 @@ router.get(
 // GET one header's details by NoMixer
 router.get(
     '/labels/mixer/:nomixer',
-    requirePermission('label_crusher:read'),
+    requirePermission('label_mixer:read'),
     ctrl.getOne
   );
   
@@ -29,7 +29,7 @@ router.get(
   // ⬇️ NEW: CREATE Mixer header + details + optional outputs (outputCode)
 router.post(
     '/labels/mixer',
-    requirePermission('label_crusher:create'),
+    requirePermission('label_mixer:create'),
     ctrl.create
   );
 
@@ -37,7 +37,7 @@ router.post(
   // UPDATE mixer header + details (+ optional outputs)
 router.put(
     '/labels/mixer/:nomixer',
-    requirePermission('label_crusher:update'),
+    requirePermission('label_mixer:update'),
     ctrl.update
   );
   
@@ -46,7 +46,7 @@ router.put(
   // DELETE mixer
 router.delete(
     '/labels/mixer/:nomixer',
-    requirePermission('label_crusher:delete'),
+    requirePermission('label_mixer:delete'),
     ctrl.remove
   );
   
@@ -54,7 +54,7 @@ router.delete(
   // Example: GET /api/labels/mixer/partials/H.0000022318/1
 router.get(
     '/labels/mixer/partials/:nomixer/:nosak',
-    requirePermission('label_crusher:read'),
+    requirePermission('label_mixer:read'),
     ctrl.getPartialInfo
   );
 

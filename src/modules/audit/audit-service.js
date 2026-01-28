@@ -1,7 +1,7 @@
 // lib/services/audit/audit-service.js
 
 const { sql, poolPromise } = require('../../core/config/db');
-const { badReq } = require('../../core/utils/http-error'); 
+const { badReq } = require('../../core/utils/http-error');
 const { MODULE_CONFIG } = require('../../core/config/audit-module-config');
 
 async function getDocumentHistory({ module, documentNo }) {
@@ -10,7 +10,9 @@ async function getDocumentHistory({ module, documentNo }) {
 
   const config = MODULE_CONFIG[moduleKey];
   if (!config) {
-    throw badReq(`Module '${module}' tidak didukung. Available: ${Object.keys(MODULE_CONFIG).join(', ')}`);
+    throw badReq(
+      `Module '${module}' tidak didukung. Available: ${Object.keys(MODULE_CONFIG).join(', ')}`
+    );
   }
 
   if (!docNo) {
@@ -21,13 +23,17 @@ async function getDocumentHistory({ module, documentNo }) {
   const rq = pool.request();
   rq.input('DocumentNo', sql.VarChar(30), docNo);
 
-  // Build table list (skip null detailTable)
+  // =============================
+  // Build table list (include inputTables)
+  // =============================
   const allTables = [
     config.headerTable,
     ...(config.detailTable ? [config.detailTable] : []),
-    ...config.outputTables
+    ...(config.outputTables || []),
+    ...(config.inputTables || []),
   ];
-  const tableListSQL = allTables.map(t => `'${t}'`).join(',');
+
+  const tableListSQL = allTables.map((t) => `'${t}'`).join(',');
 
   // =============================
   // Build Relational Fields Parsing
@@ -41,9 +47,12 @@ async function getDocumentHistory({ module, documentNo }) {
 ,hdrParsedOld AS (
   SELECT
     h.SessionKey,
-    ${config.headerParseFields.map(f => 
-      `TRY_CONVERT(int, JSON_VALUE(h.HeaderOld, '$.${f.jsonField}')) AS Old${f.jsonField}`
-    ).join(',\n    ')}
+    ${config.headerParseFields
+      .map(
+        (f) =>
+          `TRY_CONVERT(int, JSON_VALUE(h.HeaderOld, '$.${f.jsonField}')) AS Old${f.jsonField}`
+      )
+      .join(',\n    ')}
   FROM hdr h
   WHERE h.HeaderOld IS NOT NULL
 )`;
@@ -52,25 +61,31 @@ async function getDocumentHistory({ module, documentNo }) {
 ,hdrParsedNew AS (
   SELECT
     h.SessionKey,
-    ${config.headerParseFields.map(f => 
-      `TRY_CONVERT(int, JSON_VALUE(COALESCE(h.HeaderNew, h.HeaderInserted), '$.${f.jsonField}')) AS New${f.jsonField}`
-    ).join(',\n    ')}
+    ${config.headerParseFields
+      .map(
+        (f) =>
+          `TRY_CONVERT(int, JSON_VALUE(COALESCE(h.HeaderNew, h.HeaderInserted), '$.${f.jsonField}')) AS New${f.jsonField}`
+      )
+      .join(',\n    ')}
   FROM hdr h
   WHERE COALESCE(h.HeaderNew, h.HeaderInserted) IS NOT NULL
 )`;
 
-    selectParsedFields = config.headerParseFields.map(f => `,
+    selectParsedFields = config.headerParseFields
+      .map(
+        (f) => `,
   ho.Old${f.jsonField},
   jpOld${f.jsonField}.${f.displayField} AS Old${f.alias},
   hn.New${f.jsonField},
-  jpNew${f.jsonField}.${f.displayField} AS New${f.alias}`).join('');
+  jpNew${f.jsonField}.${f.displayField} AS New${f.alias}`
+      )
+      .join('');
 
     joinParsedTables = `
 LEFT JOIN hdrParsedOld ho ON ho.SessionKey = s.SessionKey
 LEFT JOIN hdrParsedNew hn ON hn.SessionKey = s.SessionKey`;
 
-    // ✅ FIX: Gunakan f.jsonField di kedua tempat
-    config.headerParseFields.forEach(f => {
+    config.headerParseFields.forEach((f) => {
       joinParsedTables += `
 LEFT JOIN dbo.${f.joinTable} jpOld${f.jsonField} ON jpOld${f.jsonField}.${f.joinKey} = ho.Old${f.jsonField}
 LEFT JOIN dbo.${f.joinTable} jpNew${f.jsonField} ON jpNew${f.jsonField}.${f.joinKey} = hn.New${f.jsonField}`;
@@ -82,9 +97,13 @@ LEFT JOIN dbo.${f.joinTable} jpNew${f.jsonField} ON jpNew${f.jsonField}.${f.join
   // =============================
   let selectScalarFields = '';
   if (config.scalarFields && config.scalarFields.length > 0) {
-    selectScalarFields = config.scalarFields.map(field => `,
+    selectScalarFields = config.scalarFields
+      .map(
+        (field) => `,
   JSON_VALUE(h.HeaderOld, '$.${field}') AS Old${field},
-  JSON_VALUE(COALESCE(h.HeaderNew, h.HeaderInserted), '$.${field}') AS New${field}`).join('');
+  JSON_VALUE(COALESCE(h.HeaderNew, h.HeaderInserted), '$.${field}') AS New${field}`
+      )
+      .join('');
   }
 
   // =============================
@@ -93,11 +112,17 @@ LEFT JOIN dbo.${f.joinTable} jpNew${f.jsonField} ON jpNew${f.jsonField}.${f.join
   let selectStatus = '';
   if (config.statusField && config.statusMapping) {
     const mapCases = Object.entries(config.statusMapping)
-      .map(([key, val]) => `WHEN JSON_VALUE(h.HeaderOld, '$.${config.statusField}') = '${key}' THEN '${val}'`)
+      .map(
+        ([key, val]) =>
+          `WHEN JSON_VALUE(h.HeaderOld, '$.${config.statusField}') = '${key}' THEN '${val}'`
+      )
       .join('\n      ');
 
     const mapCasesNew = Object.entries(config.statusMapping)
-      .map(([key, val]) => `WHEN JSON_VALUE(COALESCE(h.HeaderNew, h.HeaderInserted), '$.${config.statusField}') = '${key}' THEN '${val}'`)
+      .map(
+        ([key, val]) =>
+          `WHEN JSON_VALUE(COALESCE(h.HeaderNew, h.HeaderInserted), '$.${config.statusField}') = '${key}' THEN '${val}'`
+      )
       .join('\n      ');
 
     selectStatus = `,
@@ -128,14 +153,58 @@ LEFT JOIN dbo.${f.joinTable} jpNew${f.jsonField} ON jpNew${f.jsonField}.${f.join
   }
 
   // =============================
+  // ✅ REVISED: General Consume/Unconsume CTE dengan aggregation
+  // =============================
+  let consumeCTE = '';
+  if (config.inputTables && config.inputTables.length > 0) {
+    const inputTablesList = config.inputTables.map((t) => `'${t}'`).join(',');
+
+    consumeCTE = `
+,cons AS (
+  SELECT
+    SessionKey,
+    
+    -- ✅ Aggregate ALL consume actions (FULL + PARTIAL) into single JSON array
+    CASE
+      WHEN COUNT(CASE WHEN Action IN ('CONSUME_FULL','CONSUME_PARTIAL') THEN 1 END) > 0
+      THEN (
+        SELECT d.TableName, d.Action, d.NewData
+        FROM doc d
+        WHERE d.SessionKey = doc.SessionKey
+          AND d.TableName IN (${inputTablesList})
+          AND d.Action IN ('CONSUME_FULL','CONSUME_PARTIAL')
+        ORDER BY d.EventTime
+        FOR JSON PATH
+      )
+      ELSE NULL
+    END AS ConsumeJson,
+
+    -- ✅ Aggregate ALL unconsume actions (FULL + PARTIAL) into single JSON array
+    CASE
+      WHEN COUNT(CASE WHEN Action IN ('UNCONSUME_FULL','UNCONSUME_PARTIAL') THEN 1 END) > 0
+      THEN (
+        SELECT d.TableName, d.Action, d.OldData
+        FROM doc d
+        WHERE d.SessionKey = doc.SessionKey
+          AND d.TableName IN (${inputTablesList})
+          AND d.Action IN ('UNCONSUME_FULL','UNCONSUME_PARTIAL')
+        ORDER BY d.EventTime
+        FOR JSON PATH
+      )
+      ELSE NULL
+    END AS UnconsumeJson
+  FROM doc
+  GROUP BY SessionKey
+)`;
+  }
+
+  // =============================
   // ✅ Single Aggregated Output CTE
   // =============================
-
- let outputCTE = '';
-  
+  let outputCTE = '';
   if (config.outputTables && config.outputTables.length > 0 && config.outputDisplayConfig) {
-    const outputTablesList = config.outputTables.map(t => `'${t}'`).join(',');
-    
+    const outputTablesList = config.outputTables.map((t) => `'${t}'`).join(',');
+
     outputCTE = `
 ,outputs AS (
   SELECT
@@ -144,19 +213,21 @@ LEFT JOIN dbo.${f.joinTable} jpNew${f.jsonField} ON jpNew${f.jsonField}.${f.join
       SELECT TOP 1
         d.TableName,
         CASE d.TableName
-          ${Object.entries(config.outputDisplayConfig).map(([tableName, cfg]) => 
-            `WHEN '${tableName}' THEN '${cfg.label}'`
-          ).join('\n          ')}
+          ${Object.entries(config.outputDisplayConfig)
+            .map(([tableName, cfg]) => `WHEN '${tableName}' THEN '${cfg.label}'`)
+            .join('\n          ')}
           ELSE d.TableName
         END AS DisplayLabel,
         CASE d.TableName
-          ${Object.entries(config.outputDisplayConfig).map(([tableName, cfg]) => 
-            `WHEN '${tableName}' THEN 
+          ${Object.entries(config.outputDisplayConfig)
+            .map(
+              ([tableName, cfg]) => `WHEN '${tableName}' THEN 
               COALESCE(
                 JSON_VALUE(d.NewData, '$[0].${cfg.displayField}'),
                 JSON_VALUE(d.OldData, '$[0].${cfg.displayField}')
               )`
-          ).join('\n          ')}
+            )
+            .join('\n          ')}
           ELSE NULL
         END AS DisplayValue,
         d.Action
@@ -199,9 +270,14 @@ LEFT JOIN dbo.${f.joinTable} jpNew${f.jsonField} ON jpNew${f.jsonField}.${f.join
     MIN(EventTime) AS StartTime,
     MAX(EventTime) AS EndTime,
     MAX(Actor) AS Actor,
+
     MAX(CASE WHEN TableName='${config.headerTable}' AND Action='INSERT' THEN 1 ELSE 0 END) AS HasCreate,
     MAX(CASE WHEN TableName='${config.headerTable}' AND Action='DELETE' THEN 1 ELSE 0 END) AS HasDelete,
-    MAX(CASE WHEN TableName='${config.headerTable}' AND Action='UPDATE' THEN 1 ELSE 0 END) AS HasHeaderUpdate
+
+    -- ✅ Simplified: General consume/unconsume detection
+    MAX(CASE WHEN Action IN ('CONSUME_FULL','CONSUME_PARTIAL') THEN 1 ELSE 0 END) AS HasConsume,
+    MAX(CASE WHEN Action IN ('UNCONSUME_FULL','UNCONSUME_PARTIAL') THEN 1 ELSE 0 END) AS HasUnconsume
+
   FROM doc
   GROUP BY SessionKey
 )
@@ -217,6 +293,7 @@ LEFT JOIN dbo.${f.joinTable} jpNew${f.jsonField} ON jpNew${f.jsonField}.${f.join
 )
 ${cteParsing}
 ${detailCTE}
+${consumeCTE}
 ${outputCTE}
 
 SELECT
@@ -226,13 +303,15 @@ SELECT
   s.RequestId,
   s.SessionKey,
   @DocumentNo AS DocumentNo,
-  
+
+  -- ✅ REVISED: General action detection
   CASE
     WHEN s.HasCreate = 1 THEN 'CREATE'
     WHEN s.HasDelete = 1 THEN 'DELETE'
+    WHEN s.HasConsume = 1 THEN 'CONSUME'      -- ✅ General consume (full + partial)
+    WHEN s.HasUnconsume = 1 THEN 'UNCONSUME'  -- ✅ General unconsume (full + partial)
     ELSE 'UPDATE'
   END AS SessionAction
-  
   ${selectParsedFields}
   ${selectScalarFields}
   ${selectStatus},
@@ -241,21 +320,26 @@ SELECT
   h.HeaderOld,
   h.HeaderNew,
   h.HeaderDeleted,
-  
+
   ${config.detailTable ? 'd.DetailsOldJson, d.DetailsNewJson' : 'NULL AS DetailsOldJson, NULL AS DetailsNewJson'},
-  
+
+  ${config.inputTables && config.inputTables.length > 0
+    ? 'c.ConsumeJson, c.UnconsumeJson'
+    : 'NULL AS ConsumeJson, NULL AS UnconsumeJson'},
+
   o.OutputChanges
 
 FROM sessionAgg s
 LEFT JOIN hdr h ON h.SessionKey = s.SessionKey
 ${joinParsedTables}
 ${config.detailTable ? 'LEFT JOIN det d ON d.SessionKey = s.SessionKey' : ''}
+${config.inputTables && config.inputTables.length > 0 ? 'LEFT JOIN cons c ON c.SessionKey = s.SessionKey' : ''}
 LEFT JOIN outputs o ON o.SessionKey = s.SessionKey
 ORDER BY s.StartTime;
-  `;
+`;
 
   const rs = await rq.query(query);
-  
+
   return {
     module: moduleKey,
     documentNo: docNo,

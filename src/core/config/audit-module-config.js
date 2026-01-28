@@ -7,6 +7,8 @@ const MODULE_CONFIG = {
     detailTable: 'Washing_d',
     outputTables: ['WashingProduksiOutput', 'BongkarSusunOutputWashing'],
     
+    inputTables: ['BrokerProduksiInputWashing'],
+
     // ✅ NEW: Output display config
     outputDisplayConfig: {
       'WashingProduksiOutput': { 
@@ -45,6 +47,8 @@ const MODULE_CONFIG = {
     headerTable: 'Broker_h',
     detailTable: 'Broker_d',
     outputTables: ['BrokerProduksiOutput', 'BongkarSusunOutputBroker'],
+
+    inputTables: ['BrokerProduksiInputBroker', 'BrokerProduksiInputBrokerPartial'],
     
     // ✅ NEW
     outputDisplayConfig: {
@@ -85,6 +89,8 @@ const MODULE_CONFIG = {
     headerTable: 'Crusher',
     detailTable: null,
     outputTables: ['CrusherProduksiOutput', 'BongkarSusunOutputCrusher'],
+
+    inputTables: ['BrokerProduksiInputCrusher'],
     
     // ✅ NEW
     outputDisplayConfig: {
@@ -125,6 +131,8 @@ const MODULE_CONFIG = {
     detailTable: null,
     outputTables: ['GilinganProduksiOutput', 'BongkarSusunOutputGilingan'],
     
+    inputTables: ['BrokerProduksiInputGilingan', 'BrokerProduksiInputGilinganPartial'],
+
     // ✅ NEW
     outputDisplayConfig: {
       'GilinganProduksiOutput': { 
@@ -206,6 +214,8 @@ const MODULE_CONFIG = {
     headerTable: 'Mixer_h',
     detailTable: 'Mixer_d',
     outputTables: ['MixerProduksiOutput', 'InjectProduksiOutputMixer', 'BongkarSusunOutputMixer'],
+
+    inputTables: ['BrokerProduksiInputMixer', 'BrokerProduksiInputMixerPartial'],
     
     // ✅ NEW
     outputDisplayConfig: {
@@ -345,6 +355,8 @@ const MODULE_CONFIG = {
     detailTable: null,
     outputTables: ['InjectProduksiOutputRejectV2', 'HotStampingOutputRejectV2', 'PasangKunciOutputRejectV2', 'SpannerOutputRejectV2', 'BJSortirRejectOutputLabelReject'],
     
+    inputTables: ['BrokerProduksiInputReject', 'BrokerProduksiInputRejectPartial'],
+
     // ✅ NEW: Multiple output tables with different display fields
     outputDisplayConfig: {
       'InjectProduksiOutputRejectV2': { 

@@ -72,7 +72,7 @@ router.get(
 router.post(
   '/inject/:noProduksi/inputs',
   verifyToken,
-  injectProduksiController.upsertInputs
+  injectProduksiController.upsertInputsAndPartials
 );
 
 

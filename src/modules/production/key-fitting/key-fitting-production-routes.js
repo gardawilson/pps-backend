@@ -45,7 +45,7 @@ router.get(
 router.post(
   '/key-fitting/:noProduksi/inputs',
   verifyToken,
-  keyFittingController.upsertInputs
+  keyFittingController.upsertInputsAndPartials
 );
 
 

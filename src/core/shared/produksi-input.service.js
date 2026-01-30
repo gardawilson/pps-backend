@@ -4,16 +4,20 @@ const { sql, poolPromise } = require('../config/db');
 const { generatePartialsInsertSQL } = require('../utils/produksi-partial-sql.generator');
 const { generateInputsAttachSQL } = require('../utils/produksi-input-sql.generator');
 const { generateInputsDeleteSQL, generatePartialsDeleteSQL } = require('../utils/produksi-delete-sql.generator');
+
+const { generateUpsertInputsSQL } = require('../utils/produksi-upsert-sql.generator'); // ✅ UPSERT
+const { generateUpsertInputsDeleteSQL } = require('../utils/produksi-upsert-delete-sql.generator'); // ✅ UPSERT DELETE
+
 const { loadDocDateOnlyFromConfig, assertNotLocked } = require('../shared/tutup-transaksi-guard');
 const { badReq } = require('../utils/http-error');
 const {
   PARTIAL_CONFIGS,
   INPUT_LABELS,
   INPUT_CONFIGS,
+  UPSERT_INPUT_CONFIGS, // ✅ NEW
 } = require('../config/produksi-input-mapping.config');
 
-// ✅ NEW: audit context helper
-const { applyAuditContext } = require('../utils/db-audit-context'); // sesuaikan path jika beda
+const { applyAuditContext } = require('../utils/db-audit-context');
 
 function _log(tag, msg, extra) {
   if (extra !== undefined) console.log(`[${tag}] ${msg}`, extra);
@@ -24,8 +28,35 @@ function _logErr(tag, msg, err) {
   if (err) console.error(err);
 }
 
+const norm = (a) => (Array.isArray(a) ? a : []);
+
 /**
- * ✅ REVISED: tambah param ctx
+ * ✅ Standard payload: "*Partial" (NO PartialNew from client)
+ * ✅ Legacy generator expects "*PartialNew"
+ * -> Build internal alias payload for partial insert only
+ */
+function _withPartialNewAliases(payload) {
+  const p = { ...(payload || {}) };
+
+  // ambil semua key standar "*Partial" yang punya isi
+  for (const key of Object.keys(p)) {
+    if (!key.endsWith('Partial')) continue;
+
+    const arr = norm(p[key]);
+    if (arr.length === 0) continue;
+
+    const legacyKey = `${key}New`; // brokerPartial -> brokerPartialNew
+    // hanya bikin alias kalau client belum kirim legacy
+    if (!Array.isArray(p[legacyKey]) || p[legacyKey].length === 0) {
+      p[legacyKey] = arr;
+    }
+  }
+
+  return p;
+}
+
+/**
+ * ✅ REVISED: support UPSERT inputs (cabinetMaterial, dll)
  * ctx wajib: { actorId, actorUsername, requestId }
  */
 async function upsertInputsAndPartials(produksiType, noProduksi, payload, ctx) {
@@ -34,14 +65,10 @@ async function upsertInputsAndPartials(produksiType, noProduksi, payload, ctx) {
 
   let tx = null;
   let began = false;
-  const norm = (a) => (Array.isArray(a) ? a : []);
 
-  // ✅ normalize ctx (avoid null)
   const actorIdNum = Number(ctx?.actorId);
   const actorUsername = String(ctx?.actorUsername || ctx?.actor || '').trim() || null;
   let requestId = String(ctx?.requestId || '').trim();
-
-  // kalau requestId kosong, bikin fallback (biar nggak NULL)
   if (!requestId) requestId = `${Date.now()}-${Math.random().toString(16).slice(2)}`;
 
   try {
@@ -49,7 +76,6 @@ async function upsertInputsAndPartials(produksiType, noProduksi, payload, ctx) {
     if (!produksiType) throw badReq('produksiType wajib');
     if (!payload || typeof payload !== 'object') throw badReq('payload wajib object');
 
-    // ✅ ctx wajib untuk audit
     if (!Number.isFinite(actorIdNum) || actorIdNum <= 0) {
       throw badReq('ctx.actorId wajib (controller harus inject dari token)');
     }
@@ -62,12 +88,10 @@ async function upsertInputsAndPartials(produksiType, noProduksi, payload, ctx) {
     await tx.begin(sql.ISOLATION_LEVEL.SERIALIZABLE);
     began = true;
 
-    // =====================================================
-    // ✅ [AUDIT CTX] set SESSION_CONTEXT di connection milik TX
-    // =====================================================
+    // AUDIT CTX
     await applyAuditContext(new sql.Request(tx), {
       actorId: Math.trunc(actorIdNum),
-      actor: actorUsername, // simpan string juga (kalau trigger butuh)
+      actor: actorUsername,
       requestId,
     });
 
@@ -86,46 +110,73 @@ async function upsertInputsAndPartials(produksiType, noProduksi, payload, ctx) {
       useLock: true,
     });
 
-    const partialTypes = Object.keys(payload)
-      .filter((key) => key.endsWith('PartialNew') && norm(payload[key]).length > 0)
+    // =====================================================
+    // 0) Build internal payload alias untuk partial insert
+    // =====================================================
+    // client kirim "*Partial", kita buat "*PartialNew" internal supaya generator lama tetap jalan
+    const payloadInternal = _withPartialNewAliases(payload);
+
+    // =====================================================
+    // 1) CREATE NEW PARTIALS (via legacy key "*PartialNew")
+    // =====================================================
+    const partialTypes = Object.keys(payloadInternal)
+      .filter((key) => key.endsWith('PartialNew') && norm(payloadInternal[key]).length > 0)
       .map((key) => key.replace('PartialNew', ''));
 
     let partials = { summary: {}, createdLists: {} };
     if (partialTypes.length > 0) {
-      partials = await _insertPartialsWithTx(tx, produksiType, noProduksi, payload, partialTypes);
+      partials = await _insertPartialsWithTx(tx, produksiType, noProduksi, payloadInternal, partialTypes);
     }
 
-    const inputTypes = Object.keys(payload)
-      .filter((key) => !key.endsWith('PartialNew') && norm(payload[key]).length > 0)
-      .filter((key) => INPUT_CONFIGS?.[produksiType]?.[key]);
+    // =====================================================
+    // 2) CATEGORIZE INPUT TYPES (STANDARD vs UPSERT)
+    // =====================================================
+    const allInputKeys = Object.keys(payload)
+      .filter((key) => norm(payload[key]).length > 0); // pakai payload asli (tanpa PartialNew)
+
+    // Standard inputs (yang ada di INPUT_CONFIGS dan bukan UPSERT_INPUT_CONFIGS)
+    const standardInputTypes = allInputKeys.filter(
+      (key) => INPUT_CONFIGS?.[produksiType]?.[key] && !UPSERT_INPUT_CONFIGS?.[produksiType]?.[key]
+    );
+
+    // UPSERT inputs (yang ada di UPSERT_INPUT_CONFIGS)
+    const upsertInputTypes = allInputKeys.filter(
+      (key) => UPSERT_INPUT_CONFIGS?.[produksiType]?.[key]
+    );
 
     let attachments = {};
     let invalidRows = {};
-    if (inputTypes.length > 0) {
-      const r = await _insertInputsWithTx(tx, produksiType, noProduksi, payload, inputTypes);
-      attachments = r.attachments;
-      invalidRows = r.invalidRows;
+
+    // =====================================================
+    // 3) PROCESS STANDARD INPUTS (attach)
+    // =====================================================
+    if (standardInputTypes.length > 0) {
+      const r = await _insertInputsWithTx(tx, produksiType, noProduksi, payload, standardInputTypes);
+      attachments = { ...attachments, ...r.attachments };
+      invalidRows = { ...invalidRows, ...r.invalidRows };
+    }
+
+    // =====================================================
+    // 4) PROCESS UPSERT INPUTS (cabinetMaterial, dll)
+    // =====================================================
+    if (upsertInputTypes.length > 0) {
+      const r = await _insertUpsertInputsWithTx(tx, produksiType, noProduksi, payload, upsertInputTypes);
+      attachments = { ...attachments, ...r.attachments };
     }
 
     await tx.commit();
 
-    // ✅ OPTIONAL: clear context (hindari “lengket” kalau connection reused)
+    // clear context (best effort)
     try {
-      await new sql.Request(pool)
-        .input('rid', sql.NVarChar(64), requestId)
-        .query(`
-          -- best-effort: clear session context on THIS request connection
-          EXEC sys.sp_set_session_context @key=N'actor_id',  @value=NULL, @read_only=0;
-          EXEC sys.sp_set_session_context @key=N'actor',     @value=NULL, @read_only=0;
-          EXEC sys.sp_set_session_context @key=N'request_id',@value=NULL, @read_only=0;
-        `);
-    } catch (_) {
-      // ignore
-    }
+      await new sql.Request(pool).query(`
+        EXEC sys.sp_set_session_context @key=N'actor_id',  @value=NULL, @read_only=0;
+        EXEC sys.sp_set_session_context @key=N'actor',     @value=NULL, @read_only=0;
+        EXEC sys.sp_set_session_context @key=N'request_id',@value=NULL, @read_only=0;
+      `);
+    } catch (_) {}
 
     const result = _buildResponse(noProduksi, attachments, partials, payload, invalidRows);
 
-    // ✅ attach audit meta for debugging (optional)
     result.meta = result.meta || {};
     result.meta.audit = { actorId: Math.trunc(actorIdNum), actorUsername, requestId };
 
@@ -141,10 +192,32 @@ async function upsertInputsAndPartials(produksiType, noProduksi, payload, ctx) {
   }
 }
 
-async function _insertPartialsWithTx(tx, produksiType, noProduksi, payload, partialTypes) {
+// ✅ UPSERT inputs (cabinet material pattern)
+async function _insertUpsertInputsWithTx(tx, produksiType, noProduksi, payload, upsertTypes) {
   const req = new sql.Request(tx);
   req.input('no', sql.VarChar(50), noProduksi);
-  req.input('jsPartials', sql.NVarChar(sql.MAX), JSON.stringify(payload));
+  req.input('jsInputs', sql.NVarChar(sql.MAX), JSON.stringify(payload));
+
+  const sqlQuery = generateUpsertInputsSQL(produksiType, upsertTypes);
+  const rs = await req.query(sqlQuery);
+
+  const attachments = {};
+  for (const row of rs.recordset || []) {
+    attachments[row.Section] = {
+      inserted: row.Inserted,
+      updated: row.Updated || 0,
+      skipped: row.Skipped,
+      invalid: row.Invalid,
+    };
+  }
+
+  return { attachments };
+}
+
+async function _insertPartialsWithTx(tx, produksiType, noProduksi, payloadInternal, partialTypes) {
+  const req = new sql.Request(tx);
+  req.input('no', sql.VarChar(50), noProduksi);
+  req.input('jsPartials', sql.NVarChar(sql.MAX), JSON.stringify(payloadInternal));
 
   const sqlQuery = generatePartialsInsertSQL(produksiType, partialTypes);
   const rs = await req.query(sqlQuery);
@@ -157,12 +230,17 @@ async function _insertPartialsWithTx(tx, produksiType, noProduksi, payload, part
   const createdLists = {};
   partialTypes.forEach((type, idx) => {
     const config = PARTIAL_CONFIGS?.[type];
-    const requestKey = `${type}PartialNew`;
-    if (config) {
-      createdLists[requestKey] = (rs.recordsets?.[idx + 1] || []).map((r) => r[config.partialColumn]);
-    } else {
-      createdLists[requestKey] = (rs.recordsets?.[idx + 1] || []).map((r) => r.Code || r.code);
-    }
+    const requestKeyLegacy = `${type}PartialNew`;     // generator legacy
+    const requestKeyStd = `${type}Partial`;           // standar API (kita expose ini juga)
+    const list = (rs.recordsets?.[idx + 1] || []);
+
+    const codes = config
+      ? list.map((r) => r[config.partialColumn])
+      : list.map((r) => r.Code || r.code);
+
+    // Simpan keduanya biar UI bisa baca yang standar, dan yang legacy masih ada kalau ada consumer lama
+    createdLists[requestKeyStd] = codes;
+    createdLists[requestKeyLegacy] = codes;
   });
 
   return { summary, createdLists };
@@ -200,6 +278,7 @@ async function _insertInputsWithTx(tx, produksiType, noProduksi, payload, inputT
 
 function _buildResponse(noProduksi, attachments, partials, requestBody, invalidRows = {}) {
   const totalInserted = Object.values(attachments).reduce((sum, item) => sum + (item.inserted || 0), 0);
+  const totalUpdated  = Object.values(attachments).reduce((sum, item) => sum + (item.updated || 0), 0);
   const totalSkipped  = Object.values(attachments).reduce((sum, item) => sum + (item.skipped || 0), 0);
   const totalInvalid  = Object.values(attachments).reduce((sum, item) => sum + (item.invalid || 0), 0);
 
@@ -209,12 +288,13 @@ function _buildResponse(noProduksi, attachments, partials, requestBody, invalidR
   );
 
   const hasInvalid = totalInvalid > 0;
-  const hasNoSuccess = totalInserted === 0 && totalPartialsCreated === 0;
+  const hasNoSuccess = (totalInserted + totalUpdated) === 0 && totalPartialsCreated === 0;
 
   const response = {
     noProduksi,
     summary: {
       totalInserted,
+      totalUpdated,
       totalSkipped,
       totalInvalid,
       totalPartialsCreated,
@@ -249,6 +329,7 @@ function _buildInputDetails(attachments, requestBody, invalidRowsBySection = {})
       label,
       requested: requestedCount,
       inserted: result.inserted || 0,
+      updated: result.updated || 0,
       skipped: result.skipped || 0,
       invalid,
       status: invalid > 0 ? 'error' : (result.skipped || 0) > 0 ? 'warning' : 'success',
@@ -264,14 +345,19 @@ function _buildPartialDetails(partials, requestBody) {
   const details = [];
   const createdLists = partials?.createdLists || {};
   const summaryObj = partials?.summary || {};
-  const requestedPartialKeys = Object.keys(requestBody || {}).filter((k) => k.endsWith('PartialNew'));
+
+  // Standar: client kirim "*Partial"
+  const requestedPartialKeys = Object.keys(requestBody || {}).filter((k) => k.endsWith('Partial'));
 
   for (const requestKey of requestedPartialKeys) {
-    const type = requestKey.replace('PartialNew', '');
+    const type = requestKey.replace('Partial', '');
     const requestedCount = Array.isArray(requestBody?.[requestKey]) ? requestBody[requestKey].length : 0;
     if (requestedCount === 0) continue;
 
-    const candidates = [requestKey, `${type}Partial`, type];
+    // Summary dari generator kemungkinan pakai key legacy (typePartialNew)
+    const legacyKey = `${type}PartialNew`;
+    const candidates = [requestKey, legacyKey, type];
+
     let created = 0;
     for (const c of candidates) {
       if (summaryObj?.[c]?.created != null) { created = summaryObj[c].created || 0; break; }
@@ -286,6 +372,7 @@ function _buildPartialDetails(partials, requestBody) {
       created,
       status: created === requestedCount ? 'success' : created > 0 ? 'warning' : 'error',
       message: `${created} dari ${requestedCount} ${label} berhasil dibuat`,
+      // expose codes standar
       codes: Array.isArray(createdLists?.[requestKey]) ? createdLists[requestKey] : [],
     });
   }
@@ -296,10 +383,12 @@ function _buildPartialDetails(partials, requestBody) {
 function _buildSectionMessage(label, result) {
   const parts = [];
   const inserted = result?.inserted || 0;
+  const updated = result?.updated || 0;
   const skipped = result?.skipped || 0;
   const invalid = result?.invalid || 0;
 
   if (inserted > 0) parts.push(`${inserted} berhasil ditambahkan`);
+  if (updated > 0) parts.push(`${updated} berhasil diupdate`);
   if (skipped > 0) parts.push(`${skipped} sudah ada (dilewati)`);
   if (invalid > 0) parts.push(`${invalid} tidak valid (tidak ditemukan)`);
 
@@ -307,6 +396,7 @@ function _buildSectionMessage(label, result) {
   return `${label}: ${parts.join(', ')}`;
 }
 
+// ==================== DELETE FUNCTIONS ====================
 
 async function deleteInputsAndPartials(produksiType, noProduksi, payload, ctx) {
   const TAG = 'produksi-input-delete';
@@ -314,14 +404,10 @@ async function deleteInputsAndPartials(produksiType, noProduksi, payload, ctx) {
 
   let tx = null;
   let began = false;
-  const norm = (a) => (Array.isArray(a) ? a : []);
 
-  // ✅ normalize ctx (avoid null)
   const actorIdNum = Number(ctx?.actorId);
   const actorUsername = String(ctx?.actorUsername || ctx?.actor || '').trim() || null;
   let requestId = String(ctx?.requestId || '').trim();
-
-  // kalau requestId kosong, bikin fallback (biar nggak NULL)
   if (!requestId) requestId = `${Date.now()}-${Math.random().toString(16).slice(2)}`;
 
   try {
@@ -329,7 +415,6 @@ async function deleteInputsAndPartials(produksiType, noProduksi, payload, ctx) {
     if (!produksiType) throw badReq('produksiType wajib');
     if (!payload || typeof payload !== 'object') throw badReq('payload wajib object');
 
-    // ✅ ctx wajib untuk audit
     if (!Number.isFinite(actorIdNum) || actorIdNum <= 0) {
       throw badReq('ctx.actorId wajib (controller harus inject dari token)');
     }
@@ -342,9 +427,6 @@ async function deleteInputsAndPartials(produksiType, noProduksi, payload, ctx) {
     await tx.begin(sql.ISOLATION_LEVEL.SERIALIZABLE);
     began = true;
 
-    // =====================================================
-    // ✅ [AUDIT CTX] set SESSION_CONTEXT di connection milik TX
-    // =====================================================
     await applyAuditContext(new sql.Request(tx), {
       actorId: Math.trunc(actorIdNum),
       actor: actorUsername,
@@ -366,53 +448,49 @@ async function deleteInputsAndPartials(produksiType, noProduksi, payload, ctx) {
       useLock: true,
     });
 
-    // Determine which partial types & input types are requested
     const requestedPartialTypes = Object.keys(payload)
       .filter((key) => key.endsWith('Partial') && norm(payload[key]).length > 0)
       .map((key) => key.replace('Partial', ''));
 
-    const requestedInputTypes = Object.keys(payload)
-      .filter((key) => !key.endsWith('Partial') && norm(payload[key]).length > 0)
-      .filter((key) => INPUT_CONFIGS?.[produksiType]?.[key]);
+    const allInputKeys = Object.keys(payload).filter((key) => !key.endsWith('Partial') && norm(payload[key]).length > 0);
+
+    const standardInputTypes = allInputKeys.filter(
+      (key) => INPUT_CONFIGS?.[produksiType]?.[key] && !UPSERT_INPUT_CONFIGS?.[produksiType]?.[key]
+    );
+
+    const upsertInputTypes = allInputKeys.filter(
+      (key) => UPSERT_INPUT_CONFIGS?.[produksiType]?.[key]
+    );
 
     let partialsResult = { summary: {} };
+    let inputsResult = {};
+
     if (requestedPartialTypes.length > 0) {
-      partialsResult = await _deletePartialsWithTx(
-        tx, 
-        produksiType, 
-        noProduksi, 
-        payload, 
-        requestedPartialTypes
-      );
+      partialsResult = await _deletePartialsWithTx(tx, produksiType, noProduksi, payload, requestedPartialTypes);
     }
 
-    let inputsResult = {};
-    if (requestedInputTypes.length > 0) {
-      inputsResult = await _deleteInputsWithTx(
-        tx, 
-        produksiType, 
-        noProduksi, 
-        payload, 
-        requestedInputTypes
-      );
+    if (standardInputTypes.length > 0) {
+      const r = await _deleteInputsWithTx(tx, produksiType, noProduksi, payload, standardInputTypes);
+      inputsResult = { ...inputsResult, ...r };
+    }
+
+    if (upsertInputTypes.length > 0) {
+      const r = await _deleteUpsertInputsWithTx(tx, produksiType, noProduksi, payload, upsertInputTypes);
+      inputsResult = { ...inputsResult, ...r };
     }
 
     await tx.commit();
 
-    // ✅ OPTIONAL: clear context (hindari "lengket" kalau connection reused)
+    // clear context (best effort)
     try {
       await new sql.Request(pool).query(`
         EXEC sys.sp_set_session_context @key=N'actor_id',  @value=NULL, @read_only=0;
         EXEC sys.sp_set_session_context @key=N'actor',     @value=NULL, @read_only=0;
         EXEC sys.sp_set_session_context @key=N'request_id',@value=NULL, @read_only=0;
       `);
-    } catch (_) {
-      // ignore
-    }
+    } catch (_) {}
 
     const result = _buildDeleteResponse(noProduksi, inputsResult, partialsResult, payload);
-
-    // ✅ attach audit meta for debugging (optional)
     result.meta = result.meta || {};
     result.meta.audit = { actorId: Math.trunc(actorIdNum), actorUsername, requestId };
 
@@ -428,7 +506,25 @@ async function deleteInputsAndPartials(produksiType, noProduksi, payload, ctx) {
   }
 }
 
-// ✅ NEW: Delete inputs using config-driven SQL generator
+// Delete UPSERT inputs
+async function _deleteUpsertInputsWithTx(tx, produksiType, noProduksi, payload, upsertTypes) {
+  const req = new sql.Request(tx);
+  req.input('no', sql.VarChar(50), noProduksi);
+  req.input('jsInputs', sql.NVarChar(sql.MAX), JSON.stringify(payload));
+
+  const sqlQuery = generateUpsertInputsDeleteSQL(produksiType, upsertTypes);
+  const rs = await req.query(sqlQuery);
+
+  const out = {};
+  for (const row of rs.recordset || []) {
+    out[row.Section] = {
+      deleted: row.Deleted,
+      notFound: row.NotFound,
+    };
+  }
+  return out;
+}
+
 async function _deleteInputsWithTx(tx, produksiType, noProduksi, payload, requestedTypes) {
   const req = new sql.Request(tx);
   req.input('no', sql.VarChar(50), noProduksi);
@@ -447,7 +543,6 @@ async function _deleteInputsWithTx(tx, produksiType, noProduksi, payload, reques
   return out;
 }
 
-// ✅ NEW: Delete partials using config-driven SQL generator
 async function _deletePartialsWithTx(tx, produksiType, noProduksi, payload, requestedTypes) {
   const req = new sql.Request(tx);
   req.input('no', sql.VarChar(50), noProduksi);
@@ -467,7 +562,6 @@ async function _deletePartialsWithTx(tx, produksiType, noProduksi, payload, requ
   return { summary };
 }
 
-// ✅ Helper: Build delete response
 function _buildDeleteResponse(noProduksi, inputsResult, partialsResult, requestBody) {
   const totalDeleted = Object.values(inputsResult).reduce((sum, item) => sum + (item.deleted || 0), 0);
   const totalNotFound = Object.values(inputsResult).reduce((sum, item) => sum + (item.notFound || 0), 0);
@@ -505,7 +599,6 @@ function _buildDeleteResponse(noProduksi, inputsResult, partialsResult, requestB
   };
 }
 
-// ✅ Helper: Build input details for delete
 function _buildDeleteInputDetails(results, requestBody) {
   const details = [];
 
@@ -529,7 +622,6 @@ function _buildDeleteInputDetails(results, requestBody) {
   return details;
 }
 
-// ✅ Helper: Build partial details for delete
 function _buildDeletePartialDetails(partialsResult, requestBody) {
   const details = [];
   const summaryObj = partialsResult?.summary || {};

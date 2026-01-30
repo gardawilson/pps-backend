@@ -1,4 +1,6 @@
 const service = require('./crusher-production-service');
+const { getActorId, getActorUsername, makeRequestId } = require('../../../core/utils/http-context');
+
 
 
 async function getAllProduksi(req, res) {
@@ -276,80 +278,6 @@ async function getInputsByNoCrusherProduksi(req, res) {
 
 
 /**
- * POST /api/produksi/crusher/:noCrusherProduksi/inputs
- * Upsert inputs & partials for crusher production
- */
-async function upsertInputsAndPartials(req, res) {
-  const noCrusherProduksi = String(req.params.noCrusherProduksi || '').trim();
-  
-  if (!noCrusherProduksi) {
-    return res.status(400).json({ 
-      success: false, 
-      message: 'noCrusherProduksi is required',
-      error: {
-        field: 'noCrusherProduksi',
-        message: 'Parameter noCrusherProduksi tidak boleh kosong'
-      }
-    });
-  }
-
-  const payload = req.body || {};
-
-  // Validate that at least one input is provided
-  const hasInput = ['bb', 'bonggolan', 'bbPartialNew']
-    .some(key => payload[key] && Array.isArray(payload[key]) && payload[key].length > 0);
-
-  if (!hasInput) {
-    return res.status(400).json({
-      success: false,
-      message: 'Tidak ada data input yang diberikan',
-      error: {
-        message: 'Request body harus berisi minimal satu array input (bb, bonggolan, atau bbPartialNew) yang tidak kosong'
-      }
-    });
-  }
-
-  try {
-    const result = await service.upsertInputsAndPartials(noCrusherProduksi, payload);
-
-    const { success, hasWarnings, data } = result;
-
-    // Determine appropriate HTTP status code
-    let statusCode = 200;
-    let message = 'Inputs & partials processed successfully';
-
-    if (!success) {
-      if (data.summary.totalInvalid > 0) {
-        statusCode = 422; // Unprocessable Entity - some data is invalid
-        message = 'Beberapa data tidak valid';
-      } else if (data.summary.totalInserted === 0 && data.summary.totalPartialsCreated === 0) {
-        statusCode = 400; // Bad Request - nothing was processed
-        message = 'Tidak ada data yang berhasil diproses';
-      }
-    } else if (hasWarnings) {
-      message = 'Inputs & partials processed with warnings';
-    }
-
-    return res.status(statusCode).json({
-      success,
-      message,
-      data,
-    });
-  } catch (e) {
-    console.error('[upsertInputsAndPartials]', e);
-    return res.status(500).json({
-      success: false,
-      message: 'Internal Server Error',
-      error: {
-        message: e.message,
-        details: process.env.NODE_ENV === 'development' ? e.stack : undefined
-      }
-    });
-  }
-}
-
-
-/**
  * GET /api/produksi/crusher/validate-label/:labelCode
  * Validate label for crusher production (only BB and Bonggolan)
  */
@@ -395,42 +323,160 @@ async function validateLabel(req, res) {
 }
 
 
-/**
- * DELETE /api/produksi/crusher/:noCrusherProduksi/inputs
- * Delete inputs and partials for crusher production
- */
-async function deleteInputsAndPartials(req, res) {
-  const noCrusherProduksi = String(req.params.noCrusherProduksi || '').trim();
-  
-  if (!noCrusherProduksi) {
-    return res.status(400).json({ 
-      success: false, 
-      message: 'noCrusherProduksi is required',
-      error: {
-        field: 'noCrusherProduksi',
-        message: 'Parameter noCrusherProduksi tidak boleh kosong'
-      }
+
+async function upsertInputsAndPartials(req, res) {
+  const noProduksi = String(req.params.noCrusherProduksi  || '').trim();
+  if (!noProduksi) {
+    return res.status(400).json({
+      success: false,
+      message: 'noProduksi is required',
+      error: { field: 'noProduksi', message: 'Parameter noProduksi tidak boleh kosong' },
     });
   }
 
-  const payload = req.body || {};
+  // ✅ pastikan body object
+  const body = req.body && typeof req.body === 'object' ? req.body : {};
 
-  // Validate that at least one input is provided (only bb and bonggolan for crusher)
-  const hasInput = ['bb', 'bonggolan', 'bbPartial']
-    .some(key => payload[key] && Array.isArray(payload[key]) && payload[key].length > 0);
+  // ✅ jangan percaya audit fields dari client
+  // (biar client tidak bisa spoof requestId/actorId dan biar tidak bikin null/aneh)
+  const {
+    actorId: _clientActorId,
+    actorUsername: _clientActorUsername,
+    actor: _clientActor,
+    requestId: _clientRequestId,
+    ...payload
+  } = body;
+
+  // ✅ actor wajib (audit)
+  const actorId = getActorId(req);
+  if (!actorId) {
+    return res.status(401).json({
+      success: false,
+      message: 'Unauthorized (idUsername missing)',
+    });
+  }
+
+  // ✅ username untuk business fields / audit actor string
+  const actorUsername = getActorUsername(req) || req.username || req.user?.username || 'system';
+
+  // ✅ request id per HTTP request (kalau ada header ikut pakai)
+  const requestId = String(makeRequestId(req) || '').trim();
+
+  // optional: echo header for tracing
+  if (requestId) res.setHeader('x-request-id', requestId);
+
+  // optional validate: at least one input exists
+  const hasInput = ['bb', 'bonggolan', 'bbPartial'].some((key) => Array.isArray(payload?.[key]) && payload[key].length > 0);
+
+  // if (!hasInput) { ... } // kalau mau strict, aktifkan lagi
+
+  try {
+    // ✅ Forward audit context ke service
+    const ctx = { actorId, actorUsername, requestId };
+
+    const result = await service.upsertInputsAndPartials(noProduksi, payload, ctx);
+
+    // Support beberapa bentuk return (backward compatible)
+    const success = result?.success !== undefined ? !!result.success : true;
+    const hasWarnings = !!result?.hasWarnings;
+    const data = result?.data ?? result;
+
+    let statusCode = 200;
+    let message = 'Inputs & partials processed successfully';
+
+    if (!success) {
+      const totalInvalid = Number(data?.summary?.totalInvalid ?? 0);
+      const totalInserted = Number(data?.summary?.totalInserted ?? 0);
+      const totalPartialsCreated = Number(data?.summary?.totalPartialsCreated ?? 0);
+
+      if (totalInvalid > 0) {
+        statusCode = 422;
+        message = 'Beberapa data tidak valid';
+      } else if (totalInserted === 0 && totalPartialsCreated === 0) {
+        statusCode = 400;
+        message = 'Tidak ada data yang berhasil diproses';
+      }
+    } else if (hasWarnings) {
+      message = 'Inputs & partials processed with warnings';
+    }
+
+    return res.status(statusCode).json({
+      success,
+      message,
+      data,
+      meta: {
+        noProduksi,
+        hasInput,
+        audit: { actorId, actorUsername, requestId },
+      },
+    });
+  } catch (e) {
+    console.error('[upsertInputsAndPartials]', e);
+    const status = e.statusCode || e.status || 500;
+
+    return res.status(status).json({
+      success: false,
+      message: status === 500 ? 'Internal Server Error' : e.message,
+      error: {
+        message: e.message,
+        details: process.env.NODE_ENV === 'development' ? e.stack : undefined,
+      },
+    });
+  }
+}
+
+
+
+async function deleteInputsAndPartials(req, res) {
+  const noProduksi = String(req.params.noCrusherProduksi  || '').trim();
+  
+  if (!noProduksi) {
+    return res.status(400).json({ 
+      success: false, 
+      message: 'noProduksi is required',
+      error: { field: 'noProduksi', message: 'Parameter noProduksi tidak boleh kosong' }
+    });
+  }
+
+  // ✅ Strip client audit fields
+  const {
+    actorId: _clientActorId,
+    actorUsername: _clientActorUsername,
+    actor: _clientActor,
+    requestId: _clientRequestId,
+    ...payload
+  } = req.body || {};
+
+  // ✅ Get trusted audit context
+  const actorId = getActorId(req);
+  if (!actorId) {
+    return res.status(401).json({
+      success: false,
+      message: 'Unauthorized (idUsername missing)',
+    });
+  }
+
+  const actorUsername = getActorUsername(req) || req.username || req.user?.username || 'system';
+  const requestId = String(makeRequestId(req) || '').trim();
+
+  if (requestId) res.setHeader('x-request-id', requestId);
+
+  // Validate input
+  const hasInput = ['bb', 'bonggolan', 'bbPartial'].some(key => Array.isArray(payload?.[key]) && payload[key].length > 0);
 
   if (!hasInput) {
     return res.status(400).json({
       success: false,
       message: 'Tidak ada data input yang diberikan',
-      error: {
-        message: 'Request body harus berisi minimal satu array input yang tidak kosong (bb, bonggolan, atau bbPartial)'
-      }
+      error: { message: 'Request body harus berisi minimal satu array input' }
     });
   }
 
   try {
-    const result = await service.deleteInputsAndPartials(noCrusherProduksi, payload);
+    // ✅ Forward audit context
+    const ctx = { actorId, actorUsername, requestId };
+    
+    const result = await service.deleteInputsAndPartials(noProduksi, payload, ctx);
 
     const { success, hasWarnings, data } = result;
 
@@ -448,12 +494,19 @@ async function deleteInputsAndPartials(req, res) {
       success,
       message,
       data,
+      meta: {
+        noProduksi,
+        hasInput,
+        audit: { actorId, actorUsername, requestId },
+      },
     });
   } catch (e) {
     console.error('[deleteInputsAndPartials]', e);
-    return res.status(500).json({
+    const status = e.statusCode || e.status || 500;
+
+    return res.status(status).json({
       success: false,
-      message: 'Internal Server Error',
+      message: status === 500 ? 'Internal Server Error' : e.message,
       error: {
         message: e.message,
         details: process.env.NODE_ENV === 'development' ? e.stack : undefined
@@ -461,5 +514,6 @@ async function deleteInputsAndPartials(req, res) {
     });
   }
 }
+
 
 module.exports = { getAllProduksi, getProduksiByDate, getCrusherMasters, createProduksi, updateProduksi, deleteProduksi, getInputsByNoCrusherProduksi, upsertInputsAndPartials, validateLabel, deleteInputsAndPartials };

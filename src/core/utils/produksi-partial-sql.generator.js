@@ -9,7 +9,11 @@ const {
   PARTIAL_CONFIGS,
   PRODUKSI_CONFIGS,
   WEIGHT_TOLERANCE,
-} = require('../config/produksi-input-mapping.config');
+} = require('../config/produksi-input-mapping.config'); // ✅ perhatikan path
+
+/** =========================
+ *  Helpers
+ *  ========================= */
 
 /** convert "NoSak" -> "noSak", "NoBahanBaku" -> "noBahanBaku" */
 function toCamelField(dbKey) {
@@ -25,6 +29,31 @@ function sqlTypeForKey(dbKey) {
   const k = String(dbKey || '').toLowerCase();
   if (k === 'nosak' || k === 'nopallet') return 'int';
   return 'varchar(50)';
+}
+
+/** weight column => json field (Berat -> berat, Pcs -> pcs) */
+function jsonFieldForWeight(config) {
+  return toCamelField(config.weightColumn || 'Berat');
+}
+
+/** weight type: pcs -> int, lainnya -> decimal */
+function sqlTypeForWeight(config) {
+  const w = String(config.weightColumn || '').toLowerCase();
+  if (w === 'pcs') return 'int';
+  return 'decimal(18,3)';
+}
+
+/**
+ * Mode input key partial:
+ * - Kalau standar kamu: client kirim "xxxPartial" (TANPA PartialNew)
+ * - Kalau legacy: "xxxPartialNew"
+ *
+ * ✅ Karena kamu bilang "tidak boleh ada PartialNew", default = false.
+ */
+const USE_PARTIAL_NEW_SUFFIX = false;
+
+function requestKeyForPartial(type) {
+  return USE_PARTIAL_NEW_SUFFIX ? `${type}PartialNew` : `${type}Partial`;
 }
 
 /**
@@ -44,7 +73,6 @@ function generatePartialsInsertSQL(produksiType, requestedTypes) {
   });
 
   if (activeTypes.length === 0) {
-    // tidak throw biar service bisa handle "no partial requested"
     return _generateEmptySQL();
   }
 
@@ -60,7 +88,10 @@ function generatePartialsInsertSQL(produksiType, requestedTypes) {
     .join('\n\n');
 
   const summaryUnion = activeTypes
-    .map((type) => `SELECT '${type}PartialNew' AS Section, COUNT(*) AS Created FROM @${type}New`)
+    .map((type) => {
+      const sectionKey = requestKeyForPartial(type);
+      return `SELECT '${sectionKey}' AS Section, COUNT(*) AS Created FROM @${type}New`;
+    })
     .join('\nUNION ALL\n');
 
   const returnCodeSets = activeTypes
@@ -108,36 +139,38 @@ ${returnCodeSets}
 }
 
 /**
- * Generate SQL per partial type (mirip format manual).
- * Penting: OPENJSON path pakai camelCase, bukan lowercase.
+ * Generate SQL per partial type
+ * - OPENJSON path sesuai standar (Partial atau PartialNew)
+ * - field qty dinamis (berat / pcs) dari config.weightColumn
  */
 function _generateSinglePartialSection(type, config, produksiType) {
   const varName = type.charAt(0).toUpperCase() + type.slice(1);
   const mappingTable = config.mappingTables[produksiType];
   const produksiConfig = PRODUKSI_CONFIGS[produksiType];
 
-  const keys = config.keys || [];
-  const keyFieldsDb = keys.join(', '); // DB columns e.g. NoBroker, NoSak
-  const keyFieldsJson = keys.map(toCamelField).join(', '); // json alias e.g. noBroker, noSak
+  const requestKey = requestKeyForPartial(type); // ✅ "$.furnitureWipPartial" atau "$.furnitureWipPartialNew"
 
-  // WITH clause OPENJSON
-  // ex: noBroker varchar(50) '$.noBroker', noSak int '$.noSak'
+  const keys = config.keys || [];
+  const keyFieldsDb = keys.join(', ');
+  const keyFieldsJson = keys.map(toCamelField).join(', ');
+
   const withClause = keys
     .map((k) => `${toCamelField(k)} ${sqlTypeForKey(k)} '${jsonPath(k)}'`)
     .join(', ');
 
-  // join existing partial sum to source table d.<key> = ep.<key>
   const existingJoin = keys.map((k) => `ep.${k} = d.${k}`).join(' AND ');
-
-  // join new partial sum to source table d.<key> = np.<camelKey>
   const newJoin = keys.map((k) => `np.${toCamelField(k)} = d.${k}`).join(' AND ');
+
+  // ✅ qty mapping (Berat->$.berat decimal, Pcs->$.pcs int)
+  const weightJsonField = jsonFieldForWeight(config);
+  const weightSqlType = sqlTypeForWeight(config);
 
   return `
 /* ===========================
    ${type.toUpperCase()} PARTIAL (${config.prefix}##########)
    =========================== */
 
-IF EXISTS (SELECT 1 FROM OPENJSON(@jsPartials, '$.${type}PartialNew'))
+IF EXISTS (SELECT 1 FROM OPENJSON(@jsPartials, '$.${requestKey}'))
 BEGIN
   -- ambil nomor terakhir prefix ini (lock sudah dipegang global)
   DECLARE @next${varName} int = ISNULL((
@@ -149,24 +182,24 @@ BEGIN
   ;WITH src AS (
     SELECT
       ${keyFieldsJson},
-      berat,
+      qty,
       ROW_NUMBER() OVER (ORDER BY (SELECT 1)) AS rn
-    FROM OPENJSON(@jsPartials, '$.${type}PartialNew')
+    FROM OPENJSON(@jsPartials, '$.${requestKey}')
     WITH (
       ${withClause},
-      berat decimal(18,3) '$.berat'
+      qty ${weightSqlType} '$.${weightJsonField}'
     )
   ),
   numbered AS (
     SELECT
       NewNo = CONCAT('${config.prefix}', RIGHT(REPLICATE('0',10) + CAST(@next${varName} + rn AS varchar(10)), 10)),
       ${keyFieldsJson},
-      berat
+      qty
     FROM src
   )
   INSERT INTO dbo.${config.tableName} (${config.partialColumn}, ${keyFieldsDb}, ${config.weightColumn})
   OUTPUT INSERTED.${config.partialColumn} INTO @${type}New(${config.partialColumn})
-  SELECT NewNo, ${keyFieldsJson}, berat
+  SELECT NewNo, ${keyFieldsJson}, qty
   FROM numbered;
 
   -- Map to produksi
@@ -178,7 +211,7 @@ BEGIN
   ;WITH existingPartials AS (
     SELECT
       ${keyFieldsDb},
-      SUM(ISNULL(p.${config.weightColumn}, 0)) AS TotalBeratPartialExisting
+      SUM(ISNULL(p.${config.weightColumn}, 0)) AS TotalQtyPartialExisting
     FROM dbo.${config.tableName} p WITH (NOLOCK)
     WHERE p.${config.partialColumn} NOT IN (SELECT ${config.partialColumn} FROM @${type}New)
     GROUP BY ${keyFieldsDb}
@@ -186,11 +219,11 @@ BEGIN
   newPartials AS (
     SELECT
       ${keyFieldsJson},
-      SUM(berat) AS TotalBeratPartialNew
-    FROM OPENJSON(@jsPartials, '$.${type}PartialNew')
+      SUM(qty) AS TotalQtyPartialNew
+    FROM OPENJSON(@jsPartials, '$.${requestKey}')
     WITH (
       ${withClause},
-      berat decimal(18,3) '$.berat'
+      qty ${weightSqlType} '$.${weightJsonField}'
     )
     GROUP BY ${keyFieldsJson}
   )
@@ -199,7 +232,7 @@ BEGIN
     d.IsPartial = 1,
     d.DateUsage =
       CASE
-        WHEN (${config.weightSourceColumn} - ISNULL(ep.TotalBeratPartialExisting, 0) - ISNULL(np.TotalBeratPartialNew, 0)) <= ${WEIGHT_TOLERANCE}
+        WHEN (${config.weightSourceColumn} - ISNULL(ep.TotalQtyPartialExisting, 0) - ISNULL(np.TotalQtyPartialNew, 0)) <= ${WEIGHT_TOLERANCE}
         THEN @tglProduksi
         ELSE d.DateUsage
       END

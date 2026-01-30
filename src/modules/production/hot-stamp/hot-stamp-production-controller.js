@@ -1,5 +1,7 @@
 // controllers/hotstamping-production-controller.js
 const hotStampingService = require('./hot-stamp-production-service');
+const { getActorId, getActorUsername, makeRequestId } = require('../../../core/utils/http-context');
+
 
 async function getProduksiByDate(req, res) {
   const { username } = req;
@@ -272,55 +274,91 @@ async function validateFwipLabel(req, res) {
 }
 
 
-// hot-stamping-controller.js
-async function upsertInputs(req, res) {
+async function upsertInputsAndPartials(req, res) {
   const noProduksi = String(req.params.noProduksi || '').trim();
-
+  
   if (!noProduksi) {
     return res.status(400).json({
       success: false,
       message: 'noProduksi is required',
-      error: {
-        field: 'noProduksi',
-        message: 'Parameter noProduksi tidak boleh kosong'
-      }
+      error: { field: 'noProduksi', message: 'Parameter noProduksi tidak boleh kosong' },
     });
   }
 
-  const payload = req.body || {};
+  // ✅ Pastikan body object
+  const body = req.body && typeof req.body === 'object' ? req.body : {};
 
-  // Validate that at least one input is provided (NEW keys)
+  // ✅ Strip client audit fields (jangan percaya dari client)
+  const {
+    actorId: _clientActorId,
+    actorUsername: _clientActorUsername,
+    actor: _clientActor,
+    requestId: _clientRequestId,
+    ...payload
+  } = body;
+
+  // ✅ Get trusted audit context from token/session
+  const actorId = getActorId(req);
+  if (!actorId) {
+    return res.status(401).json({
+      success: false,
+      message: 'Unauthorized (idUsername missing)',
+    });
+  }
+
+  const actorUsername = getActorUsername(req) || req.username || req.user?.username || 'system';
+  const requestId = String(makeRequestId(req) || '').trim();
+
+  // Optional: echo header for tracing
+  if (requestId) res.setHeader('x-request-id', requestId);
+
+  // ✅ Validate: at least one input exists
   const hasInput = [
     'furnitureWip',
     'cabinetMaterial',
-    'furnitureWipPartialNew',
+    'furnitureWipPartial',
   ].some(key => payload[key] && Array.isArray(payload[key]) && payload[key].length > 0);
+
 
   if (!hasInput) {
     return res.status(400).json({
       success: false,
       message: 'Tidak ada data input yang diberikan',
       error: {
-        message: 'Request body harus berisi minimal satu array input (furnitureWip, cabinetMaterial, furnitureWipPartialNew) yang tidak kosong'
-      }
+        message: 'Request body harus berisi minimal satu array input yang tidak kosong',
+      },
     });
   }
 
   try {
-    const result = await hotStampingService.upsertInputsAndPartials(noProduksi, payload);
+    // ✅ Forward audit context ke service
+    const ctx = { actorId, actorUsername, requestId };
 
-    const { success, hasWarnings, data } = result;
+    const result = await hotStampingService.upsertInputsAndPartials(
+      noProduksi,
+      payload,
+      ctx
+    );
+
+    // Support beberapa bentuk return (backward compatible)
+    const success = result?.success !== undefined ? !!result.success : true;
+    const hasWarnings = !!result?.hasWarnings;
+    const data = result?.data ?? result;
 
     let statusCode = 200;
     let message = 'Inputs & partials processed successfully';
 
     if (!success) {
-      if ((data?.summary?.totalInvalid || 0) > 0) {
-        statusCode = 422; // invalid data
+      const totalInvalid = Number(data?.summary?.totalInvalid ?? 0);
+      const totalInserted = Number(data?.summary?.totalInserted ?? 0);
+      const totalUpdated = Number(data?.summary?.totalUpdated ?? 0); // ✅ Support UPSERT
+      const totalPartialsCreated = Number(data?.summary?.totalPartialsCreated ?? 0);
+
+      if (totalInvalid > 0) {
+        statusCode = 422;
         message = 'Beberapa data tidak valid';
-      } else if (((data?.summary?.totalInserted || 0) + (data?.summary?.totalUpdated || 0)) === 0
-                 && (data?.summary?.totalPartialsCreated || 0) === 0) {
-        statusCode = 400; // nothing processed
+      } else if ((totalInserted + totalUpdated) === 0 && totalPartialsCreated === 0) {
+        statusCode = 400;
         message = 'Tidak ada data yang berhasil diproses';
       }
     } else if (hasWarnings) {
@@ -331,16 +369,23 @@ async function upsertInputs(req, res) {
       success,
       message,
       data,
+      meta: {
+        noProduksi,
+        hasInput,
+        audit: { actorId, actorUsername, requestId },
+      },
     });
   } catch (e) {
-    console.error('[hotStamping.upsertInputs]', e);
-    return res.status(500).json({
+    console.error('[inject.upsertInputsAndPartials]', e);
+    const status = e.statusCode || e.status || 500;
+
+    return res.status(status).json({
       success: false,
-      message: 'Internal Server Error',
+      message: status === 500 ? 'Internal Server Error' : e.message,
       error: {
         message: e.message,
-        details: process.env.NODE_ENV === 'development' ? e.stack : undefined
-      }
+        details: process.env.NODE_ENV === 'development' ? e.stack : undefined,
+      },
     });
   }
 }
@@ -348,39 +393,62 @@ async function upsertInputs(req, res) {
 
 async function deleteInputsAndPartials(req, res) {
   const noProduksi = String(req.params.noProduksi || '').trim();
-  
+
   if (!noProduksi) {
-    return res.status(400).json({ 
-      success: false, 
+    return res.status(400).json({
+      success: false,
       message: 'noProduksi is required',
-      error: {
-        field: 'noProduksi',
-        message: 'Parameter noProduksi tidak boleh kosong'
-      }
+      error: { field: 'noProduksi', message: 'Parameter noProduksi tidak boleh kosong' },
     });
   }
 
-  const payload = req.body || {};
+  // ✅ Strip client audit fields
+  const {
+    actorId: _clientActorId,
+    actorUsername: _clientActorUsername,
+    actor: _clientActor,
+    requestId: _clientRequestId,
+    ...payload
+  } = req.body || {};
 
-  // Validate that at least one input is provided
+  // ✅ Get trusted audit context
+  const actorId = getActorId(req);
+  if (!actorId) {
+    return res.status(401).json({
+      success: false,
+      message: 'Unauthorized (idUsername missing)',
+    });
+  }
+
+  const actorUsername = getActorUsername(req) || req.username || req.user?.username || 'system';
+  const requestId = String(makeRequestId(req) || '').trim();
+
+  if (requestId) res.setHeader('x-request-id', requestId);
+
+  // ✅ Validate input
   const hasInput = [
     'furnitureWip',
     'cabinetMaterial',
-    'furnitureWipPartial'
+    'furnitureWipPartial',
   ].some(key => payload[key] && Array.isArray(payload[key]) && payload[key].length > 0);
 
   if (!hasInput) {
     return res.status(400).json({
       success: false,
       message: 'Tidak ada data input yang diberikan',
-      error: {
-        message: 'Request body harus berisi minimal satu array input yang tidak kosong'
-      }
+      error: { message: 'Request body harus berisi minimal satu array input yang tidak kosong' },
     });
   }
 
   try {
-    const result = await hotStampingService.deleteInputsAndPartials(noProduksi, payload);
+    // ✅ Forward audit context
+    const ctx = { actorId, actorUsername, requestId };
+
+    const result = await hotStampingService.deleteInputsAndPartials(
+      noProduksi,
+      payload,
+      ctx
+    );
 
     const { success, hasWarnings, data } = result;
 
@@ -398,19 +466,27 @@ async function deleteInputsAndPartials(req, res) {
       success,
       message,
       data,
+      meta: {
+        noProduksi,
+        hasInput,
+        audit: { actorId, actorUsername, requestId },
+      },
     });
   } catch (e) {
-    console.error('[hotStamping.deleteInputsAndPartials]', e);
-    return res.status(500).json({
+    console.error('[inject.deleteInputsAndPartials]', e);
+    const status = e.statusCode || e.status || 500;
+
+    return res.status(status).json({
       success: false,
-      message: 'Internal Server Error',
+      message: status === 500 ? 'Internal Server Error' : e.message,
       error: {
         message: e.message,
-        details: process.env.NODE_ENV === 'development' ? e.stack : undefined
-      }
+        details: process.env.NODE_ENV === 'development' ? e.stack : undefined,
+      },
     });
   }
 }
 
 
-module.exports = { getProduksiByDate, getAllProduksi, createProduksi, updateProduksi, deleteProduksi, getInputsByNoProduksi, validateFwipLabel, upsertInputs, deleteInputsAndPartials };
+
+module.exports = { getProduksiByDate, getAllProduksi, createProduksi, updateProduksi, deleteProduksi, getInputsByNoProduksi, validateFwipLabel, upsertInputsAndPartials, deleteInputsAndPartials };

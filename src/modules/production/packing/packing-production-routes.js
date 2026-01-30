@@ -44,7 +44,7 @@ router.get(
 router.post(
   '/packing/:noPacking/inputs',
   verifyToken,
-  packingController.upsertInputs
+  packingController.upsertInputsAndPartials
 );
 
 

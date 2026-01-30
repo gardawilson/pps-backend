@@ -3,8 +3,9 @@
    Action: CONSUME_PARTIAL / UNCONSUME_PARTIAL / UPDATE
 
    NOTE:
-   - AuditTrail hanya 1 row per statement per (NoProduksi, NoMixerPartial)
-   - PK: NoProduksi + NoMixerPartial + NoMixer (TANPA NoSak)
+   - AuditTrail hanya 1 row per statement per (NoProduksi, NoMixerPartial, NoMixer)
+   - PK JSON: NoProduksi, NoMixerPartial, NoMixer (TANPA NoSak)
+   - OldData/NewData: array of {NoProduksi, NoMixerPartial, NoMixer, NoSak, Berat}
 */
 CREATE OR ALTER TRIGGER [dbo].[tr_Audit_BrokerProduksiInputMixerPartial]
 ON [dbo].[BrokerProduksiInputMixerPartial]
@@ -32,13 +33,24 @@ BEGIN
     WHERE NOT EXISTS (
       SELECT 1
       FROM deleted d
-      WHERE d.NoProduksi = i.NoProduksi
+      WHERE d.NoProduksi     = i.NoProduksi
         AND d.NoMixerPartial = i.NoMixerPartial
     )
   ),
+  insEnriched AS (
+    SELECT
+      x.NoProduksi,
+      x.NoMixerPartial,
+      mp.NoMixer,
+      mp.NoSak,
+      mp.Berat
+    FROM insOnly x
+    LEFT JOIN dbo.MixerPartial mp
+      ON mp.NoMixerPartial = x.NoMixerPartial
+  ),
   grp AS (
-    SELECT DISTINCT NoProduksi, NoMixerPartial
-    FROM insOnly
+    SELECT DISTINCT NoProduksi, NoMixerPartial, NoMixer
+    FROM insEnriched
   )
   INSERT dbo.AuditTrail(Action, TableName, Actor, RequestId, PK, OldData, NewData)
   SELECT
@@ -46,31 +58,26 @@ BEGIN
     'BrokerProduksiInputMixerPartial',
     @actor,
     @rid,
-    CONCAT(
-      '{"NoProduksi":"', g.NoProduksi,
-      '","NoMixerPartial":"', g.NoMixerPartial,
-      '","NoMixer":', CASE WHEN mp.NoMixer IS NULL THEN 'null' ELSE CONCAT('"', mp.NoMixer, '"') END,
-      '}'
-    ),
+    (SELECT g.NoProduksi, g.NoMixerPartial, g.NoMixer FOR JSON PATH, WITHOUT_ARRAY_WRAPPER),
     NULL,
     COALESCE((
       SELECT
-        i2.NoProduksi,
-        i2.NoMixerPartial,
-        mp2.NoMixer,
-        mp2.NoSak,
-        CAST(mp2.Berat AS decimal(18,3)) AS Berat
-      FROM inserted i2
-      LEFT JOIN dbo.MixerPartial mp2
-        ON mp2.NoMixerPartial = i2.NoMixerPartial
-      WHERE i2.NoProduksi = g.NoProduksi
-        AND i2.NoMixerPartial = g.NoMixerPartial
-      ORDER BY mp2.NoMixer, mp2.NoSak
+        e.NoProduksi,
+        e.NoMixerPartial,
+        e.NoMixer,
+        e.NoSak,
+        CAST(e.Berat AS decimal(18,3)) AS Berat
+      FROM insEnriched e
+      WHERE e.NoProduksi     = g.NoProduksi
+        AND e.NoMixerPartial = g.NoMixerPartial
+        AND (
+              (e.NoMixer = g.NoMixer)
+              OR (e.NoMixer IS NULL AND g.NoMixer IS NULL)
+            )
+      ORDER BY e.NoMixer, e.NoSak
       FOR JSON PATH
     ), '[]')
-  FROM grp g
-  LEFT JOIN dbo.MixerPartial mp
-    ON mp.NoMixerPartial = g.NoMixerPartial;
+  FROM grp g;
 
   /* ======================================================
      DELETE-only => UNCONSUME_PARTIAL (GROUPED)
@@ -81,13 +88,24 @@ BEGIN
     WHERE NOT EXISTS (
       SELECT 1
       FROM inserted i
-      WHERE i.NoProduksi = d.NoProduksi
+      WHERE i.NoProduksi     = d.NoProduksi
         AND i.NoMixerPartial = d.NoMixerPartial
     )
   ),
+  delEnriched AS (
+    SELECT
+      x.NoProduksi,
+      x.NoMixerPartial,
+      mp.NoMixer,
+      mp.NoSak,
+      mp.Berat
+    FROM delOnly x
+    LEFT JOIN dbo.MixerPartial mp
+      ON mp.NoMixerPartial = x.NoMixerPartial
+  ),
   grp AS (
-    SELECT DISTINCT NoProduksi, NoMixerPartial
-    FROM delOnly
+    SELECT DISTINCT NoProduksi, NoMixerPartial, NoMixer
+    FROM delEnriched
   )
   INSERT dbo.AuditTrail(Action, TableName, Actor, RequestId, PK, OldData, NewData)
   SELECT
@@ -95,43 +113,47 @@ BEGIN
     'BrokerProduksiInputMixerPartial',
     @actor,
     @rid,
-    CONCAT(
-      '{"NoProduksi":"', g.NoProduksi,
-      '","NoMixerPartial":"', g.NoMixerPartial,
-      '","NoMixer":', CASE WHEN mp.NoMixer IS NULL THEN 'null' ELSE CONCAT('"', mp.NoMixer, '"') END,
-      '}'
-    ),
+    (SELECT g.NoProduksi, g.NoMixerPartial, g.NoMixer FOR JSON PATH, WITHOUT_ARRAY_WRAPPER),
     COALESCE((
       SELECT
-        d2.NoProduksi,
-        d2.NoMixerPartial,
-        mp2.NoMixer,
-        mp2.NoSak,
-        CAST(mp2.Berat AS decimal(18,3)) AS Berat
-      FROM deleted d2
-      LEFT JOIN dbo.MixerPartial mp2
-        ON mp2.NoMixerPartial = d2.NoMixerPartial
-      WHERE d2.NoProduksi = g.NoProduksi
-        AND d2.NoMixerPartial = g.NoMixerPartial
-      ORDER BY mp2.NoMixer, mp2.NoSak
+        e.NoProduksi,
+        e.NoMixerPartial,
+        e.NoMixer,
+        e.NoSak,
+        CAST(e.Berat AS decimal(18,3)) AS Berat
+      FROM delEnriched e
+      WHERE e.NoProduksi     = g.NoProduksi
+        AND e.NoMixerPartial = g.NoMixerPartial
+        AND (
+              (e.NoMixer = g.NoMixer)
+              OR (e.NoMixer IS NULL AND g.NoMixer IS NULL)
+            )
+      ORDER BY e.NoMixer, e.NoSak
       FOR JSON PATH
     ), '[]'),
     NULL
-  FROM grp g
-  LEFT JOIN dbo.MixerPartial mp
-    ON mp.NoMixerPartial = g.NoMixerPartial;
+  FROM grp g;
 
   /* ======================================================
      UPDATE => UPDATE (GROUPED)
      ====================================================== */
   IF EXISTS (SELECT 1 FROM inserted) AND EXISTS (SELECT 1 FROM deleted)
   BEGIN
-    ;WITH grp AS (
+    ;WITH grp0 AS (
       SELECT DISTINCT i.NoProduksi, i.NoMixerPartial
       FROM inserted i
       JOIN deleted d
-        ON d.NoProduksi = i.NoProduksi
+        ON d.NoProduksi     = i.NoProduksi
        AND d.NoMixerPartial = i.NoMixerPartial
+    ),
+    grp AS (
+      SELECT DISTINCT
+        g0.NoProduksi,
+        g0.NoMixerPartial,
+        mp.NoMixer
+      FROM grp0 g0
+      LEFT JOIN dbo.MixerPartial mp
+        ON mp.NoMixerPartial = g0.NoMixerPartial
     )
     INSERT dbo.AuditTrail(Action, TableName, Actor, RequestId, PK, OldData, NewData)
     SELECT
@@ -139,12 +161,8 @@ BEGIN
       'BrokerProduksiInputMixerPartial',
       @actor,
       @rid,
-      CONCAT(
-        '{"NoProduksi":"', g.NoProduksi,
-        '","NoMixerPartial":"', g.NoMixerPartial,
-        '","NoMixer":', CASE WHEN mp.NoMixer IS NULL THEN 'null' ELSE CONCAT('"', mp.NoMixer, '"') END,
-        '}'
-      ),
+      (SELECT g.NoProduksi, g.NoMixerPartial, g.NoMixer FOR JSON PATH, WITHOUT_ARRAY_WRAPPER),
+
       COALESCE((
         SELECT
           d2.NoProduksi,
@@ -155,11 +173,16 @@ BEGIN
         FROM deleted d2
         LEFT JOIN dbo.MixerPartial mp2
           ON mp2.NoMixerPartial = d2.NoMixerPartial
-        WHERE d2.NoProduksi = g.NoProduksi
+        WHERE d2.NoProduksi     = g.NoProduksi
           AND d2.NoMixerPartial = g.NoMixerPartial
+          AND (
+                (mp2.NoMixer = g.NoMixer)
+                OR (mp2.NoMixer IS NULL AND g.NoMixer IS NULL)
+              )
         ORDER BY mp2.NoMixer, mp2.NoSak
         FOR JSON PATH
       ), '[]'),
+
       COALESCE((
         SELECT
           i2.NoProduksi,
@@ -170,14 +193,16 @@ BEGIN
         FROM inserted i2
         LEFT JOIN dbo.MixerPartial mp2
           ON mp2.NoMixerPartial = i2.NoMixerPartial
-        WHERE i2.NoProduksi = g.NoProduksi
+        WHERE i2.NoProduksi     = g.NoProduksi
           AND i2.NoMixerPartial = g.NoMixerPartial
+          AND (
+                (mp2.NoMixer = g.NoMixer)
+                OR (mp2.NoMixer IS NULL AND g.NoMixer IS NULL)
+              )
         ORDER BY mp2.NoMixer, mp2.NoSak
         FOR JSON PATH
       ), '[]')
-    FROM grp g
-    LEFT JOIN dbo.MixerPartial mp
-      ON mp.NoMixerPartial = g.NoMixerPartial;
+    FROM grp g;
   END
 END;
 GO

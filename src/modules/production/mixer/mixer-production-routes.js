@@ -20,7 +20,6 @@ router.put('/mixer/:noProduksi', verifyToken, mixerProduksiController.updateProd
 
 router.delete('/mixer/:noProduksi', verifyToken, mixerProduksiController.deleteProduksi);
 
-
 router.get('/mixer/:noProduksi/inputs', verifyToken, mixerProduksiController.getInputsByNoProduksi);
 
 router.get('/mixer/validate-label/:labelCode', verifyToken, mixerProduksiController.validateLabel);

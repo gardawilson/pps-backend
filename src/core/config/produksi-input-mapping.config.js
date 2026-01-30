@@ -39,22 +39,26 @@ const PARTIAL_CONFIGS = {
     weightSourceColumn: 'Berat',
     mappingTables: {
       brokerProduksi: 'BrokerProduksiInputBrokerPartial',
+      gilinganProduksi: 'GilinganProduksiInputBrokerPartial',
+      mixerProduksi: 'MixerProduksiInputBrokerPartial',
+      injectProduksi: 'InjectProduksiInputBrokerPartial',
+
     }
   },
   
-  washing: {
-    tableName: 'WashingPartial',
-    sourceTable: 'Washing_d',
-    partialColumn: 'NoWashingPartial',
-    prefix: 'W.',
-    keys: ['NoWashing', 'NoSak'],
-    weightColumn: 'Berat',
-    weightSourceColumn: 'Berat',
-    mappingTables: {
-      brokerProduksi: 'BrokerProduksiInputWashingPartial',
-      crusherProduksi: 'CrusherProduksiInputWashingPartial',
-    }
-  },
+  // washing: {
+  //   tableName: 'WashingPartial',
+  //   sourceTable: 'Washing_d',
+  //   partialColumn: 'NoWashingPartial',
+  //   prefix: 'W.',
+  //   keys: ['NoWashing', 'NoSak'],
+  //   weightColumn: 'Berat',
+  //   weightSourceColumn: 'Berat',
+  //   mappingTables: {
+  //     brokerProduksi: 'BrokerProduksiInputWashingPartial',
+  //     crusherProduksi: 'CrusherProduksiInputWashingPartial',
+  //   }
+  // },
   
   gilingan: {
     tableName: 'GilinganPartial',
@@ -68,6 +72,8 @@ const PARTIAL_CONFIGS = {
       brokerProduksi: 'BrokerProduksiInputGilinganPartial',
       washingProduksi: 'WashingProduksiInputGilinganPartial',
       crusherProduksi: 'CrusherProduksiInputGilinganPartial',
+      mixerProduksi: 'MixerProduksiInputGilinganPartial',
+      injectProduksi: 'InjectProduksiInputGilinganPartial',
     }
   },
   
@@ -82,6 +88,9 @@ const PARTIAL_CONFIGS = {
     mappingTables: {
       brokerProduksi: 'BrokerProduksiInputMixerPartial',
       crusherProduksi: 'CrusherProduksiInputMixerPartial',
+      mixerProduksi: 'MixerProduksiInputMixerPartial',
+      injectProduksi: 'InjectProduksiInputMixerPartial',
+
     }
   },
   
@@ -96,20 +105,38 @@ const PARTIAL_CONFIGS = {
     mappingTables: {
       brokerProduksi: 'BrokerProduksiInputRejectPartial',
       crusherProduksi: 'CrusherProduksiInputRejectPartial',
+      gilinganProduksi: 'GilinganProduksiInputRejectV2Partial',
     }
   },
   
-  crusher: {
-    tableName: 'CrusherPartial',
-    sourceTable: 'Crusher',
-    partialColumn: 'NoCrusherPartial',
-    prefix: 'CR.',
-    keys: ['NoCrusher'],
-    weightColumn: 'Berat',
-    weightSourceColumn: 'Berat',
+  // crusher: {
+  //   tableName: 'CrusherPartial',
+  //   sourceTable: 'Crusher',
+  //   partialColumn: 'NoCrusherPartial',
+  //   prefix: 'CR.',
+  //   keys: ['NoCrusher'],
+  //   weightColumn: 'Berat',
+  //   weightSourceColumn: 'Berat',
+  //   mappingTables: {
+  //     brokerProduksi: 'BrokerProduksiInputCrusherPartial',
+  //     gilinganProduksi: 'GilinganProduksiInputCrusherPartial',
+  //   }
+  // },
+
+  furnitureWip: {
+    tableName: 'FurnitureWIPPartial',
+    sourceTable: 'FurnitureWIP',
+    partialColumn: 'NoFurnitureWIPPartial',
+    prefix: 'BC.',
+    keys: ['NoFurnitureWIP'],
+    weightColumn: 'Pcs',
+    weightSourceColumn: 'Pcs',
     mappingTables: {
-      brokerProduksi: 'BrokerProduksiInputCrusherPartial',
-      gilinganProduksi: 'GilinganProduksiInputCrusherPartial',
+      injectProduksi: 'InjectProduksiInputFurnitureWIPPartial',
+      hotStamping: 'HotStampingInputLabelFWIPPartial',
+      keyFitting: 'PasangKunciInputLabelFWIPPartial',
+      spanner: 'SpannerInputLabelFWIPPartial',
+      packingProduksi: 'PackingProduksiInputLabelFWIPPartial',
     }
   },
 };
@@ -191,43 +218,25 @@ const INPUT_CONFIGS = {
       mappingTable: 'CrusherProduksiInputBB',
       dateUsageColumn: 'DateUsage',
     },
-    washing: {
-      sourceTable: 'Washing_d',
-      keys: ['NoWashing', 'NoSak'],
-      mappingTable: 'CrusherProduksiInputWashing',
-      dateUsageColumn: 'DateUsage',
-    },
-    crusher: {
-      sourceTable: 'Crusher',
-      keys: ['NoCrusher'],
-      mappingTable: 'CrusherProduksiInputCrusher',
-      dateUsageColumn: 'DateUsage',
-    },
-    gilingan: {
-      sourceTable: 'Gilingan',
-      keys: ['NoGilingan'],
-      mappingTable: 'CrusherProduksiInputGilingan',
-      dateUsageColumn: 'DateUsage',
-    },
-    mixer: {
-      sourceTable: 'Mixer_d',
-      keys: ['NoMixer', 'NoSak'],
-      mappingTable: 'CrusherProduksiInputMixer',
-      dateUsageColumn: 'DateUsage',
-    },
-    reject: {
-      sourceTable: 'RejectV2',
-      keys: ['NoReject'],
-      mappingTable: 'CrusherProduksiInputReject',
+    bonggolan: {
+      sourceTable: 'Bonggolan',
+      keys: ['NoBonggolan'],
+      mappingTable: 'CrusherProduksiInputBonggolan',
       dateUsageColumn: 'DateUsage',
     },
   },
   
   gilinganProduksi: {
-    bb: {
-      sourceTable: 'BahanBaku_d',
-      keys: ['NoBahanBaku', 'NoPallet', 'NoSak'],
-      mappingTable: 'GilinganProduksiInputBB',
+    broker: {
+      sourceTable: 'Broker_d',
+      keys: ['NoBroker', 'NoSak'],
+      mappingTable: 'GilinganProduksiInputBroker',
+      dateUsageColumn: 'DateUsage',
+    },
+    bonggolan: {
+      sourceTable: 'Bonggolan',
+      keys: ['NoBonggolan'],
+      mappingTable: 'GilinganProduksiInputBonggolan',
       dateUsageColumn: 'DateUsage',
     },
     crusher: {
@@ -236,10 +245,10 @@ const INPUT_CONFIGS = {
       mappingTable: 'GilinganProduksiInputCrusher',
       dateUsageColumn: 'DateUsage',
     },
-    gilingan: {
-      sourceTable: 'Gilingan',
-      keys: ['NoGilingan'],
-      mappingTable: 'GilinganProduksiInputGilingan',
+    reject: {
+      sourceTable: 'RejectV2',
+      keys: ['NoReject'],
+      mappingTable: 'GilinganProduksiInputRejectV2',
       dateUsageColumn: 'DateUsage',
     },
   },
@@ -249,6 +258,12 @@ const INPUT_CONFIGS = {
       sourceTable: 'BahanBaku_d',
       keys: ['NoBahanBaku', 'NoPallet', 'NoSak'],
       mappingTable: 'MixerProduksiInputBB',
+      dateUsageColumn: 'DateUsage',
+    },
+    broker: {
+      sourceTable: 'Broker_d',
+      keys: ['NoBroker', 'NoSak'],
+      mappingTable: 'MixerProduksiInputBroker',
       dateUsageColumn: 'DateUsage',
     },
     gilingan: {
@@ -261,6 +276,84 @@ const INPUT_CONFIGS = {
       sourceTable: 'Mixer_d',
       keys: ['NoMixer', 'NoSak'],
       mappingTable: 'MixerProduksiInputMixer',
+      dateUsageColumn: 'DateUsage',
+    },
+  },
+
+  injectProduksi: {
+    broker: {
+      sourceTable: 'Broker_d',
+      keys: ['NoBroker', 'NoSak'],
+      mappingTable: 'InjectProduksiInputBroker',
+      dateUsageColumn: 'DateUsage',
+    },
+    gilingan: {
+      sourceTable: 'Gilingan',
+      keys: ['NoGilingan'],
+      mappingTable: 'InjectProduksiInputGilingan',
+      dateUsageColumn: 'DateUsage',
+    },
+    mixer: {
+      sourceTable: 'Mixer_d',
+      keys: ['NoMixer', 'NoSak'],
+      mappingTable: 'InjectProduksiInputMixer',
+      dateUsageColumn: 'DateUsage',
+    },
+    furnitureWip: {
+      sourceTable: 'FurnitureWIP',
+      keys: ['NoFurnitureWIP'],
+      mappingTable: 'InjectProduksiInputFurnitureWIP',
+      dateUsageColumn: 'DateUsage',
+    },
+  },
+
+  hotStamping: {
+    furnitureWip: {
+      sourceTable: 'FurnitureWIP',
+      keys: ['NoFurnitureWIP'],
+      mappingTable: 'HotStampingInputLabelFWIP',
+      dateUsageColumn: 'DateUsage',
+    },
+  },
+
+  keyFitting: {
+    furnitureWip: {
+      sourceTable: 'FurnitureWIP',
+      keys: ['NoFurnitureWIP'],
+      mappingTable: 'PasangKunciInputLabelFWIP',
+      dateUsageColumn: 'DateUsage',
+    },
+  },
+
+   spanner: {
+    furnitureWip: {
+      sourceTable: 'FurnitureWIP',
+      keys: ['NoFurnitureWIP'],
+      mappingTable: 'SpannerInputLabelFWIP',
+      dateUsageColumn: 'DateUsage',
+    },
+  },
+
+  packingProduksi: {
+    furnitureWip: {
+      sourceTable: 'FurnitureWIP',
+      keys: ['NoFurnitureWIP'],
+      mappingTable: 'PackingProduksiInputLabelFWIP',
+      dateUsageColumn: 'DateUsage',
+    },
+  },
+
+   sortirReject: {
+    furnitureWip: {
+      sourceTable: 'FurnitureWIP',
+      keys: ['NoFurnitureWIP'],
+      mappingTable: 'BJSortirRejectInputLabelFurnitureWIP',
+      dateUsageColumn: 'DateUsage',
+    },
+    barangJadi: {
+      sourceTable: 'BarangJadi',
+      keys: ['NoBJ'],
+      mappingTable: 'BJSortirRejectInputLabelBarangJadi',
       dateUsageColumn: 'DateUsage',
     },
   },
@@ -290,15 +383,15 @@ const PRODUKSI_CONFIGS = {
     headerTable: 'CrusherProduksi_h',
     entityKey: 'crusherProduksi',
     lockResource: 'SEQ_CRUSHER_PARTIALS',
-    dateColumn: 'TglProduksi',
-    codeColumn: 'NoProduksi',
+    dateColumn: 'Tanggal',
+    codeColumn: 'NoCrusherProduksi',
   },
   
   gilinganProduksi: {
     headerTable: 'GilinganProduksi_h',
     entityKey: 'gilinganProduksi',
     lockResource: 'SEQ_GILINGAN_PARTIALS',
-    dateColumn: 'TglProduksi',
+    dateColumn: 'Tanggal',
     codeColumn: 'NoProduksi',
   },
   
@@ -309,6 +402,113 @@ const PRODUKSI_CONFIGS = {
     dateColumn: 'TglProduksi',
     codeColumn: 'NoProduksi',
   },
+
+  injectProduksi: {
+    headerTable: 'InjectProduksi_h',
+    entityKey: 'injectProduksi',
+    lockResource: 'SEQ_INJECT_PARTIALS',
+    dateColumn: 'TglProduksi',
+    codeColumn: 'NoProduksi',
+  },
+
+  hotStamping: {
+    headerTable: 'HotStamping_h',
+    entityKey: 'hotStamping',
+    lockResource: 'SEQ_HOTSTAMPING_PARTIALS',
+    dateColumn: 'Tanggal',
+    codeColumn: 'NoProduksi',
+  },
+
+  keyFitting: {
+    headerTable: 'PasangKunci_h',
+    entityKey: 'keyFitting',
+    lockResource: 'SEQ_KEYFITTING_PARTIALS',
+    dateColumn: 'Tanggal',
+    codeColumn: 'NoProduksi',
+  },
+
+  spanner: {
+    headerTable: 'Spanner_h',
+    entityKey: 'spanner',
+    lockResource: 'SEQ_SPANNER_PARTIALS',
+    dateColumn: 'Tanggal',
+    codeColumn: 'NoProduksi',
+  },
+
+  packingProduksi: {
+    headerTable: 'PackingProduksi_h',
+    entityKey: 'packingProduksi',
+    lockResource: 'SEQ_PACKING_PARTIALS',
+    dateColumn: 'Tanggal',
+    codeColumn: 'NoPacking',
+  },
+
+  sortirReject: {
+    headerTable: 'BJSortirReject_h',
+    entityKey: 'sortirReject',
+    lockResource: 'SEQ_SORTIR_PARTIALS',
+    dateColumn: 'TglBJSortir',
+    codeColumn: 'NoBJSortir',
+  },
+};
+
+
+const UPSERT_INPUT_CONFIGS = {
+  injectProduksi: {
+    cabinetMaterial: {
+      mappingTable: 'InjectProduksiInputCabinetMaterial',
+      sourceTable: 'MstCabinetMaterial',
+      keyColumn: 'IdCabinetMaterial',
+      quantityColumn: 'Pcs',
+      validateColumn: 'Enable',
+      validateValue: 1,
+      aggregateByKey: true, // SUM quantities by key sebelum insert/update
+    }
+  },
+  hotStamping: {
+    cabinetMaterial: {
+      mappingTable: 'HotStampingInputMaterial',
+      sourceTable: 'MstCabinetMaterial',
+      keyColumn: 'IdCabinetMaterial',
+      quantityColumn: 'Jumlah',
+      validateColumn: 'Enable',
+      validateValue: 1,
+      aggregateByKey: true, // SUM quantities by key sebelum insert/update
+    }
+  },
+  keyFitting: {
+    cabinetMaterial: {
+      mappingTable: 'PasangKunciInputMaterial',
+      sourceTable: 'MstCabinetMaterial',
+      keyColumn: 'IdCabinetMaterial',
+      quantityColumn: 'Jumlah',
+      validateColumn: 'Enable',
+      validateValue: 1,
+      aggregateByKey: true, // SUM quantities by key sebelum insert/update
+    }
+  },
+  spanner: {
+    cabinetMaterial: {
+      mappingTable: 'SpannerInputMaterial',
+      sourceTable: 'MstCabinetMaterial',
+      keyColumn: 'IdCabinetMaterial',
+      quantityColumn: 'Jumlah',
+      validateColumn: 'Enable',
+      validateValue: 1,
+      aggregateByKey: true, // SUM quantities by key sebelum insert/update
+    }
+  },
+  packingProduksi: {
+    cabinetMaterial: {
+      mappingTable: 'PackingProduksiInputMaterial',
+      sourceTable: 'MstCabinetMaterial',
+      keyColumn: 'IdCabinetMaterial',
+      quantityColumn: 'Jumlah',
+      validateColumn: 'Enable',
+      validateValue: 1,
+      aggregateByKey: true, // SUM quantities by key sebelum insert/update
+    }
+  }
 };
 
 /**
@@ -322,6 +522,9 @@ const INPUT_LABELS = {
   gilingan: 'Gilingan',
   mixer: 'Mixer',
   reject: 'Reject',
+  furnitureWip: 'Furniture WIP',
+  barangJadi: 'Barang Jadi',
+  cabinetMaterial: 'Cabinet Material',
 };
 
 /**
@@ -335,4 +538,5 @@ module.exports = {
   PRODUKSI_CONFIGS,
   INPUT_LABELS,
   WEIGHT_TOLERANCE,
+  UPSERT_INPUT_CONFIGS
 };

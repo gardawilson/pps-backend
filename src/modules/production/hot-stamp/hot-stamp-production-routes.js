@@ -59,7 +59,7 @@ router.get(
 );
 
 
-router.post('/hot-stamp/:noProduksi/inputs', verifyToken, hotStampingController.upsertInputs);
+router.post('/hot-stamp/:noProduksi/inputs', verifyToken, hotStampingController.upsertInputsAndPartials);
 
 // DELETE inputs & partials
 router.delete(

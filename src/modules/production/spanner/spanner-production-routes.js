@@ -46,7 +46,7 @@ router.get(
 router.post(
   '/spanner/:noProduksi/inputs',
   verifyToken,
-  spannerController.upsertInputs
+  spannerController.upsertInputsAndPartials
 );
 
 router.delete(

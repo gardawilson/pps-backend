@@ -7,7 +7,7 @@ const MODULE_CONFIG = {
     detailTable: 'Washing_d',
     outputTables: ['WashingProduksiOutput', 'BongkarSusunOutputWashing'],
     
-    inputTables: ['WashingProduksiInputWashing', 'BrokerProduksiInputWashing'],
+    inputTables: ['WashingProduksiInputWashing', 'BrokerProduksiInputWashing', 'BongkarSusunInputWashing'],
 
     // ✅ NEW: Output display config
     outputDisplayConfig: {
@@ -48,7 +48,7 @@ const MODULE_CONFIG = {
     detailTable: 'Broker_d',
     outputTables: ['BrokerProduksiOutput', 'BongkarSusunOutputBroker'],
 
-    inputTables: ['BrokerProduksiInputBroker', 'BrokerProduksiInputBrokerPartial', 'GilinganProduksiInputBroker', 'GilinganProduksiInputBrokerPartial', 'MixerProduksiInputBroker', 'MixerProduksiInputBrokerPartial', 'InjectProduksiInputBroker', 'InjectProduksiInputFurnitureWIPPartial'],
+    inputTables: ['BrokerProduksiInputBroker', 'BrokerProduksiInputBrokerPartial', 'GilinganProduksiInputBroker', 'GilinganProduksiInputBrokerPartial', 'MixerProduksiInputBroker', 'MixerProduksiInputBrokerPartial', 'InjectProduksiInputBroker', 'InjectProduksiInputFurnitureWIPPartial', 'BongkarSusunInputBroker'],
     
     // ✅ NEW
     outputDisplayConfig: {
@@ -90,7 +90,7 @@ const MODULE_CONFIG = {
     detailTable: null,
     outputTables: ['CrusherProduksiOutput', 'BongkarSusunOutputCrusher'],
 
-    inputTables: ['BrokerProduksiInputCrusher', 'GilinganProduksiInputCrusher'],
+    inputTables: ['BrokerProduksiInputCrusher', 'GilinganProduksiInputCrusher', 'BongkarSusunInputCrusher'],
     
     // ✅ NEW
     outputDisplayConfig: {
@@ -131,7 +131,7 @@ const MODULE_CONFIG = {
     detailTable: null,
     outputTables: ['GilinganProduksiOutput', 'BongkarSusunOutputGilingan'],
     
-    inputTables: ['WashingProduksiInputGilingan', 'WashingProduksiInputGilinganPartial', 'BrokerProduksiInputGilingan', 'BrokerProduksiInputGilinganPartial', 'MixerProduksiInputGilingan', 'MixerProduksiInputGilinganPartial', 'InjectProduksiInputGilingan', 'InjectProduksiInputGilinganPartial'],
+    inputTables: ['WashingProduksiInputGilingan', 'WashingProduksiInputGilinganPartial', 'BrokerProduksiInputGilingan', 'BrokerProduksiInputGilinganPartial', 'MixerProduksiInputGilingan', 'MixerProduksiInputGilinganPartial', 'InjectProduksiInputGilingan', 'InjectProduksiInputGilinganPartial', 'BongkarSusunInputGilingan'],
 
     // ✅ NEW
     outputDisplayConfig: {
@@ -172,7 +172,7 @@ const MODULE_CONFIG = {
     detailTable: null,
     outputTables: ['BrokerProduksiOutputBonggolan','InjectProduksiOutputBonggolan', 'BongkarSusunOutputBonggolan'],
 
-    inputTables: ['CrusherProduksiInputBonggolan', 'GilinganProduksiInputBonggolan'],
+    inputTables: ['CrusherProduksiInputBonggolan', 'GilinganProduksiInputBonggolan', 'BongkarSusunInputBonggolan'],
 
     
     // ✅ NEW
@@ -218,7 +218,7 @@ const MODULE_CONFIG = {
     detailTable: 'Mixer_d',
     outputTables: ['MixerProduksiOutput', 'InjectProduksiOutputMixer', 'BongkarSusunOutputMixer'],
 
-    inputTables: ['BrokerProduksiInputMixer', 'BrokerProduksiInputMixerPartial', 'MixerProduksiInputMixer', 'MixerProduksiInputMixerPartial', 'InjectProduksiInputMixer', 'InjectProduksiInputMixerPartial'],
+    inputTables: ['BrokerProduksiInputMixer', 'BrokerProduksiInputMixerPartial', 'MixerProduksiInputMixer', 'MixerProduksiInputMixerPartial', 'InjectProduksiInputMixer', 'InjectProduksiInputMixerPartial', 'BongkarSusunInputMixer'],
     
     // ✅ NEW
     outputDisplayConfig: {
@@ -263,7 +263,7 @@ const MODULE_CONFIG = {
     detailTable: null,
     outputTables: ['InjectProduksiOutputFurnitureWIP', 'HotStampingOutputLabelFWIP', 'PasangKunciOutputLabelFWIP', 'SpannerOutputLabelFWIP', 'BJReturFurnitureWIP_d', 'BongkarSusunOutputFurnitureWIP'],
     
-    inputTables: ['InjectProduksiInputFurnitureWIP', 'InjectProduksiInputFurnitureWIPPartial', 'HotStampingInputLabelFWIP', 'HotStampingInputLabelFWIPPartial', 'PasangKunciInputLabelFWIP', 'PasangKunciInputLabelFWIPPartial', 'SpannerInputLabelFWIP', 'SpannerInputLabelFWIPPartial', 'PackingProduksiInputLabelFWIP', 'PackingProduksiInputLabelFWIPPartial', 'BJSortirRejectInputLabelFurnitureWIP'],
+    inputTables: ['InjectProduksiInputFurnitureWIP', 'InjectProduksiInputFurnitureWIPPartial', 'HotStampingInputLabelFWIP', 'HotStampingInputLabelFWIPPartial', 'PasangKunciInputLabelFWIP', 'PasangKunciInputLabelFWIPPartial', 'SpannerInputLabelFWIP', 'SpannerInputLabelFWIPPartial', 'PackingProduksiInputLabelFWIP', 'PackingProduksiInputLabelFWIPPartial', 'BJSortirRejectInputLabelFurnitureWIP', 'BongkarSusunInputFurnitureWIP'],
 
     // ✅ NEW: Multiple output tables with different display fields
     outputDisplayConfig: {

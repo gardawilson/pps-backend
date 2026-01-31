@@ -1,5 +1,7 @@
 // controllers/bj-jual-controller.js
 const bjJualService = require('./bj-jual-service'); // sesuaikan path
+const { getActorId, getActorUsername, makeRequestId } = require('../../core/utils/http-context');
+
 
 // ✅ GET ALL (paging + search + optional date range)
 async function getAllBJJual(req, res) {
@@ -180,59 +182,92 @@ async function getInputsByNoBJJual(req, res) {
 }
 
 
-async function upsertInputs(req, res) {
-  const noBJJual = String(req.params.noBJJual || '').trim();
-
-  if (!noBJJual) {
+async function upsertInputsAndPartials(req, res) {
+  const noProduksi = String(req.params.noProduksi || '').trim();
+  
+  if (!noProduksi) {
     return res.status(400).json({
       success: false,
-      message: 'noBJJual is required',
-      error: {
-        field: 'noBJJual',
-        message: 'Parameter noBJJual tidak boleh kosong',
-      },
+      message: 'noProduksi is required',
+      error: { field: 'noProduksi', message: 'Parameter noProduksi tidak boleh kosong' },
     });
   }
 
-  const payload = req.body || {};
+  // ✅ Pastikan body object
+  const body = req.body && typeof req.body === 'object' ? req.body : {};
 
+  // ✅ Strip client audit fields (jangan percaya dari client)
+  const {
+    actorId: _clientActorId,
+    actorUsername: _clientActorUsername,
+    actor: _clientActor,
+    requestId: _clientRequestId,
+    ...payload
+  } = body;
+
+  // ✅ Get trusted audit context from token/session
+  const actorId = getActorId(req);
+  if (!actorId) {
+    return res.status(401).json({
+      success: false,
+      message: 'Unauthorized (idUsername missing)',
+    });
+  }
+
+  const actorUsername = getActorUsername(req) || req.username || req.user?.username || 'system';
+  const requestId = String(makeRequestId(req) || '').trim();
+
+  // Optional: echo header for tracing
+  if (requestId) res.setHeader('x-request-id', requestId);
+
+  // ✅ Validate: at least one input exists
   const hasInput = [
     'barangJadi',
-    'barangJadiPartial',
-    'barangJadiPartialNew',
     'furnitureWip',
-    'furnitureWipPartial',
-    'furnitureWipPartialNew',
     'cabinetMaterial',
+    'barangJadiPartial',
+    'furnitureWipPartial',
   ].some((key) => payload[key] && Array.isArray(payload[key]) && payload[key].length > 0);
+
 
   if (!hasInput) {
     return res.status(400).json({
       success: false,
       message: 'Tidak ada data input yang diberikan',
       error: {
-        message:
-          'Request body harus berisi minimal satu array input yang tidak kosong',
+        message: 'Request body harus berisi minimal satu array input yang tidak kosong',
       },
     });
   }
 
   try {
-    const result = await bjJualService.upsertInputsAndPartials(noBJJual, payload);
+    // ✅ Forward audit context ke service
+    const ctx = { actorId, actorUsername, requestId };
 
-    const { success, hasWarnings, data } = result;
+    const result = await bjJualService.upsertInputsAndPartials(
+      noProduksi,
+      payload,
+      ctx
+    );
+
+    // Support beberapa bentuk return (backward compatible)
+    const success = result?.success !== undefined ? !!result.success : true;
+    const hasWarnings = !!result?.hasWarnings;
+    const data = result?.data ?? result;
 
     let statusCode = 200;
     let message = 'Inputs & partials processed successfully';
 
     if (!success) {
-      if ((data?.summary?.totalInvalid || 0) > 0) {
+      const totalInvalid = Number(data?.summary?.totalInvalid ?? 0);
+      const totalInserted = Number(data?.summary?.totalInserted ?? 0);
+      const totalUpdated = Number(data?.summary?.totalUpdated ?? 0); // ✅ Support UPSERT
+      const totalPartialsCreated = Number(data?.summary?.totalPartialsCreated ?? 0);
+
+      if (totalInvalid > 0) {
         statusCode = 422;
         message = 'Beberapa data tidak valid';
-      } else if (
-        ((data?.summary?.totalInserted || 0) + (data?.summary?.totalUpdated || 0)) === 0 &&
-        (data?.summary?.totalPartialsCreated || 0) === 0
-      ) {
+      } else if ((totalInserted + totalUpdated) === 0 && totalPartialsCreated === 0) {
         statusCode = 400;
         message = 'Tidak ada data yang berhasil diproses';
       }
@@ -240,12 +275,23 @@ async function upsertInputs(req, res) {
       message = 'Inputs & partials processed with warnings';
     }
 
-    return res.status(statusCode).json({ success, message, data });
+    return res.status(statusCode).json({
+      success,
+      message,
+      data,
+      meta: {
+        noProduksi,
+        hasInput,
+        audit: { actorId, actorUsername, requestId },
+      },
+    });
   } catch (e) {
-    console.error('[bjJual.upsertInputs]', e);
-    return res.status(500).json({
+    console.error('[inject.upsertInputsAndPartials]', e);
+    const status = e.statusCode || e.status || 500;
+
+    return res.status(status).json({
       success: false,
-      message: 'Internal Server Error',
+      message: status === 500 ? 'Internal Server Error' : e.message,
       error: {
         message: e.message,
         details: process.env.NODE_ENV === 'development' ? e.stack : undefined,
@@ -254,19 +300,42 @@ async function upsertInputs(req, res) {
   }
 }
 
-async function deleteInputsAndPartials(req, res) {
-  const noBJJual = String(req.params.noBJJual || '').trim();
 
-  if (!noBJJual) {
+async function deleteInputsAndPartials(req, res) {
+  const noProduksi = String(req.params.noProduksi || '').trim();
+
+  if (!noProduksi) {
     return res.status(400).json({
       success: false,
-      message: 'noBJJual is required',
-      error: { field: 'noBJJual', message: 'Parameter noBJJual tidak boleh kosong' },
+      message: 'noProduksi is required',
+      error: { field: 'noProduksi', message: 'Parameter noProduksi tidak boleh kosong' },
     });
   }
 
-  const payload = req.body || {};
+  // ✅ Strip client audit fields
+  const {
+    actorId: _clientActorId,
+    actorUsername: _clientActorUsername,
+    actor: _clientActor,
+    requestId: _clientRequestId,
+    ...payload
+  } = req.body || {};
 
+  // ✅ Get trusted audit context
+  const actorId = getActorId(req);
+  if (!actorId) {
+    return res.status(401).json({
+      success: false,
+      message: 'Unauthorized (idUsername missing)',
+    });
+  }
+
+  const actorUsername = getActorUsername(req) || req.username || req.user?.username || 'system';
+  const requestId = String(makeRequestId(req) || '').trim();
+
+  if (requestId) res.setHeader('x-request-id', requestId);
+
+  // ✅ Validate input
   const hasInput = [
     'barangJadi',
     'furnitureWip',
@@ -284,7 +353,14 @@ async function deleteInputsAndPartials(req, res) {
   }
 
   try {
-    const result = await bjJualService.deleteInputsAndPartials(noBJJual, payload);
+    // ✅ Forward audit context
+    const ctx = { actorId, actorUsername, requestId };
+
+    const result = await bjJualService.deleteInputsAndPartials(
+      noProduksi,
+      payload,
+      ctx
+    );
 
     const { success, hasWarnings, data } = result;
 
@@ -298,12 +374,23 @@ async function deleteInputsAndPartials(req, res) {
       message = 'Inputs & partials deleted with warnings';
     }
 
-    return res.status(statusCode).json({ success, message, data });
+    return res.status(statusCode).json({
+      success,
+      message,
+      data,
+      meta: {
+        noProduksi,
+        hasInput,
+        audit: { actorId, actorUsername, requestId },
+      },
+    });
   } catch (e) {
-    console.error('[bjJual.deleteInputsAndPartials]', e);
-    return res.status(500).json({
+    console.error('[inject.deleteInputsAndPartials]', e);
+    const status = e.statusCode || e.status || 500;
+
+    return res.status(status).json({
       success: false,
-      message: 'Internal Server Error',
+      message: status === 500 ? 'Internal Server Error' : e.message,
       error: {
         message: e.message,
         details: process.env.NODE_ENV === 'development' ? e.stack : undefined,
@@ -313,13 +400,12 @@ async function deleteInputsAndPartials(req, res) {
 }
 
 
-
 module.exports = {
   getAllBJJual,
   createBJJual,
   updateBJJual,
   deleteBJJual,
   getInputsByNoBJJual,
-  upsertInputs,
+  upsertInputsAndPartials,
   deleteInputsAndPartials
 };

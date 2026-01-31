@@ -137,6 +137,20 @@ const PARTIAL_CONFIGS = {
       keyFitting: 'PasangKunciInputLabelFWIPPartial',
       spanner: 'SpannerInputLabelFWIPPartial',
       packingProduksi: 'PackingProduksiInputLabelFWIPPartial',
+      bjJual: 'BJJual_dLabelFurnitureWIPPartial',
+    }
+  },
+
+  barangJadi: {
+    tableName: 'BarangJadiPartial',
+    sourceTable: 'BarangJadi',
+    partialColumn: 'NoBJPartial',
+    prefix: 'BL.',
+    keys: ['NoBJ'],
+    weightColumn: 'Pcs',
+    weightSourceColumn: 'Pcs',
+    mappingTables: {
+      bjJual: 'BJJual_dLabelBarangJadiPartial',
     }
   },
 };
@@ -357,6 +371,78 @@ const INPUT_CONFIGS = {
       dateUsageColumn: 'DateUsage',
     },
   },
+
+  bongkarSusun: {
+    bb: {
+      sourceTable: 'BahanBaku_d',
+      keys: ['NoBahanBaku', 'NoPallet', 'NoSak'],
+      mappingTable: 'BongkarSusunInputBahanBaku',
+      dateUsageColumn: 'DateUsage',
+    },
+    washing: {
+      sourceTable: 'Washing_d',
+      keys: ['NoWashing', 'NoSak'],
+      mappingTable: 'BongkarSusunInputWashing',
+      dateUsageColumn: 'DateUsage',
+    },
+    broker: {
+      sourceTable: 'Broker_d',
+      keys: ['NoBroker', 'NoSak'],
+      mappingTable: 'BongkarSusunInputBroker',
+      dateUsageColumn: 'DateUsage',
+    },
+    crusher: {
+      sourceTable: 'Crusher',
+      keys: ['NoCrusher'],
+      mappingTable: 'BongkarSusunInputCrusher',
+      dateUsageColumn: 'DateUsage',
+    },
+    gilingan: {
+      sourceTable: 'Gilingan',
+      keys: ['NoGilingan'],
+      mappingTable: 'BongkarSusunInputGilingan',
+      dateUsageColumn: 'DateUsage',
+    },
+    mixer: {
+      sourceTable: 'Mixer_d',
+      keys: ['NoMixer', 'NoSak'],
+      mappingTable: 'BongkarSusunInputMixer',
+      dateUsageColumn: 'DateUsage',
+    },
+    furnitureWip: {
+      sourceTable: 'FurnitureWIP',
+      keys: ['NoFurnitureWIP'],
+      mappingTable: 'BongkarSusunInputFurnitureWIP',
+      dateUsageColumn: 'DateUsage',
+    },
+    bonggolan: {
+      sourceTable: 'Bonggolan',
+      keys: ['NoBonggolan'],
+      mappingTable: 'BongkarSusunInputBonggolan',
+      dateUsageColumn: 'DateUsage',
+    },
+    barangJadi: {
+      sourceTable: 'BarangJadi',
+      keys: ['NoBJ'],
+      mappingTable: 'BongkarSusunInputBarangJadi',
+      dateUsageColumn: 'DateUsage',
+    },
+  },
+
+  bjJual: {
+    furnitureWip: {
+      sourceTable: 'FurnitureWIP',
+      keys: ['NoFurnitureWIP'],
+      mappingTable: 'BJSortirRejectInputLabelFurnitureWIP',
+      dateUsageColumn: 'DateUsage',
+    },
+    barangJadi: {
+      sourceTable: 'BarangJadi',
+      keys: ['NoBJ'],
+      mappingTable: 'BJJual_dLabelBarangJadi',
+      dateUsageColumn: 'DateUsage',
+    },
+  },
 };
 
 /**
@@ -450,6 +536,22 @@ const PRODUKSI_CONFIGS = {
     dateColumn: 'TglBJSortir',
     codeColumn: 'NoBJSortir',
   },
+
+  bongkarSusun: {
+    headerTable: 'BongkarSusun_h',
+    entityKey: 'bongkarSusun',
+    lockResource: 'SEQ_BS_PARTIALS',
+    dateColumn: 'Tanggal',
+    codeColumn: 'NoBongkarSusun',
+  },
+
+  bjJual: {
+    headerTable: 'BJJual_h',
+    entityKey: 'bjJual',
+    lockResource: 'SEQ_BJJUAL_PARTIALS',
+    dateColumn: 'Tanggal',
+    codeColumn: 'NoBJJual',
+  },
 };
 
 
@@ -504,6 +606,17 @@ const UPSERT_INPUT_CONFIGS = {
       sourceTable: 'MstCabinetMaterial',
       keyColumn: 'IdCabinetMaterial',
       quantityColumn: 'Jumlah',
+      validateColumn: 'Enable',
+      validateValue: 1,
+      aggregateByKey: true, // SUM quantities by key sebelum insert/update
+    }
+  },
+  bjJual: {
+    cabinetMaterial: {
+      mappingTable: 'PackingProduksiInputMaterial',
+      sourceTable: 'MstCabinetMaterial',
+      keyColumn: 'IdCabinetMaterial',
+      quantityColumn: 'Pcs',
       validateColumn: 'Enable',
       validateValue: 1,
       aggregateByKey: true, // SUM quantities by key sebelum insert/update

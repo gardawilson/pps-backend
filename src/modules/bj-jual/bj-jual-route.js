@@ -28,7 +28,7 @@ router.get(
 router.post(
   '/:noBJJual/inputs',
   verifyToken,
-  bjJualController.upsertInputs
+  bjJualController.upsertInputsAndPartials
 );
 
 

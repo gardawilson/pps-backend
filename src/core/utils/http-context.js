@@ -6,13 +6,13 @@ function getActorId(req) {
 }
 
 function getActorUsername(req) {
-  return String(req?.username || '').trim() || null;
+  return String(req?.username || "").trim() || null;
 }
 
 function makeRequestId(req) {
   const fromHeader =
-    String(req?.headers?.['x-request-id'] || '').trim() ||
-    String(req?.headers?.['x-correlation-id'] || '').trim();
+    String(req?.headers?.["x-request-id"] || "").trim() ||
+    String(req?.headers?.["x-correlation-id"] || "").trim();
 
   if (fromHeader) return fromHeader;
 

@@ -6,15 +6,18 @@
  *  - "8" => hour
  */
 function parseJamToInt(jam) {
-  if (jam == null) throw badReq('Format jamKerja tidak valid');
-  if (typeof jam === 'number') return Math.max(0, Math.round(jam));
+  if (jam == null) throw badReq("Format jamKerja tidak valid");
+  if (typeof jam === "number") return Math.max(0, Math.round(jam));
 
   const s = String(jam).trim();
 
   const mRange = s.match(/^(\d{1,2}):(\d{2})\s*-\s*(\d{1,2}):(\d{2})$/);
   if (mRange) {
-    const sh = +mRange[1], sm = +mRange[2], eh = +mRange[3], em = +mRange[4];
-    let mins = (eh * 60 + em) - (sh * 60 + sm);
+    const sh = +mRange[1],
+      sm = +mRange[2],
+      eh = +mRange[3],
+      em = +mRange[4];
+    let mins = eh * 60 + em - (sh * 60 + sm);
     if (mins < 0) mins += 24 * 60;
     return Math.max(0, Math.round(mins / 60));
   }
@@ -25,7 +28,9 @@ function parseJamToInt(jam) {
   const mHour = s.match(/^(\d{1,2})$/);
   if (mHour) return Math.max(0, parseInt(mHour[1], 10));
 
-  throw badReq('Format jamKerja tidak valid. Gunakan angka (mis. 8) atau "HH:mm-HH:mm"');
+  throw badReq(
+    'Format jamKerja tidak valid. Gunakan angka (mis. 8) atau "HH:mm-HH:mm"',
+  );
 }
 
 // optional: if jamKerja empty, calculate from hourStart-hourEnd
@@ -44,7 +49,9 @@ function calcJamKerjaFromStartEnd(hourStart, hourEnd) {
   const parse = (t) => {
     const m = String(t).match(/^(\d{1,2}):(\d{2}):(\d{2})$/);
     if (!m) return null;
-    const h = +m[1], min = +m[2], sec = +m[3];
+    const h = +m[1],
+      min = +m[2],
+      sec = +m[3];
     return h * 3600 + min * 60 + sec;
   };
 

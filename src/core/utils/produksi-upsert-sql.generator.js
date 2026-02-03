@@ -8,8 +8,8 @@
 
 const {
   UPSERT_INPUT_CONFIGS,
-  PRODUKSI_CONFIGS
-} = require('../config/produksi-input-mapping.config');
+  PRODUKSI_CONFIGS,
+} = require("../config/produksi-input-mapping.config");
 
 /** convert "IdCabinetMaterial" -> "idCabinetMaterial" */
 function toCamelField(dbKey) {
@@ -31,7 +31,8 @@ function generateUpsertInputsSQL(produksiType, requestedTypes) {
   const produksiConfig = PRODUKSI_CONFIGS[produksiType];
   const upsertConfigs = UPSERT_INPUT_CONFIGS[produksiType];
 
-  if (!produksiConfig) throw new Error(`Unknown produksi type: ${produksiType}`);
+  if (!produksiConfig)
+    throw new Error(`Unknown produksi type: ${produksiType}`);
   if (!upsertConfigs) return _generateEmptySQL();
 
   const activeConfigs = requestedTypes.reduce((acc, type) => {
@@ -43,12 +44,17 @@ function generateUpsertInputsSQL(produksiType, requestedTypes) {
   if (Object.keys(activeConfigs).length === 0) return _generateEmptySQL();
 
   const sections = Object.entries(activeConfigs)
-    .map(([type, config]) => _generateSingleUpsertSection(type, config, produksiConfig))
-    .join('\n\n');
+    .map(([type, config]) =>
+      _generateSingleUpsertSection(type, config, produksiConfig),
+    )
+    .join("\n\n");
 
   const summaryInserts = Object.keys(activeConfigs)
-    .map(type => `  INSERT INTO @out SELECT '${type}', @${type}Inserted, @${type}Updated, 0, @${type}Invalid;`)
-    .join('\n');
+    .map(
+      (type) =>
+        `  INSERT INTO @out SELECT '${type}', @${type}Inserted, @${type}Updated, 0, @${type}Invalid;`,
+    )
+    .join("\n");
 
   return `
 SET NOCOUNT ON;

@@ -1,17 +1,22 @@
 // services/hotstamping-production-service.js
-const { sql, poolPromise } = require('../../../core/config/db');
-
+const { sql, poolPromise } = require("../../../core/config/db");
 const {
   resolveEffectiveDateForCreate,
   toDateOnly,
-  assertNotLocked,     
+  assertNotLocked,
   formatYMD,
-  loadDocDateOnlyFromConfig
-} = require('../../../core/shared/tutup-transaksi-guard');
-
-const sharedInputService = require('../../../core/shared/produksi-input.service');
-const { badReq, conflict } = require('../../../core/utils/http-error');
-
+  loadDocDateOnlyFromConfig,
+} = require("../../../core/shared/tutup-transaksi-guard");
+const sharedInputService = require("../../../core/shared/produksi-input.service");
+const { badReq, conflict } = require("../../../core/utils/http-error");
+const { applyAuditContext } = require("../../../core/utils/db-audit-context");
+const {
+  generateNextCode,
+} = require("../../../core/utils/sequence-code-helper");
+const {
+  parseJamToInt,
+  calcJamKerjaFromStartEnd,
+} = require("../../../core/utils/jam-kerja-helper");
 
 async function getProduksiByDate(date) {
   const pool = await poolPromise;
@@ -41,21 +46,20 @@ async function getProduksiByDate(date) {
     ORDER BY h.JamKerja ASC;
   `;
 
-  request.input('date', sql.Date, date);
+  request.input("date", sql.Date, date);
   const result = await request.query(query);
   return result.recordset;
 }
 
-
 // ✅ GET ALL (paged + search + lastClosed + isLocked)
-async function getAllProduksi(page = 1, pageSize = 20, search = '') {
+async function getAllProduksi(page = 1, pageSize = 20, search = "") {
   const pool = await poolPromise;
 
   const p = Math.max(1, Number(page) || 1);
   const ps = Math.max(1, Math.min(200, Number(pageSize) || 20));
   const offset = (p - 1) * ps;
 
-  const searchTerm = (search || '').trim();
+  const searchTerm = (search || "").trim();
 
   const whereClause = `
     WHERE (@search = '' OR h.NoProduksi LIKE '%' + @search + '%')
@@ -69,7 +73,7 @@ async function getAllProduksi(page = 1, pageSize = 20, search = '') {
   `;
 
   const countReq = pool.request();
-  countReq.input('search', sql.VarChar(100), searchTerm);
+  countReq.input("search", sql.VarChar(100), searchTerm);
 
   const countRes = await countReq.query(countQry);
   const total = countRes.recordset?.[0]?.total || 0;
@@ -127,105 +131,12 @@ async function getAllProduksi(page = 1, pageSize = 20, search = '') {
   `;
 
   const dataReq = pool.request();
-  dataReq.input('search', sql.VarChar(100), searchTerm);
-  dataReq.input('offset', sql.Int, offset);
-  dataReq.input('limit', sql.Int, ps);
+  dataReq.input("search", sql.VarChar(100), searchTerm);
+  dataReq.input("offset", sql.Int, offset);
+  dataReq.input("limit", sql.Int, ps);
 
   const dataRes = await dataReq.query(dataQry);
   return { data: dataRes.recordset || [], total };
-}
-
-function padLeft(num, width) {
-  const s = String(num);
-  return s.length >= width ? s : '0'.repeat(width - s.length) + s;
-}
-
-
-/**
- * Generate next NoProduksi HotStamping
- * Contoh: BH.0000000010  (10 digit angka)
- */
-async function generateNextNoProduksi(tx, { prefix = 'BH.', width = 10 } = {}) {
-  const rq = new sql.Request(tx);
-  const q = `
-    SELECT TOP 1 h.NoProduksi
-    FROM dbo.HotStamping_h AS h WITH (UPDLOCK, HOLDLOCK)
-    WHERE h.NoProduksi LIKE @prefix + '%'
-    ORDER BY
-      TRY_CONVERT(BIGINT, SUBSTRING(h.NoProduksi, LEN(@prefix) + 1, 50)) DESC,
-      h.NoProduksi DESC;
-  `;
-  const r = await rq.input('prefix', sql.VarChar, prefix).query(q);
-
-  let lastNum = 0;
-  if (r.recordset.length > 0) {
-    const last = r.recordset[0].NoProduksi;
-    const numericPart = last.substring(prefix.length);
-    lastNum = parseInt(numericPart, 10) || 0;
-  }
-
-  const next = lastNum + 1;
-  return prefix + padLeft(next, width);
-}
-
-/**
- * Sama konsep dengan gilingan:
- * jamKerja bisa:
- *  - number (8)
- *  - "HH:mm-HH:mm" => selisih jam
- *  - "HH:mm" => ambil jam-nya
- */
-function parseJamToInt(jam) {
-  if (jam == null) throw badReq('Format jamKerja tidak valid');
-  if (typeof jam === 'number') return Math.max(0, Math.round(jam));
-
-  const s = String(jam).trim();
-  const mRange = s.match(/^(\d{1,2}):(\d{2})\s*-\s*(\d{1,2}):(\d{2})$/);
-  if (mRange) {
-    const sh = +mRange[1], sm = +mRange[2], eh = +mRange[3], em = +mRange[4];
-    let mins = (eh * 60 + em) - (sh * 60 + sm);
-    if (mins < 0) mins += 24 * 60; // cross-midnight
-    return Math.max(0, Math.round(mins / 60));
-  }
-
-  const mTime = s.match(/^(\d{1,2}):(\d{2})$/);
-  if (mTime) return Math.max(0, parseInt(mTime[1], 10));
-
-  const mHour = s.match(/^(\d{1,2})$/);
-  if (mHour) return Math.max(0, parseInt(mHour[1], 10));
-
-  throw badReq('Format jamKerja tidak valid. Gunakan angka (mis. 8) atau "HH:mm-HH:mm"');
-}
-
-// optional: kalau jamKerja kosong, hitung dari hourStart-hourEnd (lebih konsisten)
-function calcJamKerjaFromStartEnd(hourStart, hourEnd) {
-  if (!hourStart || !hourEnd) return null;
-
-  // terima 'HH:mm' atau 'HH:mm:ss'
-  const norm = (s) => {
-    const t = String(s).trim();
-    if (/^\d{1,2}:\d{2}$/.test(t)) return `${t}:00`;
-    return t;
-  };
-
-  const hs = norm(hourStart);
-  const he = norm(hourEnd);
-
-  const parse = (t) => {
-    const m = String(t).match(/^(\d{1,2}):(\d{2}):(\d{2})$/);
-    if (!m) return null;
-    const h = +m[1], min = +m[2], sec = +m[3];
-    return h * 3600 + min * 60 + sec;
-  };
-
-  const s1 = parse(hs);
-  const s2 = parse(he);
-  if (s1 == null || s2 == null) return null;
-
-  let diff = s2 - s1;
-  if (diff < 0) diff += 24 * 3600; // cross-midnight
-  const hours = diff / 3600;
-  return Math.max(0, Math.round(hours));
 }
 
 /**
@@ -234,111 +145,148 @@ function calcJamKerjaFromStartEnd(hourStart, hourEnd) {
  *  tglProduksi, idMesin, idOperator, shift,
  *  jamKerja?, hourStart, hourEnd, hourMeter, createBy, checkBy*, approveBy*
  */
-async function createHotStampingProduksi(payload) {
+async function createHotStampingProduksi(payload, ctx) {
+  const body = payload && typeof payload === "object" ? payload : {};
+
+  // ===============================
+  // Validasi wajib
+  // ===============================
   const must = [];
-  if (!payload?.tglProduksi) must.push('tglProduksi');
-  if (payload?.idMesin == null) must.push('idMesin');
-  if (payload?.idOperator == null) must.push('idOperator');
-  if (payload?.shift == null) must.push('shift');
-  if (!payload?.hourStart) must.push('hourStart');
-  if (!payload?.hourEnd) must.push('hourEnd');
-  if (must.length) throw badReq(`Field wajib: ${must.join(', ')}`);
+  if (!body?.tglProduksi) must.push("tglProduksi");
+  if (body?.idMesin == null) must.push("idMesin");
+  if (body?.idOperator == null) must.push("idOperator");
+  if (body?.shift == null) must.push("shift");
+  if (!body?.hourStart) must.push("hourStart");
+  if (!body?.hourEnd) must.push("hourEnd");
+  if (must.length) throw badReq(`Field wajib: ${must.join(", ")}`);
+
+  // ===============================
+  // Validasi ctx / audit
+  // ===============================
+  const actorIdNum = Number(ctx?.actorId);
+  if (!Number.isFinite(actorIdNum) || actorIdNum <= 0) {
+    throw badReq("ctx.actorId wajib. Controller harus inject dari token.");
+  }
+  const actorUsername = String(ctx?.actorUsername || "").trim() || "system";
+  const requestId = String(ctx?.requestId || "").trim();
+  const auditCtx = {
+    actorId: Math.trunc(actorIdNum),
+    actorUsername,
+    requestId,
+  };
 
   const pool = await poolPromise;
   const tx = new sql.Transaction(pool);
   await tx.begin(sql.ISOLATION_LEVEL.SERIALIZABLE);
 
   try {
-    // -------------------------------------------------------
-    // 0) NORMALIZE DATE + TUTUP TRANSAKSI GUARD
-    // -------------------------------------------------------
-    const effectiveDate = resolveEffectiveDateForCreate(payload.tglProduksi);
+    // ===============================
+    // Set audit context
+    // ===============================
+    const auditReq = new sql.Request(tx);
+    const audit = await applyAuditContext(auditReq, auditCtx);
 
+    // ===============================
+    // Lock tanggal produksi
+    // ===============================
+    const effectiveDate = resolveEffectiveDateForCreate(body.tglProduksi);
     await assertNotLocked({
       date: effectiveDate,
       runner: tx,
-      action: 'create HotStamping',
+      action: "create HotStamping",
       useLock: true,
     });
 
-    // -------------------------------------------------------
-    // 1) GENERATE NO PRODUKSI (BH.) + ANTI RACE
-    // -------------------------------------------------------
-    const no1 = await generateNextNoProduksi(tx, { prefix: 'BH.', width: 10 });
+    // ===============================
+    // Generate NoProduksi unik
+    // ===============================
+    const gen = async () =>
+      generateNextCode(tx, {
+        tableName: "dbo.HotStamping_h",
+        columnName: "NoProduksi",
+        prefix: "BH.",
+        width: 10,
+      });
+    let noProduksi = await gen();
 
-    const rqCheck = new sql.Request(tx);
-    const exist = await rqCheck
-      .input('NoProduksi', sql.VarChar(50), no1)
-      .query(`
-        SELECT 1
-        FROM dbo.HotStamping_h WITH (UPDLOCK, HOLDLOCK)
-        WHERE NoProduksi = @NoProduksi
-      `);
-
-    const noProduksi = exist.recordset.length
-      ? await generateNextNoProduksi(tx, { prefix: 'BH.', width: 10 })
-      : no1;
-
-    // -------------------------------------------------------
-    // 2) JAM KERJA
-    //    - kalau payload.jamKerja diisi, parse
-    //    - kalau kosong, hitung dari hourStart-hourEnd
-    // -------------------------------------------------------
-    let jamKerjaInt = null;
-    if (payload.jamKerja !== null && payload.jamKerja !== undefined && payload.jamKerja !== '') {
-      jamKerjaInt = parseJamToInt(payload.jamKerja);
-    } else {
-      jamKerjaInt = calcJamKerjaFromStartEnd(payload.hourStart, payload.hourEnd);
+    // double check anti-race
+    const exist = await new sql.Request(tx)
+      .input("NoProduksi", sql.VarChar(50), noProduksi)
+      .query(
+        `SELECT 1 FROM dbo.HotStamping_h WITH (UPDLOCK, HOLDLOCK) WHERE NoProduksi=@NoProduksi`,
+      );
+    if (exist.recordset.length > 0) {
+      noProduksi = await gen();
     }
 
-    // -------------------------------------------------------
-    // 3) INSERT HEADER
-    // -------------------------------------------------------
+    // ===============================
+    // JamKerja
+    // ===============================
+    let jamKerjaInt = null;
+    if (
+      body.jamKerja !== null &&
+      body.jamKerja !== undefined &&
+      body.jamKerja !== ""
+    ) {
+      jamKerjaInt = parseJamToInt(body.jamKerja);
+    } else {
+      jamKerjaInt = calcJamKerjaFromStartEnd(body.hourStart, body.hourEnd);
+    }
+
+    // ===============================
+    // Insert header dengan OUTPUT
+    // ===============================
     const rqIns = new sql.Request(tx);
     rqIns
-      .input('NoProduksi', sql.VarChar(50), noProduksi)
-      .input('Tanggal', sql.Date, effectiveDate)
-      .input('IdMesin', sql.Int, payload.idMesin)
-      .input('IdOperator', sql.Int, payload.idOperator)
-      .input('Shift', sql.Int, payload.shift)
-      .input('JamKerja', sql.Int, jamKerjaInt)
-      .input('CreateBy', sql.VarChar(100), payload.createBy)
-      .input('CheckBy1', sql.VarChar(100), payload.checkBy1 ?? null)
-      .input('CheckBy2', sql.VarChar(100), payload.checkBy2 ?? null)
-      .input('ApproveBy', sql.VarChar(100), payload.approveBy ?? null)
-      .input('HourMeter', sql.Decimal(18, 2), payload.hourMeter ?? null)
-      .input('HourStart', sql.VarChar(20), payload.hourStart ?? null)
-      .input('HourEnd', sql.VarChar(20), payload.hourEnd ?? null);
+      .input("NoProduksi", sql.VarChar(50), noProduksi)
+      .input("Tanggal", sql.Date, effectiveDate)
+      .input("IdMesin", sql.Int, body.idMesin)
+      .input("IdOperator", sql.Int, body.idOperator)
+      .input("Shift", sql.Int, body.shift)
+      .input("JamKerja", sql.Int, jamKerjaInt)
+      .input("CreateBy", sql.VarChar(100), body.createBy)
+      .input("CheckBy1", sql.VarChar(100), body.checkBy1 ?? null)
+      .input("CheckBy2", sql.VarChar(100), body.checkBy2 ?? null)
+      .input("ApproveBy", sql.VarChar(100), body.approveBy ?? null)
+      .input("HourMeter", sql.Decimal(18, 2), body.hourMeter ?? null)
+      .input("HourStart", sql.VarChar(20), body.hourStart)
+      .input("HourEnd", sql.VarChar(20), body.hourEnd);
 
     const insertSql = `
+      DECLARE @tmp TABLE (
+        NoProduksi varchar(50), Tanggal date, IdMesin int, IdOperator int,
+        Shift int, JamKerja int, CreateBy varchar(100),
+        CheckBy1 varchar(100), CheckBy2 varchar(100), ApproveBy varchar(100),
+        HourMeter decimal(18,2), HourStart time(7), HourEnd time(7)
+      );
+
       INSERT INTO dbo.HotStamping_h (
         NoProduksi, Tanggal, IdMesin, IdOperator, Shift, JamKerja,
-        CreateBy, CheckBy1, CheckBy2, ApproveBy, HourMeter,
-        HourStart, HourEnd
+        CreateBy, CheckBy1, CheckBy2, ApproveBy,
+        HourMeter, HourStart, HourEnd
       )
-      OUTPUT INSERTED.*
+      OUTPUT INSERTED.* INTO @tmp
       VALUES (
-        @NoProduksi, @Tanggal, @IdMesin, @IdOperator, @Shift,
-        @JamKerja,
+        @NoProduksi, @Tanggal, @IdMesin, @IdOperator, @Shift, @JamKerja,
         @CreateBy, @CheckBy1, @CheckBy2, @ApproveBy, @HourMeter,
         CASE WHEN @HourStart IS NULL OR LTRIM(RTRIM(@HourStart)) = '' THEN NULL ELSE CAST(@HourStart AS time(7)) END,
         CASE WHEN @HourEnd   IS NULL OR LTRIM(RTRIM(@HourEnd))   = '' THEN NULL ELSE CAST(@HourEnd   AS time(7)) END
       );
+
+      SELECT * FROM @tmp;
     `;
 
     const insRes = await rqIns.query(insertSql);
 
     await tx.commit();
-    return { header: insRes.recordset?.[0] || null };
+    return { header: insRes.recordset?.[0] || null, audit };
   } catch (e) {
-    try { await tx.rollback(); } catch (_) {}
+    try {
+      await tx.rollback();
+    } catch (_) {}
     throw e;
   }
 }
-
-
-
-
 
 /**
  * UPDATE header HotStamping_h
@@ -346,162 +294,168 @@ async function createHotStampingProduksi(payload) {
  * - Field update bersifat dinamis (yang dikirim saja)
  * - Jika Tanggal berubah -> sync DateUsage furniture wip input
  */
-async function updateHotStampingProduksi(noProduksi, payload) {
-  if (!noProduksi) throw badReq('noProduksi wajib');
+async function updateHotStampingProduksi(noProduksi, payload, ctx) {
+  if (!noProduksi) throw badReq("noProduksi wajib");
+
+  // ===============================
+  // Audit context
+  // ===============================
+  const actorIdNum = Number(ctx?.actorId);
+  if (!Number.isFinite(actorIdNum) || actorIdNum <= 0) {
+    throw badReq("ctx.actorId wajib. Controller harus inject dari token.");
+  }
+  const actorUsername = String(ctx?.actorUsername || "").trim() || "system";
+  const requestId = String(ctx?.requestId || "").trim();
+  const auditCtx = {
+    actorId: Math.trunc(actorIdNum),
+    actorUsername,
+    requestId,
+  };
 
   const pool = await poolPromise;
   const tx = new sql.Transaction(pool);
   await tx.begin(sql.ISOLATION_LEVEL.SERIALIZABLE);
 
   try {
-    // -------------------------------------------------------
-    // 0) AMBIL docDateOnly DARI CONFIG (LOCK HEADER ROW)
-    // -------------------------------------------------------
+    // =====================================================
+    // 0) Load old doc date + lock
+    // =====================================================
     const { docDateOnly: oldDocDateOnly } = await loadDocDateOnlyFromConfig({
-      entityKey: 'hotStampingProduksi', // pastikan sesuai config tutup-transaksi
+      entityKey: "hotStamping",
       codeValue: noProduksi,
       runner: tx,
-      useLock: true,               // UPDATE = write action
+      useLock: true,
       throwIfNotFound: true,
     });
 
-    // -------------------------------------------------------
-    // 1) Jika user mengubah tanggal, hitung tanggal barunya (date-only)
-    // -------------------------------------------------------
+    // =====================================================
+    // 1) Handle date change
+    // =====================================================
     const isChangingDate = payload?.tglProduksi !== undefined;
     let newDocDateOnly = null;
-
     if (isChangingDate) {
-      if (!payload.tglProduksi) throw badReq('tglProduksi tidak boleh kosong');
+      if (!payload.tglProduksi) throw badReq("tglProduksi tidak boleh kosong");
       newDocDateOnly = resolveEffectiveDateForCreate(payload.tglProduksi);
     }
 
-    // -------------------------------------------------------
-    // 2) GUARD TUTUP TRANSAKSI
-    //    - cek tanggal lama
-    //    - kalau ganti tanggal, cek tanggal baru juga
-    // -------------------------------------------------------
+    // =====================================================
+    // 2) Guard tutup transaksi
+    // =====================================================
     await assertNotLocked({
       date: oldDocDateOnly,
       runner: tx,
-      action: 'update HotStamping (current date)',
+      action: "update HotStamping (current date)",
       useLock: true,
     });
-
     if (isChangingDate) {
       await assertNotLocked({
         date: newDocDateOnly,
         runner: tx,
-        action: 'update HotStamping (new date)',
+        action: "update HotStamping (new date)",
         useLock: true,
       });
     }
 
-    // -------------------------------------------------------
-    // 3) BUILD SET DINAMIS
-    // -------------------------------------------------------
+    // =====================================================
+    // 3) SET fields dynamically
+    // =====================================================
     const sets = [];
     const rqUpd = new sql.Request(tx);
 
     if (isChangingDate) {
-      sets.push('Tanggal = @Tanggal');
-      rqUpd.input('Tanggal', sql.Date, newDocDateOnly);
+      sets.push("Tanggal = @Tanggal");
+      rqUpd.input("Tanggal", sql.Date, newDocDateOnly);
     }
 
     if (payload.idMesin !== undefined) {
-      sets.push('IdMesin = @IdMesin');
-      rqUpd.input('IdMesin', sql.Int, payload.idMesin);
+      sets.push("IdMesin = @IdMesin");
+      rqUpd.input("IdMesin", sql.Int, payload.idMesin);
     }
 
     if (payload.idOperator !== undefined) {
-      sets.push('IdOperator = @IdOperator');
-      rqUpd.input('IdOperator', sql.Int, payload.idOperator);
+      sets.push("IdOperator = @IdOperator");
+      rqUpd.input("IdOperator", sql.Int, payload.idOperator);
     }
 
     if (payload.shift !== undefined) {
-      sets.push('Shift = @Shift');
-      rqUpd.input('Shift', sql.Int, payload.shift);
+      sets.push("Shift = @Shift");
+      rqUpd.input("Shift", sql.Int, payload.shift);
     }
 
-    // HotStamping pakai JamKerja
     if (payload.jamKerja !== undefined) {
-      const jamKerjaInt = payload.jamKerja === null ? null : parseJamToInt(payload.jamKerja);
-      sets.push('JamKerja = @JamKerja');
-      rqUpd.input('JamKerja', sql.Int, jamKerjaInt);
-    }
-
-    if (payload.checkBy1 !== undefined) {
-      sets.push('CheckBy1 = @CheckBy1');
-      rqUpd.input('CheckBy1', sql.VarChar(100), payload.checkBy1 ?? null);
-    }
-
-    if (payload.checkBy2 !== undefined) {
-      sets.push('CheckBy2 = @CheckBy2');
-      rqUpd.input('CheckBy2', sql.VarChar(100), payload.checkBy2 ?? null);
-    }
-
-    if (payload.approveBy !== undefined) {
-      sets.push('ApproveBy = @ApproveBy');
-      rqUpd.input('ApproveBy', sql.VarChar(100), payload.approveBy ?? null);
+      const jamInt =
+        payload.jamKerja === null ? null : parseJamToInt(payload.jamKerja);
+      sets.push("JamKerja = @JamKerja");
+      rqUpd.input("JamKerja", sql.Int, jamInt);
     }
 
     if (payload.hourMeter !== undefined) {
-      sets.push('HourMeter = @HourMeter');
-      rqUpd.input('HourMeter', sql.Decimal(18, 2), payload.hourMeter ?? null);
+      sets.push("HourMeter = @HourMeter");
+      rqUpd.input("HourMeter", sql.Decimal(18, 2), payload.hourMeter ?? null);
     }
 
-    // hourStart / hourEnd (lebih aman kalau null / kosong)
     if (payload.hourStart !== undefined) {
-      sets.push(`
-        HourStart =
-          CASE WHEN @HourStart IS NULL OR LTRIM(RTRIM(@HourStart)) = '' THEN NULL
-               ELSE CAST(@HourStart AS time(7)) END
-      `);
-      rqUpd.input('HourStart', sql.VarChar(20), payload.hourStart ?? null);
+      sets.push(
+        `HourStart = CASE WHEN @HourStart IS NULL OR LTRIM(RTRIM(@HourStart)) = '' THEN NULL ELSE CAST(@HourStart AS time(7)) END`,
+      );
+      rqUpd.input("HourStart", sql.VarChar(20), payload.hourStart ?? null);
     }
 
     if (payload.hourEnd !== undefined) {
-      sets.push(`
-        HourEnd =
-          CASE WHEN @HourEnd IS NULL OR LTRIM(RTRIM(@HourEnd)) = '' THEN NULL
-               ELSE CAST(@HourEnd AS time(7)) END
-      `);
-      rqUpd.input('HourEnd', sql.VarChar(20), payload.hourEnd ?? null);
+      sets.push(
+        `HourEnd = CASE WHEN @HourEnd IS NULL OR LTRIM(RTRIM(@HourEnd)) = '' THEN NULL ELSE CAST(@HourEnd AS time(7)) END`,
+      );
+      rqUpd.input("HourEnd", sql.VarChar(20), payload.hourEnd ?? null);
     }
 
-    if (sets.length === 0) throw badReq('No fields to update');
+    if (payload.checkBy1 !== undefined) {
+      sets.push("CheckBy1 = @CheckBy1");
+      rqUpd.input("CheckBy1", sql.VarChar(100), payload.checkBy1 ?? null);
+    }
 
-    rqUpd.input('NoProduksi', sql.VarChar(50), noProduksi);
+    if (payload.checkBy2 !== undefined) {
+      sets.push("CheckBy2 = @CheckBy2");
+      rqUpd.input("CheckBy2", sql.VarChar(100), payload.checkBy2 ?? null);
+    }
 
+    if (payload.approveBy !== undefined) {
+      sets.push("ApproveBy = @ApproveBy");
+      rqUpd.input("ApproveBy", sql.VarChar(100), payload.approveBy ?? null);
+    }
+
+    if (sets.length === 0) throw badReq("No fields to update");
+
+    rqUpd.input("NoProduksi", sql.VarChar(50), noProduksi);
+
+    // =====================================================
+    // 4) Apply audit context
+    // =====================================================
+    await applyAuditContext(rqUpd, auditCtx);
+
+    // =====================================================
+    // 5) Execute update
+    // =====================================================
     const updateSql = `
       UPDATE dbo.HotStamping_h
-      SET ${sets.join(', ')}
+      SET ${sets.join(", ")}
       WHERE NoProduksi = @NoProduksi;
 
-      SELECT *
-      FROM dbo.HotStamping_h
-      WHERE NoProduksi = @NoProduksi;
+      SELECT * FROM dbo.HotStamping_h WHERE NoProduksi = @NoProduksi;
     `;
-
     const updRes = await rqUpd.query(updateSql);
     const updatedHeader = updRes.recordset?.[0] || null;
 
-    // -------------------------------------------------------
-    // 4) Jika Tanggal berubah → sinkron DateUsage full + partial
-    //    (pakai tanggal hasil DB agar konsisten)
-    // -------------------------------------------------------
+    // =====================================================
+    // 6) Sync DateUsage jika tanggal berubah
+    // =====================================================
     if (isChangingDate && updatedHeader) {
       const usageDate = resolveEffectiveDateForCreate(updatedHeader.Tanggal);
-
       const rqUsage = new sql.Request(tx);
       rqUsage
-        .input('NoProduksi', sql.VarChar(50), noProduksi)
-        .input('Tanggal', sql.Date, usageDate);
+        .input("NoProduksi", sql.VarChar(50), noProduksi)
+        .input("Tanggal", sql.Date, usageDate);
 
       const sqlUpdateUsage = `
-        -------------------------------------------------------
-        -- FURNITURE WIP (FULL)
-        -------------------------------------------------------
         UPDATE fw
         SET fw.DateUsage = @Tanggal
         FROM dbo.FurnitureWIP AS fw
@@ -509,14 +463,10 @@ async function updateHotStampingProduksi(noProduksi, payload) {
           AND EXISTS (
             SELECT 1
             FROM dbo.HotStampingInputLabelFWIP AS map
-            WHERE map.NoProduksi     = @NoProduksi
+            WHERE map.NoProduksi = @NoProduksi
               AND map.NoFurnitureWIP = fw.NoFurnitureWIP
           );
 
-        -------------------------------------------------------
-        -- FURNITURE WIP (PARTIAL)
-        -- FurnitureWIPPartial tidak punya DateUsage, jadi update ke FurnitureWIP via join
-        -------------------------------------------------------
         UPDATE fw
         SET fw.DateUsage = @Tanggal
         FROM dbo.FurnitureWIP AS fw
@@ -530,108 +480,112 @@ async function updateHotStampingProduksi(noProduksi, payload) {
               AND fwp.NoFurnitureWIP = fw.NoFurnitureWIP
           );
       `;
-
       await rqUsage.query(sqlUpdateUsage);
     }
 
     await tx.commit();
-    return { header: updatedHeader };
+    return { header: updatedHeader, audit: auditCtx };
   } catch (e) {
-    try { await tx.rollback(); } catch (_) {}
-    throw e;
+    try {
+      await tx.rollback();
+    } catch (_) {}
+    // attach auditCtx agar controller tetap bisa mengirim audit info walau error
+    throw Object.assign(e, auditCtx);
   }
 }
 
+async function deleteHotStampingProduksi(noProduksi, ctx) {
+  if (!noProduksi) throw badReq("noProduksi wajib");
 
-async function deleteHotStampingProduksi(noProduksi) {
-  if (!noProduksi) throw badReq('noProduksi wajib');
+  // ===============================
+  // Audit context
+  // ===============================
+  const actorIdNum = Number(ctx?.actorId);
+  if (!Number.isFinite(actorIdNum) || actorIdNum <= 0) {
+    throw badReq("ctx.actorId wajib. Controller harus inject dari token.");
+  }
+  const actorUsername = String(ctx?.actorUsername || "").trim() || "system";
+  const requestId = String(ctx?.requestId || "").trim();
+  const auditCtx = {
+    actorId: Math.trunc(actorIdNum),
+    actorUsername,
+    requestId,
+  };
 
   const pool = await poolPromise;
   const tx = new sql.Transaction(pool);
   await tx.begin(sql.ISOLATION_LEVEL.SERIALIZABLE);
 
   try {
-    // -------------------------------------------------------
-    // 0) AMBIL docDateOnly DARI CONFIG (LOCK HEADER ROW)
-    // -------------------------------------------------------
+    // ===============================
+    // 0) LOCK HEADER + AMBIL docDateOnly
+    // ===============================
     const { docDateOnly } = await loadDocDateOnlyFromConfig({
-      entityKey: 'hotStampingProduksi', // pastikan ada di config tutup-transaksi
+      entityKey: "hotStamping",
       codeValue: noProduksi,
       runner: tx,
-      useLock: true,               // DELETE = write action
+      useLock: true,
       throwIfNotFound: true,
     });
 
-    // -------------------------------------------------------
-    // 1) GUARD TUTUP TRANSAKSI (DELETE = WRITE)
-    // -------------------------------------------------------
+    // ===============================
+    // 1) GUARD TUTUP TRANSAKSI
+    // ===============================
     await assertNotLocked({
       date: docDateOnly,
       runner: tx,
-      action: 'delete HotStamping',
+      action: "delete HotStamping",
       useLock: true,
     });
 
-    // -------------------------------------------------------
-    // 2) CEK OUTPUT (FWIP / REJECT). Jika ada → tolak delete
-    // -------------------------------------------------------
+    // ===============================
+    // 2) CEK OUTPUT FWIP / REJECT
+    // ===============================
     const rqOut = new sql.Request(tx);
-    const outRes = await rqOut
-      .input('NoProduksi', sql.VarChar(50), noProduksi)
+    const outRes = await rqOut.input("NoProduksi", sql.VarChar(50), noProduksi)
       .query(`
         SELECT
-          SUM(CASE WHEN Src = 'FWIP'   THEN Cnt ELSE 0 END) AS CntOutputFWIP,
+          SUM(CASE WHEN Src = 'FWIP' THEN Cnt ELSE 0 END) AS CntOutputFWIP,
           SUM(CASE WHEN Src = 'REJECT' THEN Cnt ELSE 0 END) AS CntOutputReject
         FROM (
           SELECT 'FWIP' AS Src, COUNT(1) AS Cnt
           FROM dbo.HotStampingOutputLabelFWIP WITH (NOLOCK)
           WHERE NoProduksi = @NoProduksi
-
           UNION ALL
-
           SELECT 'REJECT' AS Src, COUNT(1) AS Cnt
           FROM dbo.HotStampingOutputRejectV2 WITH (NOLOCK)
           WHERE NoProduksi = @NoProduksi
         ) X;
       `);
 
-    const row = outRes.recordset?.[0] || { CntOutputFWIP: 0, CntOutputReject: 0 };
-    const hasOutputFWIP = (row.CntOutputFWIP || 0) > 0;
-    const hasOutputReject = (row.CntOutputReject || 0) > 0;
-
-    if (hasOutputFWIP || hasOutputReject) {
+    const row = outRes.recordset?.[0] || {
+      CntOutputFWIP: 0,
+      CntOutputReject: 0,
+    };
+    if ((row.CntOutputFWIP || 0) > 0 || (row.CntOutputReject || 0) > 0) {
       throw badReq(
-        'Tidak dapat menghapus Nomor Produksi ini karena sudah memiliki data output.'
+        "Tidak dapat menghapus Nomor Produksi ini karena sudah memiliki data output.",
       );
     }
 
-    // -------------------------------------------------------
-    // 3) LANJUT DELETE INPUT (LABEL + MATERIAL) + RESET DATEUSAGE
-    // -------------------------------------------------------
-    const req = new sql.Request(tx);
-    req.input('NoProduksi', sql.VarChar(50), noProduksi);
+    // ===============================
+    // 3) DELETE INPUT + RESET DATEUSAGE + DELETE HEADER
+    // ===============================
+    const rqDel = new sql.Request(tx);
+    rqDel.input("NoProduksi", sql.VarChar(50), noProduksi);
+
+    // apply audit context sebelum eksekusi
+    await applyAuditContext(rqDel, auditCtx);
 
     const sqlDelete = `
-      ---------------------------------------------------------
-      -- SIMPAN KEY FURNITURE WIP YANG TERDAMPAK (FULL/PARTIAL)
-      ---------------------------------------------------------
-      DECLARE @FWIPKeys TABLE (
-        NoFurnitureWIP varchar(50) PRIMARY KEY
-      );
+      -- SIMPAN KEY FURNITURE WIP
+      DECLARE @FWIPKeys TABLE (NoFurnitureWIP varchar(50) PRIMARY KEY);
 
-      ---------------------------------------------------------
-      -- A) KUMPULKAN KEY dari FULL mapping
-      ---------------------------------------------------------
       INSERT INTO @FWIPKeys (NoFurnitureWIP)
       SELECT DISTINCT map.NoFurnitureWIP
       FROM dbo.HotStampingInputLabelFWIP AS map
-      WHERE map.NoProduksi = @NoProduksi
-        AND map.NoFurnitureWIP IS NOT NULL;
+      WHERE map.NoProduksi = @NoProduksi AND map.NoFurnitureWIP IS NOT NULL;
 
-      ---------------------------------------------------------
-      -- B) KUMPULKAN KEY dari PARTIAL mapping
-      --    HotStampingInputLabelFWIPPartial -> FurnitureWIPPartial -> NoFurnitureWIP
-      ---------------------------------------------------------
       INSERT INTO @FWIPKeys (NoFurnitureWIP)
       SELECT DISTINCT fwp.NoFurnitureWIP
       FROM dbo.HotStampingInputLabelFWIPPartial AS mp
@@ -639,43 +593,24 @@ async function deleteHotStampingProduksi(noProduksi) {
         ON fwp.NoFurnitureWIPPartial = mp.NoFurnitureWIPPartial
       WHERE mp.NoProduksi = @NoProduksi
         AND fwp.NoFurnitureWIP IS NOT NULL
-        AND NOT EXISTS (
-          SELECT 1 FROM @FWIPKeys k WHERE k.NoFurnitureWIP = fwp.NoFurnitureWIP
-        );
+        AND NOT EXISTS (SELECT 1 FROM @FWIPKeys k WHERE k.NoFurnitureWIP = fwp.NoFurnitureWIP);
 
-      ---------------------------------------------------------
-      -- C) HAPUS INPUT MATERIAL
-      ---------------------------------------------------------
-      DELETE FROM dbo.HotStampingInputMaterial
-      WHERE NoProduksi = @NoProduksi;
+      DELETE FROM dbo.HotStampingInputMaterial WHERE NoProduksi = @NoProduksi;
 
-      ---------------------------------------------------------
-      -- D) HAPUS ROW PARTIAL yang dipakai oleh produksi ini
-      ---------------------------------------------------------
       DELETE fwp
       FROM dbo.FurnitureWIPPartial AS fwp
       JOIN dbo.HotStampingInputLabelFWIPPartial AS mp
         ON mp.NoFurnitureWIPPartial = fwp.NoFurnitureWIPPartial
       WHERE mp.NoProduksi = @NoProduksi;
 
-      ---------------------------------------------------------
-      -- E) HAPUS MAPPING PARTIAL & FULL
-      ---------------------------------------------------------
-      DELETE FROM dbo.HotStampingInputLabelFWIPPartial
-      WHERE NoProduksi = @NoProduksi;
+      DELETE FROM dbo.HotStampingInputLabelFWIPPartial WHERE NoProduksi = @NoProduksi;
+      DELETE FROM dbo.HotStampingInputLabelFWIP WHERE NoProduksi = @NoProduksi;
 
-      DELETE FROM dbo.HotStampingInputLabelFWIP
-      WHERE NoProduksi = @NoProduksi;
-
-      ---------------------------------------------------------
-      -- F) RESET DATEUSAGE + RECALC IsPartial di FurnitureWIP
-      ---------------------------------------------------------
       UPDATE fw
       SET fw.DateUsage = NULL,
           fw.IsPartial = CASE
             WHEN EXISTS (
-              SELECT 1
-              FROM dbo.FurnitureWIPPartial p
+              SELECT 1 FROM dbo.FurnitureWIPPartial p
               WHERE p.NoFurnitureWIP = fw.NoFurnitureWIP
             )
             THEN 1 ELSE 0 END
@@ -683,28 +618,26 @@ async function deleteHotStampingProduksi(noProduksi) {
       JOIN @FWIPKeys AS k
         ON k.NoFurnitureWIP = fw.NoFurnitureWIP;
 
-      ---------------------------------------------------------
-      -- G) TERAKHIR: HAPUS HEADER
-      ---------------------------------------------------------
-      DELETE FROM dbo.HotStamping_h
-      WHERE NoProduksi = @NoProduksi;
+      DELETE FROM dbo.HotStamping_h WHERE NoProduksi = @NoProduksi;
     `;
 
-    await req.query(sqlDelete);
-
+    await rqDel.query(sqlDelete);
     await tx.commit();
-    return { success: true };
+
+    return { success: true, audit: auditCtx };
   } catch (e) {
-    try { await tx.rollback(); } catch (_) {}
-    throw e;
+    try {
+      await tx.rollback();
+    } catch (_) {}
+    // attach audit context agar controller bisa tetap mengembalikan meta.audit walau error
+    throw Object.assign(e, auditCtx);
   }
 }
-
 
 async function fetchInputs(noProduksi) {
   const pool = await poolPromise;
   const req = pool.request();
-  req.input('no', sql.VarChar(50), noProduksi);
+  req.input("no", sql.VarChar(50), noProduksi);
 
   const q = `
     /* ===================== [1] MAIN INPUTS (UNION) ===================== */
@@ -806,7 +739,7 @@ ORDER BY mp.NoFurnitureWIPPartial DESC;
   // ========== MAIN ROWS ==========
   for (const r of mainRows) {
     switch (r.Src) {
-      case 'fwip':
+      case "fwip":
         out.furnitureWip.push({
           noFurnitureWip: r.Ref1,
           berat: r.Berat ?? null,
@@ -817,12 +750,12 @@ ORDER BY mp.NoFurnitureWIPPartial DESC;
         });
         break;
 
-      case 'material':
+      case "material":
         out.cabinetMaterial.push({
           idCabinetMaterial: r.Ref1,
           pcs: r.Pcs ?? null,
           namaJenis: r.NamaJenis ?? null, // nama material
-          namaUom: r.NamaUOM ?? null,      // nama UOM untuk display
+          namaUom: r.NamaUOM ?? null, // nama UOM untuk display
         });
         break;
     }
@@ -847,11 +780,10 @@ ORDER BY mp.NoFurnitureWIPPartial DESC;
   return out;
 }
 
-
 async function validateFwipLabel(labelCode) {
   const pool = await poolPromise;
-  const raw = String(labelCode || '').trim();
-  if (!raw) throw new Error('Label code is required');
+  const raw = String(labelCode || "").trim();
+  if (!raw) throw new Error("Label code is required");
 
   /* =========================================================
    * 1) FULL : FurnitureWIP.NoFurnitureWIP
@@ -859,7 +791,7 @@ async function validateFwipLabel(labelCode) {
    * ========================================================= */
   {
     const req = pool.request();
-    req.input('code', sql.VarChar(50), raw);
+    req.input("code", sql.VarChar(50), raw);
 
     const q = `
        ;WITH PartialSum AS (
@@ -900,7 +832,7 @@ async function validateFwipLabel(labelCode) {
       return {
         found: true,
         count: rows.length,
-        tableName: 'FurnitureWIP',
+        tableName: "FurnitureWIP",
         data: rows,
       };
     }
@@ -909,12 +841,10 @@ async function validateFwipLabel(labelCode) {
   return {
     found: false,
     count: 0,
-    tableName: '',
+    tableName: "",
     data: [],
   };
 }
-
-
 
 /**
  * Single entry: create NEW partials + link them, and attach EXISTING inputs.
@@ -932,24 +862,24 @@ async function validateFwipLabel(labelCode) {
  */
 
 async function upsertInputsAndPartials(noProduksi, payload, ctx) {
-  const no = String(noProduksi || '').trim();
-  if (!no) throw badReq('noProduksi wajib diisi');
+  const no = String(noProduksi || "").trim();
+  if (!no) throw badReq("noProduksi wajib diisi");
 
-  const body = payload && typeof payload === 'object' ? payload : {};
+  const body = payload && typeof payload === "object" ? payload : {};
 
   // ✅ ctx wajib (audit)
   const actorIdNum = Number(ctx?.actorId);
   if (!Number.isFinite(actorIdNum) || actorIdNum <= 0) {
-    throw badReq('ctx.actorId wajib. Controller harus inject dari token.');
+    throw badReq("ctx.actorId wajib. Controller harus inject dari token.");
   }
 
-  const actorUsername = String(ctx?.actorUsername || '').trim() || 'system';
+  const actorUsername = String(ctx?.actorUsername || "").trim() || "system";
 
   // requestId wajib string (kalau kosong, nanti di applyAuditContext dibuat fallback juga)
-  const requestId = String(ctx?.requestId || '').trim();
+  const requestId = String(ctx?.requestId || "").trim();
 
   // ✅ forward ctx yang sudah dinormalisasi ke shared service
-  return sharedInputService.upsertInputsAndPartials('hotStamping', no, body, {
+  return sharedInputService.upsertInputsAndPartials("hotStamping", no, body, {
     actorId: Math.trunc(actorIdNum),
     actorUsername,
     requestId,
@@ -957,27 +887,36 @@ async function upsertInputsAndPartials(noProduksi, payload, ctx) {
 }
 
 async function deleteInputsAndPartials(noProduksi, payload, ctx) {
-  const no = String(noProduksi || '').trim();
-  if (!no) throw badReq('noProduksi wajib diisi');
+  const no = String(noProduksi || "").trim();
+  if (!no) throw badReq("noProduksi wajib diisi");
 
-  const body = payload && typeof payload === 'object' ? payload : {};
+  const body = payload && typeof payload === "object" ? payload : {};
 
   // ✅ Validate audit context
   const actorIdNum = Number(ctx?.actorId);
   if (!Number.isFinite(actorIdNum) || actorIdNum <= 0) {
-    throw badReq('ctx.actorId wajib. Controller harus inject dari token.');
+    throw badReq("ctx.actorId wajib. Controller harus inject dari token.");
   }
 
-  const actorUsername = String(ctx?.actorUsername || '').trim() || 'system';
-  const requestId = String(ctx?.requestId || '').trim();
+  const actorUsername = String(ctx?.actorUsername || "").trim() || "system";
+  const requestId = String(ctx?.requestId || "").trim();
 
   // ✅ Forward to shared service
-  return sharedInputService.deleteInputsAndPartials('hotStamping', no, body, {
+  return sharedInputService.deleteInputsAndPartials("hotStamping", no, body, {
     actorId: Math.trunc(actorIdNum),
     actorUsername,
     requestId,
   });
 }
 
-
-module.exports = { getProduksiByDate, getAllProduksi, createHotStampingProduksi, updateHotStampingProduksi, deleteHotStampingProduksi, fetchInputs, validateFwipLabel, upsertInputsAndPartials, deleteInputsAndPartials };
+module.exports = {
+  getProduksiByDate,
+  getAllProduksi,
+  createHotStampingProduksi,
+  updateHotStampingProduksi,
+  deleteHotStampingProduksi,
+  fetchInputs,
+  validateFwipLabel,
+  upsertInputsAndPartials,
+  deleteInputsAndPartials,
+};

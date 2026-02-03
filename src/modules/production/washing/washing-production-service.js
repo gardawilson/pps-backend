@@ -12,6 +12,16 @@ const {
 const sharedInputService = require('../../../core/shared/produksi-input.service');
 
 const { badReq, conflict } = require('../../../core/utils/http-error'); 
+const { applyAuditContext } = require('../../../core/utils/db-audit-context');
+
+const { generateNextCode } = require('../../../core/utils/sequence-code-helper'); 
+
+const {
+  parseJamToInt,
+  calcJamKerjaFromStartEnd,
+} = require('../../../core/utils/jam-kerja-helper');
+
+
 
 
 async function getAllProduksi(page = 1, pageSize = 20, search = '') {
@@ -106,7 +116,6 @@ async function getAllProduksi(page = 1, pageSize = 20, search = '') {
   return { data: dataRes.recordset || [], total };
 }
 
-
 async function getProduksiByDate(date) {
   const pool = await poolPromise;
   const request = pool.request();
@@ -127,140 +136,155 @@ async function getProduksiByDate(date) {
 }
 
 
-
-
-function padLeft(num, width) {
-  const s = String(num);
-  return s.length >= width ? s : '0'.repeat(width - s.length) + s;
-}
-
-// 🔢 khusus WASHING: generate NoProduksi dengan prefix 'C.'
-async function generateNextNoProduksiWashing(
-  tx,
-  { prefix = 'C.', width = 10 } = {}   // ⬅️ pakai 'C.' di sini
-) {
-  const rq = new sql.Request(tx);
-  const q = `
-    SELECT TOP 1 h.NoProduksi
-    FROM dbo.WashingProduksi_h AS h WITH (UPDLOCK, HOLDLOCK)
-    WHERE h.NoProduksi LIKE @prefix + '%'
-    ORDER BY
-      TRY_CONVERT(BIGINT, SUBSTRING(h.NoProduksi, LEN(@prefix) + 1, 50)) DESC,
-      h.NoProduksi DESC;
-  `;
-  const r = await rq.input('prefix', sql.VarChar, prefix).query(q);
-
-  let lastNum = 0;
-  if (r.recordset.length > 0) {
-    const last = r.recordset[0].NoProduksi;
-    const numericPart = last.substring(prefix.length); // contoh: '0000002309'
-    lastNum = parseInt(numericPart, 10) || 0;
-  }
-  const next = lastNum + 1;
-  return prefix + padLeft(next, width); // contoh: 'C.' + '0000002310'
-}
-
-
-// sama persis dengan broker, tapi param namanya bebas
-function parseJamToInt(jam) {
-  if (jam == null) throw badReq('Format jam tidak valid');
-  if (typeof jam === 'number') return Math.max(0, Math.round(jam)); // hours
-
-  const s = String(jam).trim();
-  const mRange = s.match(/^(\d{1,2}):(\d{2})\s*-\s*(\d{1,2}):(\d{2})$/);
-  if (mRange) {
-    const sh = +mRange[1], sm = +mRange[2], eh = +mRange[3], em = +mRange[4];
-    let mins = (eh * 60 + em) - (sh * 60 + sm);
-    if (mins < 0) mins += 24 * 60; // cross-midnight
-    return Math.max(0, Math.round(mins / 60));
-  }
-  const mTime = s.match(/^(\d{1,2}):(\d{2})$/);
-  if (mTime) return Math.max(0, parseInt(mTime[1], 10));
-  const mHour = s.match(/^(\d{1,2})$/);
-  if (mHour) return Math.max(0, parseInt(mHour[1], 10));
-
-  throw badReq('Format jam tidak valid. Gunakan angka (mis. 8) atau "HH:mm-HH:mm"');
-}
-
 // =========================
 //  CREATE WashingProduksi_h
 // =========================
-async function createWashingProduksi(payload) {
+async function createWashingProduksi(payload, ctx) {
+  // ===============================
+  // 0) Validasi payload basic (business)
+  // ===============================
+  const body = payload && typeof payload === 'object' ? payload : {};
+
   const must = [];
-  if (!payload?.tglProduksi) must.push('tglProduksi');
-  if (payload?.idMesin == null) must.push('idMesin');
-  if (payload?.idOperator == null) must.push('idOperator');
-  if (payload?.jamKerja == null) must.push('jamKerja');
-  if (payload?.shift == null) must.push('shift');
+  if (!body?.tglProduksi) must.push('tglProduksi');
+  if (body?.idMesin == null) must.push('idMesin');
+  if (body?.idOperator == null) must.push('idOperator');
+  if (body?.shift == null) must.push('shift');
   if (must.length) throw badReq(`Field wajib: ${must.join(', ')}`);
+
+  // jamKerja bisa dari body.jamKerja atau dihitung dari hourStart-hourEnd (biar konsisten dg broker)
+  let jamKerja = body?.jamKerja ?? null;
+  if (jamKerja == null) {
+    const calc = calcJamKerjaFromStartEnd(body?.hourStart, body?.hourEnd);
+    if (calc != null) jamKerja = calc;
+  }
+  if (jamKerja == null) throw badReq('Field wajib: jamKerja (atau isi hourStart-hourEnd)');
+
+  const jamInt = parseJamToInt(jamKerja);
+  const docDateOnly = toDateOnly(body.tglProduksi);
+
+  // ===============================
+  // 1) Validasi + normalisasi ctx (audit)
+  // ===============================
+  const actorIdNum = Number(ctx?.actorId);
+  if (!Number.isFinite(actorIdNum) || actorIdNum <= 0) {
+    throw badReq('ctx.actorId wajib. Controller harus inject dari token.');
+  }
+
+  const actorUsername = String(ctx?.actorUsername || '').trim() || 'system';
+  const requestId = String(ctx?.requestId || '').trim(); // boleh kosong, applyAuditContext akan fallback
+
+  const auditCtx = {
+    actorId: Math.trunc(actorIdNum),
+    actorUsername,
+    requestId,
+  };
 
   const pool = await poolPromise;
   const tx = new sql.Transaction(pool);
   await tx.begin(sql.ISOLATION_LEVEL.SERIALIZABLE);
 
   try {
-    // -------------------------------------------------------
-    // 0) NORMALISASI TANGGAL CREATE -> docDateOnly (date-only)
-    // -------------------------------------------------------
-    const docDateOnly = resolveEffectiveDateForCreate(payload.tglProduksi);
+    // =====================================================
+    // 2) Set SESSION_CONTEXT untuk trigger audit (1x di awal tx)
+    // =====================================================
+    const auditReq = new sql.Request(tx);
+    const audit = await applyAuditContext(auditReq, auditCtx);
 
-    // -------------------------------------------------------
-    // 1) GUARD TUTUP TRANSAKSI (CREATE = WRITE, pakai lock)
-    // -------------------------------------------------------
+    // =====================================================
+    // 3) Guard tutup transaksi (CREATE = WRITE)
+    // =====================================================
     await assertNotLocked({
       date: docDateOnly,
-      runner: tx,                 // IMPORTANT: pakai tx
+      runner: tx,
       action: 'create WashingProduksi',
       useLock: true,
     });
 
-    // -------------------------------------------------------
-    // 2) GENERATE NoProduksi
-    // -------------------------------------------------------
-    const no1 = await generateNextNoProduksiWashing(tx, { prefix: 'C.', width: 10 });
+    // =====================================================
+    // 4) Generate NoProduksi
+    // =====================================================
+    const gen = async () =>
+      generateNextCode(tx, {
+        tableName: 'dbo.WashingProduksi_h',
+        columnName: 'NoProduksi',
+        prefix: 'C.',
+        width: 10,
+      });
 
-    const rqCheck = new sql.Request(tx);
-    const exist = await rqCheck
-      .input('NoProduksi', sql.VarChar(50), no1)
+    let noProduksi = await gen();
+
+    // optional double-check (lebih bagus kalau kolom ada UNIQUE)
+    const exist = await new sql.Request(tx)
+      .input('NoProduksi', sql.VarChar(50), noProduksi)
       .query(`
         SELECT 1
         FROM dbo.WashingProduksi_h WITH (UPDLOCK, HOLDLOCK)
         WHERE NoProduksi = @NoProduksi
       `);
 
-    const noProduksi = exist.recordset.length
-      ? await generateNextNoProduksiWashing(tx, { prefix: 'C.', width: 10 })
-      : no1;
+    if (exist.recordset.length > 0) {
+      const retry = await gen();
+      const exist2 = await new sql.Request(tx)
+        .input('NoProduksi', sql.VarChar(50), retry)
+        .query(`
+          SELECT 1
+          FROM dbo.WashingProduksi_h WITH (UPDLOCK, HOLDLOCK)
+          WHERE NoProduksi = @NoProduksi
+        `);
 
-    // -------------------------------------------------------
-    // 3) INSERT HEADER (pakai docDateOnly)
-    // -------------------------------------------------------
-    const jamInt = parseJamToInt(payload.jamKerja);
+      if (exist2.recordset.length > 0) {
+        throw conflict('Gagal generate NoProduksi unik, coba lagi.');
+      }
+      noProduksi = retry;
+    }
 
+    // =====================================================
+    // 5) Insert header (FIX: OUTPUT ... INTO @out)
+    // =====================================================
     const rqIns = new sql.Request(tx);
     rqIns
       .input('NoProduksi',  sql.VarChar(50),     noProduksi)
-      .input('IdOperator',  sql.Int,            payload.idOperator)
-      .input('IdMesin',     sql.Int,            payload.idMesin)
-      .input('TglProduksi', sql.Date,           docDateOnly) // ✅ date-only
-      .input('JamKerja',    sql.Int,            jamInt)
-      .input('Shift',       sql.Int,            payload.shift)
-      .input('CreateBy',    sql.VarChar(100),   payload.createBy)
-      .input('CheckBy1',    sql.VarChar(100),   payload.checkBy1 ?? null)
-      .input('CheckBy2',    sql.VarChar(100),   payload.checkBy2 ?? null)
-      .input('ApproveBy',   sql.VarChar(100),   payload.approveBy ?? null)
-      .input('JmlhAnggota', sql.Int,            payload.jmlhAnggota ?? null)
-      .input('Hadir',       sql.Int,            payload.hadir ?? null)
-      .input('HourMeter',   sql.Decimal(18, 2), payload.hourMeter ?? null)
-      .input('HourStart',   sql.VarChar(20),    payload.hourStart ?? null)
-      .input('HourEnd',     sql.VarChar(20),    payload.hourEnd ?? null);
+      .input('TglProduksi', sql.Date,            docDateOnly)
+      .input('IdMesin',     sql.Int,             body.idMesin)
+      .input('IdOperator',  sql.Int,             body.idOperator)
+      .input('JamKerja',    sql.Int,             jamInt)
+      .input('Shift',       sql.Int,             body.shift)
+      .input('CreateBy',    sql.VarChar(100),    body.createBy) // controller overwrite dari token
+      .input('CheckBy1',    sql.VarChar(100),    body.checkBy1 ?? null)
+      .input('CheckBy2',    sql.VarChar(100),    body.checkBy2 ?? null)
+      .input('ApproveBy',   sql.VarChar(100),    body.approveBy ?? null)
+      .input('JmlhAnggota', sql.Int,             body.jmlhAnggota ?? null)
+      .input('Hadir',       sql.Int,             body.hadir ?? null)
+      .input('HourMeter',   sql.Decimal(18, 2),  body.hourMeter ?? null)
+      // kirim string, biar SQL yang CAST ke time(7)
+      .input('HourStart',   sql.VarChar(20),     body.hourStart ?? null)
+      .input('HourEnd',     sql.VarChar(20),     body.hourEnd ?? null);
 
     const insertSql = `
+      DECLARE @out TABLE (
+        NoProduksi   varchar(50),
+        TglProduksi  date,
+        IdMesin      int,
+        IdOperator   int,
+        JamKerja     int,
+        Shift        int,
+        CreateBy     varchar(100),
+        CheckBy1     varchar(100),
+        CheckBy2     varchar(100),
+        ApproveBy    varchar(100),
+        JmlhAnggota  int,
+        Hadir        int,
+        HourMeter    decimal(18,2),
+        HourStart    time(7),
+        HourEnd      time(7)
+      );
+
       INSERT INTO dbo.WashingProduksi_h (
         NoProduksi,
-        IdOperator,
-        IdMesin,
         TglProduksi,
+        IdMesin,
+        IdOperator,
         JamKerja,
         Shift,
         CreateBy,
@@ -273,12 +297,28 @@ async function createWashingProduksi(payload) {
         HourStart,
         HourEnd
       )
-      OUTPUT INSERTED.*
+      OUTPUT
+        INSERTED.NoProduksi,
+        INSERTED.TglProduksi,
+        INSERTED.IdMesin,
+        INSERTED.IdOperator,
+        INSERTED.JamKerja,
+        INSERTED.Shift,
+        INSERTED.CreateBy,
+        INSERTED.CheckBy1,
+        INSERTED.CheckBy2,
+        INSERTED.ApproveBy,
+        INSERTED.JmlhAnggota,
+        INSERTED.Hadir,
+        INSERTED.HourMeter,
+        INSERTED.HourStart,
+        INSERTED.HourEnd
+      INTO @out
       VALUES (
         @NoProduksi,
-        @IdOperator,
-        @IdMesin,
         @TglProduksi,
+        @IdMesin,
+        @IdOperator,
         @JamKerja,
         @Shift,
         @CreateBy,
@@ -288,17 +328,21 @@ async function createWashingProduksi(payload) {
         @JmlhAnggota,
         @Hadir,
         @HourMeter,
-        CASE WHEN @HourStart IS NULL OR LTRIM(RTRIM(@HourStart)) = '' THEN NULL
-             ELSE CAST(@HourStart AS time(7)) END,
-        CASE WHEN @HourEnd IS NULL OR LTRIM(RTRIM(@HourEnd)) = '' THEN NULL
-             ELSE CAST(@HourEnd AS time(7)) END
+        CASE WHEN @HourStart IS NULL OR LTRIM(RTRIM(@HourStart)) = '' THEN NULL ELSE CAST(@HourStart AS time(7)) END,
+        CASE WHEN @HourEnd   IS NULL OR LTRIM(RTRIM(@HourEnd))   = '' THEN NULL ELSE CAST(@HourEnd   AS time(7)) END
       );
+
+      SELECT * FROM @out;
     `;
 
     const insRes = await rqIns.query(insertSql);
 
     await tx.commit();
-    return { header: insRes.recordset?.[0] || null };
+
+    return {
+      header: insRes.recordset?.[0] || null,
+      audit, // optional debug / tracing
+    };
   } catch (e) {
     try { await tx.rollback(); } catch (_) {}
     throw e;
@@ -328,7 +372,7 @@ async function createWashingProduksi(payload) {
  * @returns {object} { header: updatedRecord }
  */
 
-async function updateWashingProduksi(noProduksi, payload) {
+async function updateWashingProduksi(noProduksi, payload, ctx) {
   if (!noProduksi) throw badReq('noProduksi wajib');
 
   const pool = await poolPromise;
@@ -336,20 +380,36 @@ async function updateWashingProduksi(noProduksi, payload) {
   await tx.begin(sql.ISOLATION_LEVEL.SERIALIZABLE);
 
   try {
+    // =====================================================
+    // 0) Set SESSION_CONTEXT untuk trigger audit (1x di awal tx)
+    // =====================================================
+    const actorIdNum = Number(ctx?.actorId);
+    if (!Number.isFinite(actorIdNum) || actorIdNum <= 0) {
+      throw badReq('ctx.actorId wajib. Controller harus inject dari token.');
+    }
+    const actorUsername = String(ctx?.actorUsername || '').trim() || 'system';
+    const requestId = String(ctx?.requestId || '').trim();
+
+    const auditReq = new sql.Request(tx);
+    await applyAuditContext(auditReq, {
+      actorId: Math.trunc(actorIdNum),
+      actorUsername,
+      requestId,
+    });
+
     // -------------------------------------------------------
-    // 0) AMBIL docDateOnly DARI CONFIG (LOCK HEADER ROW)
-    //    menggantikan SELECT WashingProduksi_h manual
+    // 1) AMBIL docDateOnly DARI CONFIG (LOCK HEADER ROW)
     // -------------------------------------------------------
     const { docDateOnly: oldDocDateOnly } = await loadDocDateOnlyFromConfig({
-      entityKey: 'washingProduksi', // ⛳️ SESUAIKAN dengan config tutup-transaksi
+      entityKey: 'washingProduksi', // pastikan sesuai config tutup-transaksi
       codeValue: noProduksi,
       runner: tx,
-      useLock: true,               // UPDATE = write
+      useLock: true,
       throwIfNotFound: true,
     });
 
     // -------------------------------------------------------
-    // 1) Jika user mengubah tanggal, hitung tanggal barunya (date-only)
+    // 2) Jika user mengubah tanggal, hitung tanggal barunya (date-only)
     // -------------------------------------------------------
     const isChangingDate = payload?.tglProduksi !== undefined;
     let newDocDateOnly = null;
@@ -360,9 +420,7 @@ async function updateWashingProduksi(noProduksi, payload) {
     }
 
     // -------------------------------------------------------
-    // 2) GUARD TUTUP TRANSAKSI
-    //    - cek tanggal lama
-    //    - kalau ganti tanggal, cek tanggal baru juga
+    // 3) GUARD TUTUP TRANSAKSI
     // -------------------------------------------------------
     await assertNotLocked({
       date: oldDocDateOnly,
@@ -381,7 +439,7 @@ async function updateWashingProduksi(noProduksi, payload) {
     }
 
     // -------------------------------------------------------
-    // 3) BUILD SET DINAMIS
+    // 4) BUILD SET DINAMIS
     // -------------------------------------------------------
     const sets = [];
     const rqUpd = new sql.Request(tx);
@@ -410,25 +468,6 @@ async function updateWashingProduksi(noProduksi, payload) {
       const jamInt = payload.jamKerja === null ? null : parseJamToInt(payload.jamKerja);
       sets.push('JamKerja = @JamKerja');
       rqUpd.input('JamKerja', sql.Int, jamInt);
-    }
-
-    // hourStart / hourEnd (aman kalau null / kosong)
-    if (payload.hourStart !== undefined) {
-      sets.push(`
-        HourStart =
-          CASE WHEN @HourStart IS NULL OR LTRIM(RTRIM(@HourStart)) = '' THEN NULL
-               ELSE CAST(@HourStart AS time(7)) END
-      `);
-      rqUpd.input('HourStart', sql.VarChar(20), payload.hourStart ?? null);
-    }
-
-    if (payload.hourEnd !== undefined) {
-      sets.push(`
-        HourEnd =
-          CASE WHEN @HourEnd IS NULL OR LTRIM(RTRIM(@HourEnd)) = '' THEN NULL
-               ELSE CAST(@HourEnd AS time(7)) END
-      `);
-      rqUpd.input('HourEnd', sql.VarChar(20), payload.hourEnd ?? null);
     }
 
     if (payload.checkBy1 !== undefined) {
@@ -461,28 +500,85 @@ async function updateWashingProduksi(noProduksi, payload) {
       rqUpd.input('HourMeter', sql.Decimal(18, 2), payload.hourMeter ?? null);
     }
 
+    // hourStart / hourEnd (lebih aman kalau null / kosong)
+    if (payload.hourStart !== undefined) {
+      sets.push(`
+        HourStart =
+          CASE WHEN @HourStart IS NULL OR LTRIM(RTRIM(@HourStart)) = '' THEN NULL
+               ELSE CAST(@HourStart AS time(7)) END
+      `);
+      rqUpd.input('HourStart', sql.VarChar(20), payload.hourStart ?? null);
+    }
+
+    if (payload.hourEnd !== undefined) {
+      sets.push(`
+        HourEnd =
+          CASE WHEN @HourEnd IS NULL OR LTRIM(RTRIM(@HourEnd)) = '' THEN NULL
+               ELSE CAST(@HourEnd AS time(7)) END
+      `);
+      rqUpd.input('HourEnd', sql.VarChar(20), payload.hourEnd ?? null);
+    }
+
     if (sets.length === 0) throw badReq('No fields to update');
 
     rqUpd.input('NoProduksi', sql.VarChar(50), noProduksi);
 
+    // -------------------------------------------------------
+    // 5) UPDATE + RETURN row (FIX: OUTPUT ... INTO @out)
+    // -------------------------------------------------------
     const updateSql = `
+      DECLARE @out TABLE (
+        NoProduksi   varchar(50),
+        TglProduksi  date,
+        IdMesin      int,
+        IdOperator   int,
+        JamKerja     int,
+        Shift        int,
+        CreateBy     varchar(100),
+        CheckBy1     varchar(100),
+        CheckBy2     varchar(100),
+        ApproveBy    varchar(100),
+        JmlhAnggota  int,
+        Hadir        int,
+        HourMeter    decimal(18,2),
+        HourStart    time(7),
+        HourEnd      time(7)
+      );
+
       UPDATE dbo.WashingProduksi_h
       SET ${sets.join(', ')}
+      OUTPUT
+        INSERTED.NoProduksi,
+        INSERTED.TglProduksi,
+        INSERTED.IdMesin,
+        INSERTED.IdOperator,
+        INSERTED.JamKerja,
+        INSERTED.Shift,
+        INSERTED.CreateBy,
+        INSERTED.CheckBy1,
+        INSERTED.CheckBy2,
+        INSERTED.ApproveBy,
+        INSERTED.JmlhAnggota,
+        INSERTED.Hadir,
+        INSERTED.HourMeter,
+        INSERTED.HourStart,
+        INSERTED.HourEnd
+      INTO @out
       WHERE NoProduksi = @NoProduksi;
 
-      SELECT *
-      FROM dbo.WashingProduksi_h
-      WHERE NoProduksi = @NoProduksi;
+      SELECT * FROM @out;
     `;
 
     const updRes = await rqUpd.query(updateSql);
     const updatedHeader = updRes.recordset?.[0] || null;
 
+    if (!updatedHeader) throw notFound(`NoProduksi tidak ditemukan: ${noProduksi}`);
+
     // -------------------------------------------------------
-    // 4) Jika TglProduksi berubah → sync DateUsage full + partial
-    //    pakai tanggal hasil DB biar konsisten
+    // 6) Jika TglProduksi berubah → (optional) sinkron DateUsage
+    //    pakai tanggal hasil DB agar konsisten
     // -------------------------------------------------------
-    if (isChangingDate && updatedHeader) {
+    if (isChangingDate) {
       const usageDate = resolveEffectiveDateForCreate(updatedHeader.TglProduksi);
 
       const rqUsage = new sql.Request(tx);
@@ -492,7 +588,7 @@ async function updateWashingProduksi(noProduksi, payload) {
 
       const sqlUpdateUsage = `
         -------------------------------------------------------
-        -- BAHAN BAKU (FULL + PARTIAL)  [sesuaikan tabel mapping kamu]
+        -- BAHAN BAKU (FULL + PARTIAL)  [sesuaikan mapping tabelmu]
         -------------------------------------------------------
         UPDATE bb
         SET bb.DateUsage = @TglProduksi
@@ -521,7 +617,7 @@ async function updateWashingProduksi(noProduksi, payload) {
           );
 
         -------------------------------------------------------
-        -- WASHING INPUT (FULL ONLY)
+        -- (CONTOH) WASHING (kalau WashingProduksi juga consume Washing_d)
         -------------------------------------------------------
         UPDATE w
         SET w.DateUsage = @TglProduksi
@@ -536,7 +632,7 @@ async function updateWashingProduksi(noProduksi, payload) {
           );
 
         -------------------------------------------------------
-        -- GILINGAN (FULL + PARTIAL)
+        -- (CONTOH) GILINGAN (FULL + PARTIAL)
         -------------------------------------------------------
         UPDATE g
         SET g.DateUsage = @TglProduksi
@@ -574,12 +670,11 @@ async function updateWashingProduksi(noProduksi, payload) {
 
 
 
-
 /**
  * Delete washing production header + inputs + reset DateUsage
  * @param {string} noProduksi
  */
-async function deleteWashingProduksi(noProduksi) {
+async function deleteWashingProduksi(noProduksi, ctx) {
   if (!noProduksi) throw badReq('noProduksi wajib');
 
   const pool = await poolPromise;
@@ -587,12 +682,28 @@ async function deleteWashingProduksi(noProduksi) {
   await tx.begin(sql.ISOLATION_LEVEL.SERIALIZABLE);
 
   try {
+    // =====================================================
+    // 0) Set SESSION_CONTEXT untuk trigger audit (1x di awal tx)
+    // =====================================================
+    const actorIdNum = Number(ctx?.actorId);
+    if (!Number.isFinite(actorIdNum) || actorIdNum <= 0) {
+      throw badReq('ctx.actorId wajib. Controller harus inject dari token.');
+    }
+    const actorUsername = String(ctx?.actorUsername || '').trim() || 'system';
+    const requestId = String(ctx?.requestId || '').trim();
+
+    const auditReq = new sql.Request(tx);
+    await applyAuditContext(auditReq, {
+      actorId: Math.trunc(actorIdNum),
+      actorUsername,
+      requestId,
+    });
+
     // -------------------------------------------------------
-    // 0) AMBIL docDateOnly DARI CONFIG (LOCK HEADER ROW)
-    //    GANTI SELECT WashingProduksi_h manual (tglProduksi)
+    // 1) AMBIL docDateOnly DARI CONFIG (LOCK HEADER ROW)
     // -------------------------------------------------------
     const { docDateOnly } = await loadDocDateOnlyFromConfig({
-      entityKey: 'washingProduksi', // ⛳️ SESUAIKAN dengan config tutup-transaksi
+      entityKey: 'washingProduksi', // pastikan sesuai config tutup-transaksi
       codeValue: noProduksi,
       runner: tx,
       useLock: true,               // DELETE = write action
@@ -600,7 +711,7 @@ async function deleteWashingProduksi(noProduksi) {
     });
 
     // -------------------------------------------------------
-    // 1) GUARD TUTUP TRANSAKSI (DELETE = WRITE)
+    // 2) GUARD TUTUP TRANSAKSI (DELETE = WRITE)
     // -------------------------------------------------------
     await assertNotLocked({
       date: docDateOnly,
@@ -610,7 +721,7 @@ async function deleteWashingProduksi(noProduksi) {
     });
 
     // -------------------------------------------------------
-    // 2) CEK DULU: SUDAH PUNYA OUTPUT ATAU BELUM
+    // 3) CEK DULU: SUDAH PUNYA OUTPUT ATAU BELUM
     // -------------------------------------------------------
     const rqCheck = new sql.Request(tx);
     const outCheck = await rqCheck
@@ -629,8 +740,7 @@ async function deleteWashingProduksi(noProduksi) {
     }
 
     // -------------------------------------------------------
-    // 3) LANJUT DELETE INPUT + PARTIAL + RESET DATEUSAGE
-    //    (SQL BESAR kamu tetap)
+    // 4) DELETE INPUT + PARTIAL + RESET DATEUSAGE + DELETE HEADER (OUTPUT INTO)
     // -------------------------------------------------------
     const req = new sql.Request(tx);
     req.input('NoProduksi', sql.VarChar(50), noProduksi);
@@ -650,14 +760,47 @@ async function deleteWashingProduksi(noProduksi) {
       DECLARE @GilinganKeys TABLE ( NoGilingan varchar(50) );
 
       ---------------------------------------------------------
+      -- OUT TABLE: RETURN HEADER YANG TERHAPUS
+      ---------------------------------------------------------
+      DECLARE @outHeader TABLE (
+        NoProduksi   varchar(50),
+        TglProduksi  date,
+        IdMesin      int,
+        IdOperator   int,
+        JamKerja     int,
+        Shift        int,
+        CreateBy     varchar(100),
+        CheckBy1     varchar(100),
+        CheckBy2     varchar(100),
+        ApproveBy    varchar(100),
+        JmlhAnggota  int,
+        Hadir        int,
+        HourMeter    decimal(18,2),
+        HourStart    time(7),
+        HourEnd      time(7)
+      );
+
+      ---------------------------------------------------------
+      -- 0. PASTIKAN HEADER ADA (kalau tidak, stop cepat)
+      ---------------------------------------------------------
+      IF NOT EXISTS (SELECT 1 FROM dbo.WashingProduksi_h WITH (UPDLOCK, HOLDLOCK) WHERE NoProduksi = @NoProduksi)
+      BEGIN
+        SELECT * FROM @outHeader;
+        RETURN;
+      END
+
+      ---------------------------------------------------------
       -- 1. BAHAN BAKU (FULL + PARTIAL)
+      --    NOTE: sesuaikan nama mapping FULL BB kamu:
+      --          (a) WashingProduksiInputBB  <-- rekomendasi
+      --          (b) atau WashingProduksiInput (punya kolom NoBahanBaku/NoPallet/NoSak)
       ---------------------------------------------------------
       INSERT INTO @BBKeys (NoBahanBaku, NoPallet, NoSak)
       SELECT DISTINCT bb.NoBahanBaku, bb.NoPallet, bb.NoSak
       FROM dbo.BahanBaku_d AS bb
       WHERE EXISTS (
               SELECT 1
-              FROM dbo.WashingProduksiInput AS map
+              FROM dbo.WashingProduksiInputBB AS map
               WHERE map.NoProduksi   = @NoProduksi
                 AND map.NoBahanBaku  = bb.NoBahanBaku
                 AND ISNULL(map.NoPallet,'') = ISNULL(bb.NoPallet,'')
@@ -683,7 +826,7 @@ async function deleteWashingProduksi(noProduksi) {
       DELETE FROM dbo.WashingProduksiInputBBPartial
       WHERE NoProduksi = @NoProduksi;
 
-      DELETE FROM dbo.WashingProduksiInput
+      DELETE FROM dbo.WashingProduksiInputBB
       WHERE NoProduksi = @NoProduksi;
 
       UPDATE bb
@@ -761,22 +904,43 @@ async function deleteWashingProduksi(noProduksi) {
       JOIN @GilinganKeys AS k ON k.NoGilingan = g.NoGilingan;
 
       ---------------------------------------------------------
-      -- 4. TERAKHIR: HAPUS HEADER
+      -- 4. TERAKHIR: HAPUS HEADER (OUTPUT INTO) + RETURN
       ---------------------------------------------------------
       DELETE FROM dbo.WashingProduksi_h
+      OUTPUT
+        DELETED.NoProduksi,
+        DELETED.TglProduksi,
+        DELETED.IdMesin,
+        DELETED.IdOperator,
+        DELETED.JamKerja,
+        DELETED.Shift,
+        DELETED.CreateBy,
+        DELETED.CheckBy1,
+        DELETED.CheckBy2,
+        DELETED.ApproveBy,
+        DELETED.JmlhAnggota,
+        DELETED.Hadir,
+        DELETED.HourMeter,
+        DELETED.HourStart,
+        DELETED.HourEnd
+      INTO @outHeader
       WHERE NoProduksi = @NoProduksi;
+
+      SELECT * FROM @outHeader;
     `;
 
-    await req.query(sqlDelete);
+    const delRes = await req.query(sqlDelete);
+    const deletedHeader = delRes.recordset?.[0] || null;
+
+    if (!deletedHeader) throw notFound(`NoProduksi tidak ditemukan: ${noProduksi}`);
 
     await tx.commit();
-    return { success: true };
+    return { success: true, header: deletedHeader };
   } catch (e) {
     try { await tx.rollback(); } catch (_) {}
     throw e;
   }
 }
-
 
 
 

@@ -1,69 +1,64 @@
 // routes/gilingan-production-route.js
-const express = require('express');
+const express = require("express");
 const router = express.Router();
 
-const verifyToken = require('../../../core/middleware/verify-token');
-const gilinganProduksiController = require('./gilingan-production-controller');
+const verifyToken = require("../../../core/middleware/verify-token");
+const gilinganProduksiController = require("./gilingan-production-controller");
 
 // GET GilinganProduksi_h by date (YYYY-MM-DD)
 router.get(
-  '/gilingan/:date(\\d{4}-\\d{2}-\\d{2})',
+  "/gilingan/:date(\\d{4}-\\d{2}-\\d{2})",
   verifyToken,
-  gilinganProduksiController.getProduksiByDate
+  gilinganProduksiController.getProduksiByDate,
 );
-
 
 // GET /gilingan/produksi?page=1&pageSize=20&search=G.00001
-router.get(
-  '/gilingan',
-  verifyToken,
-  gilinganProduksiController.getAllProduksi
-);
+router.get("/gilingan", verifyToken, gilinganProduksiController.getAllProduksi);
 
 router.post(
-  '/gilingan',
+  "/gilingan",
   verifyToken,
-  gilinganProduksiController.createProduksi
+  gilinganProduksiController.createProduksi,
 );
-
 
 // UPDATE
 router.put(
-  '/gilingan/:noProduksi',
+  "/gilingan/:noProduksi",
   verifyToken,
-  gilinganProduksiController.updateProduksi
+  gilinganProduksiController.updateProduksi,
 );
-
 
 // DELETE
 router.delete(
-  '/gilingan/:noProduksi',
+  "/gilingan/:noProduksi",
   verifyToken,
-  gilinganProduksiController.deleteProduksi
+  gilinganProduksiController.deleteProduksi,
 );
-
 
 // routes/gilingan-produksi.js
 router.get(
-  '/gilingan/:noProduksi/inputs',
+  "/gilingan/:noProduksi/inputs",
   verifyToken,
-  gilinganProduksiController.getInputsByNoProduksi
+  gilinganProduksiController.getInputsByNoProduksi,
 );
 
 // Add this route after your existing routes
-router.get('/gilingan/validate-label/:labelCode', verifyToken, gilinganProduksiController.validateLabel);
-
-router.post(
-  '/gilingan/:noProduksi/inputs',
+router.get(
+  "/gilingan/validate-label/:labelCode",
   verifyToken,
-  gilinganProduksiController.upsertInputsAndPartials
+  gilinganProduksiController.validateLabel,
 );
 
+router.post(
+  "/gilingan/:noProduksi/inputs",
+  verifyToken,
+  gilinganProduksiController.upsertInputsAndPartials,
+);
 
 router.delete(
-  '/gilingan/:noProduksi/inputs',
+  "/gilingan/:noProduksi/inputs",
   verifyToken,
-  gilinganProduksiController.deleteInputsAndPartials
+  gilinganProduksiController.deleteInputsAndPartials,
 );
 
 module.exports = router;

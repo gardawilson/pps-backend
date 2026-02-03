@@ -1,6 +1,7 @@
 // controllers/mixer-production-controller.js
 const mixerProduksiService = require('./mixer-production-service');
 const { getActorId, getActorUsername, makeRequestId } = require('../../../core/utils/http-context');
+const { toInt, toFloat, normalizeTime } = require('../../../core/utils/parse');
 
 
 async function getProduksiByDate(req, res) {
@@ -82,61 +83,110 @@ async function getAllProduksi(req, res) {
   }
 }
 
+
+
 async function createProduksi(req, res) {
   try {
-    // dari verifyToken middleware
-    const username = req.username || req.user?.username || 'system';
+    // ===============================
+    // Audit context
+    // ===============================
+    const actorId = getActorId(req); // dari token / middleware
+    if (!actorId) {
+      return res.status(401).json({ success: false, message: 'Unauthorized (actorId missing)' });
+    }
 
-    const b = req.body || {};
+    const actorUsername = getActorUsername(req) || req.username || req.user?.username || 'system';
+    const requestId = String(makeRequestId(req) || '').trim();
+    if (requestId) res.setHeader('x-request-id', requestId);
 
-    const toInt = (v) => {
-      if (v === undefined || v === null || v === '') return null;
-      const n = Number(v);
-      return Number.isNaN(n) ? null : n;
-    };
+    // ===============================
+    // Body tanpa audit fields dari client
+    // ===============================
+    const body = req.body && typeof req.body === 'object' ? req.body : {};
+    const { actorId: _cActorId, actorUsername: _cActorUsername, actor: _cActor, requestId: _cRequestId, ...b } = body;
 
-    const toFloat = (v) => {
-      if (v === undefined || v === null || v === '') return null;
-      const n = Number(v);
-      return Number.isNaN(n) ? null : n;
-    };
-
+    // ===============================
+    // Payload business
+    // ===============================
     const payload = {
-      tglProduksi: b.tglProduksi,                 // 'YYYY-MM-DD'
+      tglProduksi: b.tglProduksi,             // 'YYYY-MM-DD'
       idMesin: toInt(b.idMesin),
       idOperator: toInt(b.idOperator),
-      jam: b.jam,                                 // number or 'HH:mm-HH:mm'
+      jam: b.jam,                             // number or 'HH:mm-HH:mm'
       shift: toInt(b.shift),
-      createBy: username,
-      checkBy1: b.checkBy1,
-      checkBy2: b.checkBy2,
-      approveBy: b.approveBy,
+      createBy: actorUsername,
+      checkBy1: b.checkBy1 ?? null,
+      checkBy2: b.checkBy2 ?? null,
+      approveBy: b.approveBy ?? null,
       jmlhAnggota: toInt(b.jmlhAnggota),
       hadir: toInt(b.hadir),
       hourMeter: toFloat(b.hourMeter),
-      hourStart: b.hourStart || null,             // '08:00:00'
-      hourEnd: b.hourEnd || null,                 // '09:00:00'
+      hourStart: b.hourStart || null,         // '08:00:00'
+      hourEnd: b.hourEnd || null,             // '09:00:00'
     };
 
-    const result = await mixerProduksiService.createMixerProduksi(payload);
+    // ===============================
+    // Quick validation
+    // ===============================
+    const must = [];
+    if (!payload.tglProduksi) must.push('tglProduksi');
+    if (payload.idMesin == null) must.push('idMesin');
+    if (payload.idOperator == null) must.push('idOperator');
+    if (!payload.jam) must.push('jam');
+    if (payload.shift == null) must.push('shift');
+
+    if (must.length) {
+      return res.status(400).json({
+        success: false,
+        message: `Field wajib: ${must.join(', ')}`,
+        error: { fields: must },
+      });
+    }
+
+    // ===============================
+    // Call service
+    // ===============================
+    const result = await mixerProduksiService.createMixerProduksi(payload, {
+      actorId,
+      actorUsername,
+      requestId,
+    });
+
+    const header = result?.header ?? result;
 
     return res.status(201).json({
       success: true,
       message: 'Created',
-      data: result.header,
+      data: header,
+      meta: { audit: { actorId, actorUsername, requestId } },
     });
   } catch (err) {
-    const status = err.statusCode || 500;
+    console.error('[Mixer][createProduksi]', err);
+    const status = err.statusCode || err.status || 500;
     return res.status(status).json({
       success: false,
-      message: err.message || 'Internal Error',
+      message: status === 500 ? 'Internal Server Error' : (err.message || 'Error'),
+      error: {
+        message: err.message,
+        details: process.env.NODE_ENV === 'development' ? err.stack : undefined,
+      },
+      meta: {
+        audit:
+          err.actorId && err.actorUsername
+            ? { actorId: err.actorId, actorUsername: err.actorUsername, requestId: err.requestId }
+            : undefined,
+      },
     });
   }
 }
+
 
 
 async function updateProduksi(req, res) {
   try {
+    // ===============================
+    // Route param check
+    // ===============================
     const noProduksi = req.params.noProduksi;
     if (!noProduksi) {
       return res.status(400).json({
@@ -145,61 +195,84 @@ async function updateProduksi(req, res) {
       });
     }
 
-    const username = req.username || req.user?.username || 'system';
-    const b = req.body || {};
+    // ===============================
+    // Audit context
+    // ===============================
+    const actorId = getActorId(req);
+    if (!actorId) {
+      return res.status(401).json({
+        success: false,
+        message: 'Unauthorized (actorId missing)',
+      });
+    }
 
-    const toInt = (v) => {
-      if (v === undefined || v === null || v === '') return null;
-      const n = Number(v);
-      return Number.isNaN(n) ? null : n;
-    };
-    const toFloat = (v) => {
-      if (v === undefined || v === null || v === '') return null;
-      const n = Number(v);
-      return Number.isNaN(n) ? null : n;
-    };
+    const actorUsername = getActorUsername(req) || req.username || req.user?.username || 'system';
+    const requestId = String(makeRequestId(req) || '').trim();
+    if (requestId) res.setHeader('x-request-id', requestId);
 
-    const has = (k) => Object.prototype.hasOwnProperty.call(b, k);
+    // ===============================
+    // Body tanpa audit fields dari client
+    // ===============================
+    const body = req.body && typeof req.body === 'object' ? req.body : {};
+    const { actorId: _cActorId, actorUsername: _cActorUsername, actor: _cActor, requestId: _cRequestId, ...b } = body;
 
+    // ===============================
+    // Payload business (partial update)
+    // ===============================
     const payload = {
-      tglProduksi: has('tglProduksi') ? b.tglProduksi : undefined,
-      idMesin: has('idMesin') ? toInt(b.idMesin) : undefined,
-      idOperator: has('idOperator') ? toInt(b.idOperator) : undefined,
-      jam: has('jam') ? b.jam : undefined,
-      shift: has('shift') ? toInt(b.shift) : undefined,
+      tglProduksi: b.tglProduksi,
+      idMesin: toInt(b.idMesin),
+      idOperator: toInt(b.idOperator),
+      shift: toInt(b.shift),
+      jam: b.jam,
 
-      updateBy: username,
+      checkBy1: b.checkBy1 ?? undefined,
+      checkBy2: b.checkBy2 ?? undefined,
+      approveBy: b.approveBy ?? undefined,
+      jmlhAnggota: toInt(b.jmlhAnggota),
+      hadir: toInt(b.hadir),
+      hourMeter: toFloat(b.hourMeter),
 
-      checkBy1: has('checkBy1') ? b.checkBy1 : undefined,
-      checkBy2: has('checkBy2') ? b.checkBy2 : undefined,
-      approveBy: has('approveBy') ? b.approveBy : undefined,
-      jmlhAnggota: has('jmlhAnggota') ? toInt(b.jmlhAnggota) : undefined,
-      hadir: has('hadir') ? toInt(b.hadir) : undefined,
-      hourMeter: has('hourMeter') ? toFloat(b.hourMeter) : undefined,
-
-      hourStart: has('hourStart') ? (b.hourStart ?? null) : undefined,
-      hourEnd: has('hourEnd') ? (b.hourEnd ?? null) : undefined,
+      hourStart: normalizeTime(b.hourStart),
+      hourEnd: normalizeTime(b.hourEnd),
     };
 
-    const result = await mixerProduksiService.updateMixerProduksi(noProduksi, payload);
+    // ===============================
+    // Call service
+    // ===============================
+    const ctx = { actorId, actorUsername, requestId };
+    const result = await mixerProduksiService.updateMixerProduksi(noProduksi, payload, ctx);
+    const header = result?.header ?? result;
 
     return res.status(200).json({
       success: true,
       message: 'Updated',
-      data: result.header,
+      data: header,
+      meta: { audit: { actorId, actorUsername, requestId } },
     });
   } catch (err) {
-    const status = err.statusCode || 500;
+    console.error('[Mixer][updateProduksi]', err);
+    const status = err.statusCode || err.status || 500;
+
     return res.status(status).json({
       success: false,
-      message: err.message || 'Internal Error',
+      message: status === 500 ? 'Internal Server Error' : (err.message || 'Error'),
+      error: {
+        message: err.message,
+        details: process.env.NODE_ENV === 'development' ? err.stack : undefined,
+      },
+      meta: { audit: { actorId: getActorId(req), actorUsername: getActorUsername(req), requestId: makeRequestId(req) } },
     });
   }
 }
 
 
+
 async function deleteProduksi(req, res) {
   try {
+    // ===============================
+    // Validasi route param
+    // ===============================
     const noProduksi = req.params.noProduksi;
     if (!noProduksi) {
       return res.status(400).json({
@@ -208,17 +281,49 @@ async function deleteProduksi(req, res) {
       });
     }
 
-    await mixerProduksiService.deleteMixerProduksi(noProduksi);
+    // ===============================
+    // Audit context
+    // ===============================
+    const actorId = getActorId(req);
+    if (!actorId) {
+      return res.status(401).json({
+        success: false,
+        message: 'Unauthorized (idUsername missing)',
+      });
+    }
+
+    const actorUsername = getActorUsername(req) || req.username || req.user?.username || 'system';
+    const requestId = String(makeRequestId(req) || '').trim();
+    if (requestId) res.setHeader('x-request-id', requestId);
+
+    const ctx = { actorId, actorUsername, requestId };
+
+    // ===============================
+    // Call service
+    // ===============================
+    await mixerProduksiService.deleteMixerProduksi(noProduksi, ctx);
 
     return res.status(200).json({
       success: true,
       message: 'Deleted',
+      meta: { audit: ctx },
     });
   } catch (err) {
-    const status = err.statusCode || 500;
+    console.error('[Mixer][deleteProduksi]', err);
+    const status = err.statusCode || err.status || 500;
+
     return res.status(status).json({
       success: false,
-      message: err.message || 'Internal Error',
+      message: status === 500 ? 'Internal Server Error' : (err.message || 'Error'),
+      error: {
+        message: err.message,
+        details: process.env.NODE_ENV === 'development' ? err.stack : undefined,
+      },
+      meta: { audit: {
+        actorId: err.actorId || null,
+        actorUsername: err.actorUsername || null,
+        requestId: err.requestId || null,
+      }},
     });
   }
 }

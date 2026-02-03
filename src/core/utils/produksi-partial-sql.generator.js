@@ -9,7 +9,7 @@ const {
   PARTIAL_CONFIGS,
   PRODUKSI_CONFIGS,
   WEIGHT_TOLERANCE,
-} = require('../config/produksi-input-mapping.config'); // ✅ perhatikan path
+} = require("../config/produksi-input-mapping.config"); // ✅ perhatikan path
 
 /** =========================
  *  Helpers
@@ -26,21 +26,21 @@ function jsonPath(dbKey) {
 }
 
 function sqlTypeForKey(dbKey) {
-  const k = String(dbKey || '').toLowerCase();
-  if (k === 'nosak' || k === 'nopallet') return 'int';
-  return 'varchar(50)';
+  const k = String(dbKey || "").toLowerCase();
+  if (k === "nosak" || k === "nopallet") return "int";
+  return "varchar(50)";
 }
 
 /** weight column => json field (Berat -> berat, Pcs -> pcs) */
 function jsonFieldForWeight(config) {
-  return toCamelField(config.weightColumn || 'Berat');
+  return toCamelField(config.weightColumn || "Berat");
 }
 
 /** weight type: pcs -> int, lainnya -> decimal */
 function sqlTypeForWeight(config) {
-  const w = String(config.weightColumn || '').toLowerCase();
-  if (w === 'pcs') return 'int';
-  return 'decimal(18,3)';
+  const w = String(config.weightColumn || "").toLowerCase();
+  if (w === "pcs") return "int";
+  return "decimal(18,3)";
 }
 
 /**
@@ -64,7 +64,8 @@ function requestKeyForPartial(type) {
  */
 function generatePartialsInsertSQL(produksiType, requestedTypes) {
   const produksiConfig = PRODUKSI_CONFIGS[produksiType];
-  if (!produksiConfig) throw new Error(`Unknown produksi type: ${produksiType}`);
+  if (!produksiConfig)
+    throw new Error(`Unknown produksi type: ${produksiType}`);
 
   // aktifkan hanya partial type yang valid untuk produksiType ini
   const activeTypes = (requestedTypes || []).filter((type) => {
@@ -81,25 +82,27 @@ function generatePartialsInsertSQL(produksiType, requestedTypes) {
       const cfg = PARTIAL_CONFIGS[type];
       return `DECLARE @${type}New TABLE(${cfg.partialColumn} varchar(50));`;
     })
-    .join('\n');
+    .join("\n");
 
   const sections = activeTypes
-    .map((type) => _generateSinglePartialSection(type, PARTIAL_CONFIGS[type], produksiType))
-    .join('\n\n');
+    .map((type) =>
+      _generateSinglePartialSection(type, PARTIAL_CONFIGS[type], produksiType),
+    )
+    .join("\n\n");
 
   const summaryUnion = activeTypes
     .map((type) => {
       const sectionKey = requestKeyForPartial(type);
       return `SELECT '${sectionKey}' AS Section, COUNT(*) AS Created FROM @${type}New`;
     })
-    .join('\nUNION ALL\n');
+    .join("\nUNION ALL\n");
 
   const returnCodeSets = activeTypes
     .map((type) => {
       const cfg = PARTIAL_CONFIGS[type];
       return `SELECT ${cfg.partialColumn} FROM @${type}New;`;
     })
-    .join('\n');
+    .join("\n");
 
   return `
 SET NOCOUNT ON;
@@ -151,15 +154,17 @@ function _generateSinglePartialSection(type, config, produksiType) {
   const requestKey = requestKeyForPartial(type); // ✅ "$.furnitureWipPartial" atau "$.furnitureWipPartialNew"
 
   const keys = config.keys || [];
-  const keyFieldsDb = keys.join(', ');
-  const keyFieldsJson = keys.map(toCamelField).join(', ');
+  const keyFieldsDb = keys.join(", ");
+  const keyFieldsJson = keys.map(toCamelField).join(", ");
 
   const withClause = keys
     .map((k) => `${toCamelField(k)} ${sqlTypeForKey(k)} '${jsonPath(k)}'`)
-    .join(', ');
+    .join(", ");
 
-  const existingJoin = keys.map((k) => `ep.${k} = d.${k}`).join(' AND ');
-  const newJoin = keys.map((k) => `np.${toCamelField(k)} = d.${k}`).join(' AND ');
+  const existingJoin = keys.map((k) => `ep.${k} = d.${k}`).join(" AND ");
+  const newJoin = keys
+    .map((k) => `np.${toCamelField(k)} = d.${k}`)
+    .join(" AND ");
 
   // ✅ qty mapping (Berat->$.berat decimal, Pcs->$.pcs int)
   const weightJsonField = jsonFieldForWeight(config);

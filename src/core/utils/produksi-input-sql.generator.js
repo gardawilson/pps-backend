@@ -7,8 +7,8 @@
 
 const {
   INPUT_CONFIGS,
-  PRODUKSI_CONFIGS
-} = require('../config/produksi-input-mapping.config');
+  PRODUKSI_CONFIGS,
+} = require("../config/produksi-input-mapping.config");
 
 /** convert "NoSak" -> "noSak", "NoBahanBaku" -> "noBahanBaku" */
 function toCamelField(dbKey) {
@@ -23,9 +23,9 @@ function jsonPath(dbKey) {
 
 /** choose sql type based on key name */
 function sqlTypeForKey(dbKey) {
-  const k = String(dbKey || '').toLowerCase();
-  if (k === 'nosak' || k === 'nopallet') return 'int';
-  return 'varchar(50)';
+  const k = String(dbKey || "").toLowerCase();
+  if (k === "nosak" || k === "nopallet") return "int";
+  return "varchar(50)";
 }
 
 /**
@@ -37,8 +37,10 @@ function generateInputsAttachSQL(produksiType, requestedTypes) {
   const produksiConfig = PRODUKSI_CONFIGS[produksiType];
   const inputConfigs = INPUT_CONFIGS[produksiType];
 
-  if (!produksiConfig) throw new Error(`Unknown produksi type: ${produksiType}`);
-  if (!inputConfigs) throw new Error(`No input configs found for ${produksiType}`);
+  if (!produksiConfig)
+    throw new Error(`Unknown produksi type: ${produksiType}`);
+  if (!inputConfigs)
+    throw new Error(`No input configs found for ${produksiType}`);
 
   const activeConfigs = requestedTypes.reduce((acc, type) => {
     const config = inputConfigs[type];
@@ -49,12 +51,17 @@ function generateInputsAttachSQL(produksiType, requestedTypes) {
   if (Object.keys(activeConfigs).length === 0) return _generateEmptySQL();
 
   const sections = Object.entries(activeConfigs)
-    .map(([type, config]) => _generateSingleInputSection(type, config, produksiConfig))
-    .join('\n\n');
+    .map(([type, config]) =>
+      _generateSingleInputSection(type, config, produksiConfig),
+    )
+    .join("\n\n");
 
   const summaryInserts = Object.keys(activeConfigs)
-    .map(type => `  INSERT INTO @out SELECT '${type}', @${type}Inserted, @${type}Skipped, @${type}Invalid;`)
-    .join('\n');
+    .map(
+      (type) =>
+        `  INSERT INTO @out SELECT '${type}', @${type}Inserted, @${type}Skipped, @${type}Invalid;`,
+    )
+    .join("\n");
 
   return `
 SET NOCOUNT ON;
@@ -82,37 +89,37 @@ function _generateSingleInputSection(type, config, produksiConfig) {
   const varPrefix = type.toUpperCase();
 
   const keys = config.keys || [];
-  const keyFields = keys.join(', ');                      // DB columns
-  const keyFieldsLower = keys.map(toCamelField).join(', '); // JSON alias fields (camelCase)
+  const keyFields = keys.join(", "); // DB columns
+  const keyFieldsLower = keys.map(toCamelField).join(", "); // JSON alias fields (camelCase)
 
   // OPENJSON WITH clause: noBroker varchar(50) '$.noBroker', noSak int '$.noSak'
   const withClause = keys
-    .map(k => `${toCamelField(k)} ${sqlTypeForKey(k)} '${jsonPath(k)}'`)
-    .join(', ');
+    .map((k) => `${toCamelField(k)} ${sqlTypeForKey(k)} '${jsonPath(k)}'`)
+    .join(", ");
 
   // EXISTS check to source table: b.NoBroker=j.noBroker AND b.NoSak=j.noSak
   const whereConditions = keys
-    .map(k => `d.${k} = j.${toCamelField(k)}`)
-    .join(' AND ');
+    .map((k) => `d.${k} = j.${toCamelField(k)}`)
+    .join(" AND ");
 
   // mapping check for NOT EXISTS
   const mappingConditions = keys
-    .map(k => `x.${k} = v.${toCamelField(k)}`)
-    .join(' AND ');
+    .map((k) => `x.${k} = v.${toCamelField(k)}`)
+    .join(" AND ");
 
   // skipped calculation
   const sourceComparison = keys
-    .map(k => `b.${k} = j.${toCamelField(k)}`)
-    .join(' AND ');
+    .map((k) => `b.${k} = j.${toCamelField(k)}`)
+    .join(" AND ");
 
   const mappingComparison = keys
-    .map(k => `x.${k} = j.${toCamelField(k)}`)
-    .join(' AND ');
+    .map((k) => `x.${k} = j.${toCamelField(k)}`)
+    .join(" AND ");
 
   // Update DateUsage WHERE
   const updateWhereComparison = keys
-    .map(k => `d.${k} = src.${toCamelField(k)}`)
-    .join(' AND ');
+    .map((k) => `d.${k} = src.${toCamelField(k)}`)
+    .join(" AND ");
 
   const dateUsageColumn = config.dateUsageColumn;
 
@@ -143,7 +150,7 @@ WHERE NOT EXISTS (
 SET @${type}Inserted = @@ROWCOUNT;
 
 -- Update DateUsage for ${config.sourceTable}
-IF @${type}Inserted > 0 AND '${dateUsageColumn || ''}' <> ''
+IF @${type}Inserted > 0 AND '${dateUsageColumn || ""}' <> ''
 BEGIN
   UPDATE d
   SET d.${dateUsageColumn} = @tglProduksi

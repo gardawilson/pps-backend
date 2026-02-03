@@ -1,28 +1,31 @@
 // services/sortir-reject-service.js
-const { sql, poolPromise } = require('../../../core/config/db');
+const { sql, poolPromise } = require("../../../core/config/db");
 const {
   resolveEffectiveDateForCreate,
+  toDateOnly,
   assertNotLocked,
+  formatYMD,
   loadDocDateOnlyFromConfig,
-} = require('../../../core/shared/tutup-transaksi-guard');
-const { generateNextCode } = require('../../../core/utils/sequence-code-helper');
+} = require("../../../core/shared/tutup-transaksi-guard");
+const sharedInputService = require("../../../core/shared/produksi-input.service");
+const { badReq, conflict } = require("../../../core/utils/http-error");
+const { applyAuditContext } = require("../../../core/utils/db-audit-context");
+const {
+  generateNextCode,
+} = require("../../../core/utils/sequence-code-helper");
 const {
   parseJamToInt,
   calcJamKerjaFromStartEnd,
-} = require('../../../core/utils/jam-kerja-helper');
-const sharedInputService = require('../../../core/shared/produksi-input.service');
-const { badReq, conflict } = require('../../../core/utils/http-error');
+} = require("../../../core/utils/jam-kerja-helper");
 
-
-
-async function getAllSortirReject(page = 1, pageSize = 20, search = '') {
+async function getAllSortirReject(page = 1, pageSize = 20, search = "") {
   const pool = await poolPromise;
 
   const p = Math.max(1, Number(page) || 1);
   const ps = Math.max(1, Math.min(200, Number(pageSize) || 20));
   const offset = (p - 1) * ps;
 
-  const searchTerm = (search || '').trim();
+  const searchTerm = (search || "").trim();
 
   const whereClause = `
     WHERE (@search = '' OR h.NoBJSortir LIKE '%' + @search + '%')
@@ -36,7 +39,7 @@ async function getAllSortirReject(page = 1, pageSize = 20, search = '') {
   `;
 
   const countReq = pool.request();
-  countReq.input('search', sql.VarChar(100), searchTerm);
+  countReq.input("search", sql.VarChar(100), searchTerm);
 
   const countRes = await countReq.query(countQry);
   const total = countRes.recordset?.[0]?.total || 0;
@@ -97,15 +100,13 @@ async function getAllSortirReject(page = 1, pageSize = 20, search = '') {
   `;
 
   const dataReq = pool.request();
-  dataReq.input('search', sql.VarChar(100), searchTerm);
-  dataReq.input('offset', sql.Int, offset);
-  dataReq.input('limit', sql.Int, ps);
+  dataReq.input("search", sql.VarChar(100), searchTerm);
+  dataReq.input("offset", sql.Int, offset);
+  dataReq.input("limit", sql.Int, ps);
 
   const dataRes = await dataReq.query(dataQry);
   return { data: dataRes.recordset || [], total };
 }
-
-
 
 async function getSortirRejectByDate(date) {
   const pool = await poolPromise;
@@ -121,128 +122,195 @@ async function getSortirRejectByDate(date) {
     ORDER BY h.NoBJSortir ASC;
   `;
 
-  request.input('date', sql.Date, date);
+  request.input("date", sql.Date, date);
   const result = await request.query(query);
   return result.recordset;
 }
 
+async function createSortirReject(payload, ctx) {
+  const body = payload && typeof payload === "object" ? payload : {};
 
-async function createSortirReject(payload) {
+  // ===============================
+  // Validasi wajib
+  // ===============================
   const must = [];
-  if (!payload?.tglBJSortir) must.push('tglBJSortir');
-  if (payload?.idWarehouse == null) must.push('idWarehouse');
-  if (payload?.idUsername == null) must.push('idUsername');
-  if (must.length) throw badReq(`Field wajib: ${must.join(', ')}`);
+  if (!body?.tglBJSortir) must.push("tglBJSortir");
+  if (body?.idWarehouse == null) must.push("idWarehouse");
+  if (body?.idUsername == null) must.push("idUsername");
+  if (must.length) throw badReq(`Field wajib: ${must.join(", ")}`);
+
+  // ===============================
+  // Validasi ctx / audit
+  // ===============================
+  const actorIdNum = Number(ctx?.actorId);
+  if (!Number.isFinite(actorIdNum) || actorIdNum <= 0) {
+    throw badReq("ctx.actorId wajib. Controller harus inject dari token.");
+  }
+  const actorUsername = String(ctx?.actorUsername || "").trim() || "system";
+  const requestId = String(ctx?.requestId || "").trim();
+
+  const auditCtx = {
+    actorId: Math.trunc(actorIdNum),
+    actorUsername,
+    requestId,
+  };
 
   const pool = await poolPromise;
   const tx = new sql.Transaction(pool);
   await tx.begin(sql.ISOLATION_LEVEL.SERIALIZABLE);
 
   try {
-    // 0) normalize date + lock guard
-    const effectiveDate = resolveEffectiveDateForCreate(payload.tglBJSortir);
+    // ===============================
+    // Set audit context (SESSION_CONTEXT)
+    // ===============================
+    const auditReq = new sql.Request(tx);
+    const audit = await applyAuditContext(auditReq, auditCtx);
 
+    // ===============================
+    // Lock tanggal sortir
+    // ===============================
+    const effectiveDate = resolveEffectiveDateForCreate(body.tglBJSortir);
     await assertNotLocked({
       date: effectiveDate,
       runner: tx,
-      action: 'create BJSortirReject',
+      action: "create BJSortirReject",
       useLock: true,
     });
 
-    // 1) generate NoBJSortir
-    // 🔧 sesuaikan prefix sesuai standar kamu
-    const no1 = await generateNextCode(tx, {
-      tableName: 'dbo.BJSortirReject_h',
-      columnName: 'NoBJSortir',
-      prefix: 'J.',
-      width: 10,
-    });
+    // ===============================
+    // Generate NoBJSortir unik
+    // ===============================
+    const gen = async () =>
+      generateNextCode(tx, {
+        tableName: "dbo.BJSortirReject_h",
+        columnName: "NoBJSortir",
+        prefix: "J.",
+        width: 10,
+      });
 
-    // optional anti-race double check
-    const rqCheck = new sql.Request(tx);
-    const exist = await rqCheck
-      .input('NoBJSortir', sql.VarChar(50), no1)
-      .query(`
+    let noBJSortir = await gen();
+
+    // anti-race double check
+    const exist = await new sql.Request(tx).input(
+      "NoBJSortir",
+      sql.VarChar(50),
+      noBJSortir,
+    ).query(`
         SELECT 1
         FROM dbo.BJSortirReject_h WITH (UPDLOCK, HOLDLOCK)
         WHERE NoBJSortir = @NoBJSortir
       `);
 
-    const noBJSortir = exist.recordset.length
-      ? await generateNextCode(tx, {
-          tableName: 'dbo.BJSortirReject_h',
-          columnName: 'NoBJSortir',
-          prefix: 'J.',
-          width: 10,
-        })
-      : no1;
+    if (exist.recordset.length > 0) {
+      noBJSortir = await gen();
+    }
 
-    // 2) insert header
+    // ===============================
+    // Insert header dengan OUTPUT
+    // ===============================
     const rqIns = new sql.Request(tx);
     rqIns
-      .input('NoBJSortir', sql.VarChar(50), noBJSortir)
-      .input('TglBJSortir', sql.Date, effectiveDate)
-      .input('IdWarehouse', sql.Int, payload.idWarehouse) // ✅ INT
-      .input('IdUsername', sql.Int, payload.idUsername);  // ✅ INT
+      .input("NoBJSortir", sql.VarChar(50), noBJSortir)
+      .input("TglBJSortir", sql.Date, effectiveDate)
+      .input("IdWarehouse", sql.Int, body.idWarehouse)
+      .input("IdUsername", sql.Int, body.idUsername);
 
     const insertSql = `
+      DECLARE @tmp TABLE (
+        NoBJSortir varchar(50),
+        TglBJSortir date,
+        IdWarehouse int,
+        IdUsername int
+      );
+
       INSERT INTO dbo.BJSortirReject_h (
         NoBJSortir,
         TglBJSortir,
         IdWarehouse,
         IdUsername
       )
-      OUTPUT INSERTED.*
+      OUTPUT INSERTED.* INTO @tmp
       VALUES (
         @NoBJSortir,
         @TglBJSortir,
         @IdWarehouse,
         @IdUsername
       );
+
+      SELECT * FROM @tmp;
     `;
 
     const insRes = await rqIns.query(insertSql);
 
     await tx.commit();
-    return { header: insRes.recordset?.[0] || null };
+    return {
+      header: insRes.recordset?.[0] || null,
+      audit,
+    };
   } catch (e) {
-    try { await tx.rollback(); } catch (_) {}
-    throw e;
+    try {
+      await tx.rollback();
+    } catch (_) {}
+
+    // attach audit supaya controller bisa kirim meta.audit walau error
+    throw Object.assign(e, auditCtx);
   }
 }
 
+async function updateSortirReject(noBJSortir, payload, ctx) {
+  if (!noBJSortir) throw badReq("noBJSortir wajib");
 
-async function updateSortirReject(noBJSortir, payload) {
-  if (!noBJSortir) throw badReq('noBJSortir wajib');
+  // ===============================
+  // Audit context
+  // ===============================
+  const actorIdNum = Number(ctx?.actorId);
+  if (!Number.isFinite(actorIdNum) || actorIdNum <= 0) {
+    throw badReq("ctx.actorId wajib. Controller harus inject dari token.");
+  }
+
+  const actorUsername = String(ctx?.actorUsername || "").trim() || "system";
+  const requestId = String(ctx?.requestId || "").trim();
+
+  const auditCtx = {
+    actorId: Math.trunc(actorIdNum),
+    actorUsername,
+    requestId,
+  };
 
   const pool = await poolPromise;
   const tx = new sql.Transaction(pool);
   await tx.begin(sql.ISOLATION_LEVEL.SERIALIZABLE);
 
   try {
-    // 0) lock header + ambil tanggal lama dari config
+    // =====================================================
+    // 0) Lock header + ambil tanggal lama
+    // =====================================================
     const { docDateOnly: oldDocDateOnly } = await loadDocDateOnlyFromConfig({
-      entityKey: 'sortirReject', // ✅ must exist in your config
-      codeValue: noBJSortir,       // ✅ NoBJSortir
+      entityKey: "sortirReject",
+      codeValue: noBJSortir,
       runner: tx,
       useLock: true,
       throwIfNotFound: true,
     });
 
-    // 1) if user sends tglBJSortir -> new date
+    // =====================================================
+    // 1) Handle perubahan tanggal
+    // =====================================================
     const isChangingDate = payload?.tglBJSortir !== undefined;
     let newDocDateOnly = null;
 
     if (isChangingDate) {
-      if (!payload.tglBJSortir) throw badReq('tglBJSortir tidak boleh kosong');
+      if (!payload.tglBJSortir) throw badReq("tglBJSortir tidak boleh kosong");
       newDocDateOnly = resolveEffectiveDateForCreate(payload.tglBJSortir);
     }
 
-    // 2) guard tutup transaksi
+    // =====================================================
+    // 2) Guard tutup transaksi
+    // =====================================================
     await assertNotLocked({
       date: oldDocDateOnly,
       runner: tx,
-      action: 'update BJSortirReject (current date)',
+      action: "update BJSortirReject (current date)",
       useLock: true,
     });
 
@@ -250,33 +318,44 @@ async function updateSortirReject(noBJSortir, payload) {
       await assertNotLocked({
         date: newDocDateOnly,
         runner: tx,
-        action: 'update BJSortirReject (new date)',
+        action: "update BJSortirReject (new date)",
         useLock: true,
       });
     }
 
-    // 3) build dynamic SET (HEADER ONLY)
+    // =====================================================
+    // 3) Build dynamic SET (HEADER ONLY)
+    // =====================================================
     const sets = [];
     const rqUpd = new sql.Request(tx);
 
     if (isChangingDate) {
-      sets.push('TglBJSortir = @TglBJSortir');
-      rqUpd.input('TglBJSortir', sql.Date, newDocDateOnly);
+      sets.push("TglBJSortir = @TglBJSortir");
+      rqUpd.input("TglBJSortir", sql.Date, newDocDateOnly);
     }
 
     if (payload.idWarehouse !== undefined) {
-      if (payload.idWarehouse == null) throw badReq('idWarehouse tidak boleh kosong');
-      sets.push('IdWarehouse = @IdWarehouse');
-      rqUpd.input('IdWarehouse', sql.Int, payload.idWarehouse);
+      if (payload.idWarehouse == null)
+        throw badReq("idWarehouse tidak boleh kosong");
+      sets.push("IdWarehouse = @IdWarehouse");
+      rqUpd.input("IdWarehouse", sql.Int, payload.idWarehouse);
     }
 
-    if (sets.length === 0) throw badReq('No fields to update');
+    if (sets.length === 0) throw badReq("No fields to update");
 
-    rqUpd.input('NoBJSortir', sql.VarChar(50), noBJSortir);
+    rqUpd.input("NoBJSortir", sql.VarChar(50), noBJSortir);
 
+    // =====================================================
+    // 4) Apply audit context
+    // =====================================================
+    await applyAuditContext(rqUpd, auditCtx);
+
+    // =====================================================
+    // 5) Execute update
+    // =====================================================
     const updateSql = `
       UPDATE dbo.BJSortirReject_h
-      SET ${sets.join(', ')}
+      SET ${sets.join(", ")}
       WHERE NoBJSortir = @NoBJSortir;
 
       SELECT *
@@ -287,22 +366,25 @@ async function updateSortirReject(noBJSortir, payload) {
     const updRes = await rqUpd.query(updateSql);
     const updatedHeader = updRes.recordset?.[0] || null;
 
-    // 4) if tanggal berubah -> sync DateUsage untuk semua label yg dipakai dokumen ini
+    // =====================================================
+    // 6) Sync DateUsage jika tanggal berubah
+    // =====================================================
     if (isChangingDate && updatedHeader) {
-      const usageDate = resolveEffectiveDateForCreate(updatedHeader.TglBJSortir);
+      const usageDate = resolveEffectiveDateForCreate(
+        updatedHeader.TglBJSortir,
+      );
 
       const rqUsage = new sql.Request(tx);
       rqUsage
-        .input('NoBJSortir', sql.VarChar(50), noBJSortir)
-        .input('Tanggal', sql.Date, usageDate);
+        .input("NoBJSortir", sql.VarChar(50), noBJSortir)
+        .input("Tanggal", sql.Date, usageDate);
 
       const sqlUpdateUsage = `
         /* =======================
            SORTIR REJECT -> DateUsage Sync
-           Rule: update hanya jika DateUsage sudah ada (NOT NULL)
            ======================= */
 
-        -- BARANG JADI (via BJSortirRejectInputLabelBarangJadi)
+        -- BARANG JADI
         UPDATE bj
         SET bj.DateUsage = @Tanggal
         FROM dbo.BarangJadi AS bj
@@ -314,7 +396,7 @@ async function updateSortirReject(noBJSortir, payload) {
               AND map.NoBJ = bj.NoBJ
           );
 
-        -- FURNITURE WIP (via BJSortirRejectInputLabelFurnitureWIP)
+        -- FURNITURE WIP
         UPDATE fw
         SET fw.DateUsage = @Tanggal
         FROM dbo.FurnitureWIP AS fw
@@ -331,44 +413,67 @@ async function updateSortirReject(noBJSortir, payload) {
     }
 
     await tx.commit();
-    return { header: updatedHeader };
+    return { header: updatedHeader, audit: auditCtx };
   } catch (e) {
-    try { await tx.rollback(); } catch (_) {}
-    throw e;
+    try {
+      await tx.rollback();
+    } catch (_) {}
+    // attach audit context untuk logging di controller
+    throw Object.assign(e, auditCtx);
   }
 }
 
+async function deleteSortirReject(noBJSortir, ctx) {
+  if (!noBJSortir) throw badReq("noBJSortir wajib");
 
+  // ===============================
+  // Audit context
+  // ===============================
+  const actorIdNum = Number(ctx?.actorId);
+  if (!Number.isFinite(actorIdNum) || actorIdNum <= 0) {
+    throw badReq("ctx.actorId wajib. Controller harus inject dari token.");
+  }
 
-async function deleteSortirReject(noBJSortir) {
-  if (!noBJSortir) throw badReq('noBJSortir wajib');
+  const actorUsername = String(ctx?.actorUsername || "").trim() || "system";
+  const requestId = String(ctx?.requestId || "").trim();
+
+  const auditCtx = {
+    actorId: Math.trunc(actorIdNum),
+    actorUsername,
+    requestId,
+  };
 
   const pool = await poolPromise;
   const tx = new sql.Transaction(pool);
   await tx.begin(sql.ISOLATION_LEVEL.SERIALIZABLE);
 
   try {
-    // 0) ambil docDateOnly dari config (lock header)
+    // ===============================
+    // 0) LOCK HEADER + ambil docDateOnly
+    // ===============================
     const { docDateOnly } = await loadDocDateOnlyFromConfig({
-      entityKey: 'sortirReject',
+      entityKey: "sortirReject",
       codeValue: noBJSortir,
       runner: tx,
       useLock: true,
       throwIfNotFound: true,
     });
 
-    // 1) guard tutup transaksi
+    // ===============================
+    // 1) GUARD TUTUP TRANSAKSI
+    // ===============================
     await assertNotLocked({
       date: docDateOnly,
       runner: tx,
-      action: 'delete BJSortirReject',
+      action: "delete BJSortirReject",
       useLock: true,
     });
 
-    // 2) cek output dulu (Reject output)
+    // ===============================
+    // 2) CEK OUTPUT (Reject)
+    // ===============================
     const rqOut = new sql.Request(tx);
-    const outRes = await rqOut
-      .input('NoBJSortir', sql.VarChar(50), noBJSortir)
+    const outRes = await rqOut.input("NoBJSortir", sql.VarChar(50), noBJSortir)
       .query(`
         SELECT COUNT(1) AS CntOutputReject
         FROM dbo.BJSortirRejectOutputLabelReject WITH (NOLOCK)
@@ -376,17 +481,20 @@ async function deleteSortirReject(noBJSortir) {
       `);
 
     const row = outRes.recordset?.[0] || { CntOutputReject: 0 };
-    const hasOutputReject = (row.CntOutputReject || 0) > 0;
-
-    if (hasOutputReject) {
+    if ((row.CntOutputReject || 0) > 0) {
       throw badReq(
-        'Tidak dapat menghapus NoBJSortir ini karena sudah memiliki data output (Label Reject).'
+        "Tidak dapat menghapus NoBJSortir ini karena sudah memiliki data output (Label Reject).",
       );
     }
 
-    // 3) delete input + reset dateusage + delete header
-    const req = new sql.Request(tx);
-    req.input('NoBJSortir', sql.VarChar(50), noBJSortir);
+    // ===============================
+    // 3) DELETE INPUT + RESET DATEUSAGE + DELETE HEADER
+    // ===============================
+    const rqDel = new sql.Request(tx);
+    rqDel.input("NoBJSortir", sql.VarChar(50), noBJSortir);
+
+    // 🔑 apply audit context sebelum eksekusi
+    await applyAuditContext(rqDel, auditCtx);
 
     const sqlDelete = `
       DECLARE @BJKeys TABLE (NoBJ varchar(50) PRIMARY KEY);
@@ -441,16 +549,18 @@ async function deleteSortirReject(noBJSortir) {
       WHERE NoBJSortir = @NoBJSortir;
     `;
 
-    await req.query(sqlDelete);
-
+    await rqDel.query(sqlDelete);
     await tx.commit();
-    return { success: true };
+
+    return { success: true, audit: auditCtx };
   } catch (e) {
-    try { await tx.rollback(); } catch (_) {}
-    throw e;
+    try {
+      await tx.rollback();
+    } catch (_) {}
+    // attach audit context agar controller bisa tetap kirim meta.audit
+    throw Object.assign(e, auditCtx);
   }
 }
-
 
 /**
  * ✅ GET Inputs for BJSortirReject
@@ -465,7 +575,7 @@ async function deleteSortirReject(noBJSortir) {
 async function fetchInputs(noBJSortir) {
   const pool = await poolPromise;
   const req = pool.request();
-  req.input('no', sql.VarChar(50), noBJSortir);
+  req.input("no", sql.VarChar(50), noBJSortir);
 
   const q = `
     /* ===================== [1] MAIN INPUTS (UNION) ===================== */
@@ -571,23 +681,23 @@ async function fetchInputs(noBJSortir) {
     };
 
     switch (r.Src) {
-      case 'fwip':
+      case "fwip":
         out.furnitureWip.push({
           noFurnitureWip: r.Ref1,
           ...base,
         });
         break;
 
-      case 'material':
+      case "material":
         // meniru packing: idCabinetMaterial + jumlah
         out.cabinetMaterial.push({
           idCabinetMaterial: r.Ref1, // string cast (konsisten seperti packing)
-          jumlah: r.Pcs ?? null,     // Pcs -> jumlah
+          jumlah: r.Pcs ?? null, // Pcs -> jumlah
           ...base,
         });
         break;
 
-      case 'bj':
+      case "bj":
         // bucket baru, tapi field-nya tetap "packing-ish"
         out.barangJadi.push({
           noBJ: r.Ref1,
@@ -604,7 +714,6 @@ async function fetchInputs(noBJSortir) {
   return out;
 }
 
-
 /**
  * Payload shape (arrays optional):
  * {
@@ -614,24 +723,24 @@ async function fetchInputs(noBJSortir) {
  * }
  */
 async function upsertInputs(noProduksi, payload, ctx) {
-  const no = String(noProduksi || '').trim();
-  if (!no) throw badReq('noProduksi wajib diisi');
+  const no = String(noProduksi || "").trim();
+  if (!no) throw badReq("noProduksi wajib diisi");
 
-  const body = payload && typeof payload === 'object' ? payload : {};
+  const body = payload && typeof payload === "object" ? payload : {};
 
   // ✅ ctx wajib (audit)
   const actorIdNum = Number(ctx?.actorId);
   if (!Number.isFinite(actorIdNum) || actorIdNum <= 0) {
-    throw badReq('ctx.actorId wajib. Controller harus inject dari token.');
+    throw badReq("ctx.actorId wajib. Controller harus inject dari token.");
   }
 
-  const actorUsername = String(ctx?.actorUsername || '').trim() || 'system';
+  const actorUsername = String(ctx?.actorUsername || "").trim() || "system";
 
   // requestId wajib string (kalau kosong, nanti di applyAuditContext dibuat fallback juga)
-  const requestId = String(ctx?.requestId || '').trim();
+  const requestId = String(ctx?.requestId || "").trim();
 
   // ✅ forward ctx yang sudah dinormalisasi ke shared service
-  return sharedInputService.upsertInputsAndPartials('sortirReject', no, body, {
+  return sharedInputService.upsertInputsAndPartials("sortirReject", no, body, {
     actorId: Math.trunc(actorIdNum),
     actorUsername,
     requestId,
@@ -639,29 +748,27 @@ async function upsertInputs(noProduksi, payload, ctx) {
 }
 
 async function deleteInputs(noProduksi, payload, ctx) {
-  const no = String(noProduksi || '').trim();
-  if (!no) throw badReq('noProduksi wajib diisi');
+  const no = String(noProduksi || "").trim();
+  if (!no) throw badReq("noProduksi wajib diisi");
 
-  const body = payload && typeof payload === 'object' ? payload : {};
+  const body = payload && typeof payload === "object" ? payload : {};
 
   // ✅ Validate audit context
   const actorIdNum = Number(ctx?.actorId);
   if (!Number.isFinite(actorIdNum) || actorIdNum <= 0) {
-    throw badReq('ctx.actorId wajib. Controller harus inject dari token.');
+    throw badReq("ctx.actorId wajib. Controller harus inject dari token.");
   }
 
-  const actorUsername = String(ctx?.actorUsername || '').trim() || 'system';
-  const requestId = String(ctx?.requestId || '').trim();
+  const actorUsername = String(ctx?.actorUsername || "").trim() || "system";
+  const requestId = String(ctx?.requestId || "").trim();
 
   // ✅ Forward to shared service
-  return sharedInputService.deleteInputsAndPartials('sortirReject', no, body, {
+  return sharedInputService.deleteInputsAndPartials("sortirReject", no, body, {
     actorId: Math.trunc(actorIdNum),
     actorUsername,
     requestId,
   });
 }
-
-
 
 module.exports = {
   getAllSortirReject,
@@ -671,6 +778,5 @@ module.exports = {
   deleteSortirReject,
   fetchInputs,
   upsertInputs,
-  deleteInputs
-  
+  deleteInputs,
 };

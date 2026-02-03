@@ -1,73 +1,73 @@
 const TUTUP_TRANSAKSI_SOURCES = {
-bongkarSusun: {
-    table: 'dbo.BongkarSusun_h',
-    codeColumn: 'NoBongkarSusun',
-    dateColumn: 'Tanggal',
+  bongkarSusun: {
+    table: "dbo.BongkarSusun_h",
+    codeColumn: "NoBongkarSusun",
+    dateColumn: "Tanggal",
   },
-washingProduksi: {
-    table: 'dbo.WashingProduksi_h',
-    codeColumn: 'NoProduksi',
-    dateColumn: 'TglProduksi',
+  washingProduksi: {
+    table: "dbo.WashingProduksi_h",
+    codeColumn: "NoProduksi",
+    dateColumn: "TglProduksi",
   },
   brokerProduksi: {
-    table: 'dbo.BrokerProduksi_h',
-    codeColumn: 'NoProduksi',
-    dateColumn: 'TglProduksi',
+    table: "dbo.BrokerProduksi_h",
+    codeColumn: "NoProduksi",
+    dateColumn: "TglProduksi",
   },
   crusherProduksi: {
-    table: 'dbo.CrusherProduksi_h',
-    codeColumn: 'NoCrusherProduksi',
-    dateColumn: 'Tanggal',
+    table: "dbo.CrusherProduksi_h",
+    codeColumn: "NoCrusherProduksi",
+    dateColumn: "Tanggal",
   },
   gilinganProduksi: {
-    table: 'dbo.GilinganProduksi_h',
-    codeColumn: 'NoProduksi',
-    dateColumn: 'Tanggal',
+    table: "dbo.GilinganProduksi_h",
+    codeColumn: "NoProduksi",
+    dateColumn: "Tanggal",
   },
   mixerProduksi: {
-    table: 'dbo.MixerProduksi_h',
-    codeColumn: 'NoProduksi',
-    dateColumn: 'TglProduksi',
+    table: "dbo.MixerProduksi_h",
+    codeColumn: "NoProduksi",
+    dateColumn: "TglProduksi",
   },
-    injectProduksi: {
-    table: 'dbo.InjectProduksi_h',
-    codeColumn: 'NoProduksi',
-    dateColumn: 'TglProduksi',
+  injectProduksi: {
+    table: "dbo.InjectProduksi_h",
+    codeColumn: "NoProduksi",
+    dateColumn: "TglProduksi",
   },
-    hotStamping: {
-    table: 'dbo.HotStamping_h',
-    codeColumn: 'NoProduksi',
-    dateColumn: 'Tanggal',
+  hotStamping: {
+    table: "dbo.HotStamping_h",
+    codeColumn: "NoProduksi",
+    dateColumn: "Tanggal",
   },
-    keyFitting: {
-    table: 'dbo.PasangKunci_h',
-    codeColumn: 'NoProduksi',
-    dateColumn: 'Tanggal',
+  keyFitting: {
+    table: "dbo.PasangKunci_h",
+    codeColumn: "NoProduksi",
+    dateColumn: "Tanggal",
   },
-    spanner: {
-    table: 'dbo.Spanner_h',
-    codeColumn: 'NoProduksi',
-    dateColumn: 'Tanggal',
+  spanner: {
+    table: "dbo.Spanner_h",
+    codeColumn: "NoProduksi",
+    dateColumn: "Tanggal",
   },
-      packingProduksi: {
-    table: 'dbo.PackingProduksi_h',
-    codeColumn: 'NoPacking',
-    dateColumn: 'Tanggal',
+  packingProduksi: {
+    table: "dbo.PackingProduksi_h",
+    codeColumn: "NoPacking",
+    dateColumn: "Tanggal",
   },
-        bjJual: {
-    table: 'dbo.BJJual_h',
-    codeColumn: 'NoBJJual',
-    dateColumn: 'Tanggal',
+  bjJual: {
+    table: "dbo.BJJual_h",
+    codeColumn: "NoBJJual",
+    dateColumn: "Tanggal",
   },
-          sortirReject: {
-    table: 'dbo.BJSortirReject_h',
-    codeColumn: 'NoBJSortir',
-    dateColumn: 'TglBJSortir',
+  sortirReject: {
+    table: "dbo.BJSortirReject_h",
+    codeColumn: "NoBJSortir",
+    dateColumn: "TglBJSortir",
   },
-            return: {
-    table: 'dbo.BJRetur_h',
-    codeColumn: 'NoRetur',
-    dateColumn: 'Tanggal',
+  return: {
+    table: "dbo.BJRetur_h",
+    codeColumn: "NoRetur",
+    dateColumn: "Tanggal",
   },
   // tambah lainnya...
 };

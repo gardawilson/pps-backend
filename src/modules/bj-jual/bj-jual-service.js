@@ -1,46 +1,50 @@
 // services/bj-jual-service.js
-const { sql, poolPromise } = require('../../core/config/db');
+const { sql, poolPromise } = require("../../core/config/db");
 const {
   resolveEffectiveDateForCreate,
   toDateOnly,
-  assertNotLocked,     
+  assertNotLocked,
   formatYMD,
-  loadDocDateOnlyFromConfig
-} = require('../../core/shared/tutup-transaksi-guard');
-const { generateNextCode } = require('../../core/utils/sequence-code-helper');
-const sharedInputService = require('../../core/shared/produksi-input.service');
-const { badReq, conflict } = require('../../core/utils/http-error')
-
+  loadDocDateOnlyFromConfig,
+} = require("../../core/shared/tutup-transaksi-guard");
+const sharedInputService = require("../../core/shared/produksi-input.service");
+const { badReq, conflict } = require("../../core/utils/http-error");
+const { applyAuditContext } = require("../../core/utils/db-audit-context");
+const { generateNextCode } = require("../../core/utils/sequence-code-helper");
+const {
+  parseJamToInt,
+  calcJamKerjaFromStartEnd,
+} = require("../../core/utils/jam-kerja-helper");
 
 async function getAllBJJual(
   page = 1,
   pageSize = 20,
-  search = '',
+  search = "",
   dateFrom = null,
-  dateTo = null
+  dateTo = null,
 ) {
   const pool = await poolPromise;
 
   const offset = (Math.max(page, 1) - 1) * Math.max(pageSize, 1);
-  const s = String(search || '').trim();
+  const s = String(search || "").trim();
 
   const rqCount = pool.request();
   const rqData = pool.request();
 
   // search
-  rqCount.input('search', sql.VarChar(50), s);
-  rqData.input('search', sql.VarChar(50), s);
+  rqCount.input("search", sql.VarChar(50), s);
+  rqData.input("search", sql.VarChar(50), s);
 
   // optional dates (kalau null biarkan null)
-  rqCount.input('dateFrom', sql.Date, dateFrom);
-  rqCount.input('dateTo', sql.Date, dateTo);
+  rqCount.input("dateFrom", sql.Date, dateFrom);
+  rqCount.input("dateTo", sql.Date, dateTo);
 
-  rqData.input('dateFrom', sql.Date, dateFrom);
-  rqData.input('dateTo', sql.Date, dateTo);
+  rqData.input("dateFrom", sql.Date, dateFrom);
+  rqData.input("dateTo", sql.Date, dateTo);
 
   // paging
-  rqData.input('offset', sql.Int, offset);
-  rqData.input('pageSize', sql.Int, pageSize);
+  rqData.input("offset", sql.Int, offset);
+  rqData.input("pageSize", sql.Int, pageSize);
 
   const qWhere = `
     WHERE (@search = '' OR h.NoBJJual LIKE '%' + @search + '%')
@@ -78,115 +82,185 @@ async function getAllBJJual(
   return { data, total };
 }
 
-async function createBJJual(payload) {
+async function createBJJual(payload, ctx) {
+  const body = payload && typeof payload === "object" ? payload : {};
+
+  // ===============================
+  // Validasi wajib (business)
+  // ===============================
   const must = [];
-  if (!payload?.tanggal) must.push('tanggal');
-  if (payload?.idPembeli == null) must.push('idPembeli');
-  if (must.length) throw badReq(`Field wajib: ${must.join(', ')}`);
+  if (!body?.tanggal) must.push("tanggal");
+  if (body?.idPembeli == null) must.push("idPembeli");
+  if (must.length) throw badReq(`Field wajib: ${must.join(", ")}`);
+
+  // ===============================
+  // Validasi ctx / audit
+  // ===============================
+  const actorIdNum = Number(ctx?.actorId);
+  if (!Number.isFinite(actorIdNum) || actorIdNum <= 0) {
+    throw badReq("ctx.actorId wajib. Controller harus inject dari token.");
+  }
+
+  const actorUsername = String(ctx?.actorUsername || "").trim() || "system";
+  const requestId = String(ctx?.requestId || "").trim();
+
+  const auditCtx = {
+    actorId: Math.trunc(actorIdNum),
+    actorUsername,
+    requestId,
+  };
 
   const pool = await poolPromise;
   const tx = new sql.Transaction(pool);
   await tx.begin(sql.ISOLATION_LEVEL.SERIALIZABLE);
 
   try {
-    // 0) normalize date + lock guard (same pattern as packing)
-    const effectiveDate = resolveEffectiveDateForCreate(payload.tanggal);
+    // ===============================
+    // Set audit context (SESSION_CONTEXT)
+    // ===============================
+    const auditReq = new sql.Request(tx);
+    const audit = await applyAuditContext(auditReq, auditCtx);
+
+    // ===============================
+    // Normalize tanggal + lock guard
+    // ===============================
+    const effectiveDate = resolveEffectiveDateForCreate(body.tanggal);
 
     await assertNotLocked({
       date: effectiveDate,
       runner: tx,
-      action: 'create BJJual',
+      action: "create BJJual",
       useLock: true,
     });
 
-    // 1) generate NoBJJual (choose your prefix!)
-    // Example: BJ.0000000123 (adjust to your real format)
-    const no1 = await generateNextCode(tx, {
-      tableName: 'dbo.BJJual_h',
-      columnName: 'NoBJJual',
-      prefix: 'K.',
-      width: 10,
-    });
+    // ===============================
+    // Generate NoBJJual unik
+    // ===============================
+    const gen = async () =>
+      generateNextCode(tx, {
+        tableName: "dbo.BJJual_h",
+        columnName: "NoBJJual",
+        prefix: "K.",
+        width: 10,
+      });
 
-    // optional anti-race double check
-    const rqCheck = new sql.Request(tx);
-    const exist = await rqCheck
-      .input('NoBJJual', sql.VarChar(50), no1)
-      .query(`
+    let noBJJual = await gen();
+
+    // anti-race double check
+    const exist = await new sql.Request(tx).input(
+      "NoBJJual",
+      sql.VarChar(50),
+      noBJJual,
+    ).query(`
         SELECT 1
         FROM dbo.BJJual_h WITH (UPDLOCK, HOLDLOCK)
         WHERE NoBJJual = @NoBJJual
       `);
 
-    const noBJJual = exist.recordset.length
-      ? await generateNextCode(tx, {
-          tableName: 'dbo.BJJual_h',
-          columnName: 'NoBJJual',
-          prefix: 'K.',
-          width: 10,
-        })
-      : no1;
+    if (exist.recordset.length > 0) {
+      noBJJual = await gen();
+    }
 
-    // 2) insert header
+    // ===============================
+    // Insert header (tanpa OUTPUT)
+    // ===============================
     const rqIns = new sql.Request(tx);
     rqIns
-      .input('NoBJJual', sql.VarChar(50), noBJJual)
-      .input('Tanggal', sql.Date, effectiveDate)
-      .input('IdPembeli', sql.Int, payload.idPembeli)
-      .input('Remark', sql.VarChar(255), payload.remark ?? null);
+      .input("NoBJJual", sql.VarChar(50), noBJJual)
+      .input("Tanggal", sql.Date, effectiveDate)
+      .input("IdPembeli", sql.Int, body.idPembeli)
+      .input("Remark", sql.VarChar(255), body.remark ?? null);
 
     const insertSql = `
       INSERT INTO dbo.BJJual_h (
         NoBJJual, Tanggal, IdPembeli, Remark
       )
-      OUTPUT INSERTED.*
       VALUES (
         @NoBJJual, @Tanggal, @IdPembeli, @Remark
       );
     `;
 
-    const insRes = await rqIns.query(insertSql);
+    await rqIns.query(insertSql);
+
+    // ===============================
+    // SELECT ulang header
+    // ===============================
+    const selRes = await new sql.Request(tx).input(
+      "NoBJJual",
+      sql.VarChar(50),
+      noBJJual,
+    ).query(`
+        SELECT *
+        FROM dbo.BJJual_h
+        WHERE NoBJJual = @NoBJJual
+      `);
+
+    const header = selRes.recordset?.[0] || null;
 
     await tx.commit();
-    return { header: insRes.recordset?.[0] || null };
+    return { header, audit };
   } catch (e) {
-    try { await tx.rollback(); } catch (_) {}
-    throw e;
+    try {
+      await tx.rollback();
+    } catch (_) {}
+
+    // attach auditCtx agar controller bisa kirim meta.audit walau error
+    throw Object.assign(e, auditCtx);
   }
 }
 
+async function updateBJJual(noBJJual, payload, ctx) {
+  if (!noBJJual) throw badReq("noBJJual wajib");
 
-async function updateBJJual(noBJJual, payload) {
-  if (!noBJJual) throw badReq('noBJJual wajib');
+  // ===============================
+  // Audit context
+  // ===============================
+  const actorIdNum = Number(ctx?.actorId);
+  if (!Number.isFinite(actorIdNum) || actorIdNum <= 0) {
+    throw badReq("ctx.actorId wajib. Controller harus inject dari token.");
+  }
+  const actorUsername = String(ctx?.actorUsername || "").trim() || "system";
+  const requestId = String(ctx?.requestId || "").trim();
+  const auditCtx = {
+    actorId: Math.trunc(actorIdNum),
+    actorUsername,
+    requestId,
+  };
 
   const pool = await poolPromise;
   const tx = new sql.Transaction(pool);
   await tx.begin(sql.ISOLATION_LEVEL.SERIALIZABLE);
 
   try {
-    // 0) lock header + ambil tanggal lama
+    // =====================================================
+    // 0) Load old doc date + lock
+    // =====================================================
     const { docDateOnly: oldDocDateOnly } = await loadDocDateOnlyFromConfig({
-      entityKey: 'bjJual',      // ✅ pastikan ada di config entityKey
-      codeValue: noBJJual,      // ✅ NoBJJual
+      entityKey: "bjJual",
+      codeValue: noBJJual,
       runner: tx,
       useLock: true,
       throwIfNotFound: true,
     });
 
-    // 1) kalau user kirim tanggal -> berarti mau ubah tanggal
+    // =====================================================
+    // 1) Handle date change
+    // =====================================================
     const isChangingDate = payload?.tanggal !== undefined;
     let newDocDateOnly = null;
 
     if (isChangingDate) {
-      if (!payload.tanggal) throw badReq('tanggal tidak boleh kosong');
+      if (!payload.tanggal) throw badReq("tanggal tidak boleh kosong");
       newDocDateOnly = resolveEffectiveDateForCreate(payload.tanggal);
     }
 
-    // 2) guard tutup transaksi
+    // =====================================================
+    // 2) Guard tutup transaksi
+    // =====================================================
     await assertNotLocked({
       date: oldDocDateOnly,
       runner: tx,
-      action: 'update BJJual (current date)',
+      action: "update BJJual (current date)",
       useLock: true,
     });
 
@@ -194,38 +268,49 @@ async function updateBJJual(noBJJual, payload) {
       await assertNotLocked({
         date: newDocDateOnly,
         runner: tx,
-        action: 'update BJJual (new date)',
+        action: "update BJJual (new date)",
         useLock: true,
       });
     }
 
-    // 3) dynamic SET
+    // =====================================================
+    // 3) SET fields dynamically
+    // =====================================================
     const sets = [];
     const rqUpd = new sql.Request(tx);
 
     if (isChangingDate) {
-      sets.push('Tanggal = @Tanggal');
-      rqUpd.input('Tanggal', sql.Date, newDocDateOnly);
+      sets.push("Tanggal = @Tanggal");
+      rqUpd.input("Tanggal", sql.Date, newDocDateOnly);
     }
 
     if (payload.idPembeli !== undefined) {
-      if (payload.idPembeli == null) throw badReq('idPembeli tidak boleh kosong');
-      sets.push('IdPembeli = @IdPembeli');
-      rqUpd.input('IdPembeli', sql.Int, payload.idPembeli);
+      if (payload.idPembeli == null)
+        throw badReq("idPembeli tidak boleh kosong");
+      sets.push("IdPembeli = @IdPembeli");
+      rqUpd.input("IdPembeli", sql.Int, payload.idPembeli);
     }
 
     if (payload.remark !== undefined) {
-      sets.push('Remark = @Remark');
-      rqUpd.input('Remark', sql.VarChar(255), payload.remark ?? null);
+      sets.push("Remark = @Remark");
+      rqUpd.input("Remark", sql.VarChar(255), payload.remark ?? null);
     }
 
-    if (sets.length === 0) throw badReq('No fields to update');
+    if (sets.length === 0) throw badReq("No fields to update");
 
-    rqUpd.input('NoBJJual', sql.VarChar(50), noBJJual);
+    rqUpd.input("NoBJJual", sql.VarChar(50), noBJJual);
 
+    // =====================================================
+    // 4) Apply audit context
+    // =====================================================
+    await applyAuditContext(rqUpd, auditCtx);
+
+    // =====================================================
+    // 5) Execute update
+    // =====================================================
     const updateSql = `
       UPDATE dbo.BJJual_h
-      SET ${sets.join(', ')}
+      SET ${sets.join(", ")}
       WHERE NoBJJual = @NoBJJual;
 
       SELECT *
@@ -236,115 +321,142 @@ async function updateBJJual(noBJJual, payload) {
     const updRes = await rqUpd.query(updateSql);
     const updatedHeader = updRes.recordset?.[0] || null;
 
-    // 4) kalau tanggal berubah -> sync DateUsage untuk input label
+    // =====================================================
+    // 6) Sync DateUsage jika tanggal berubah
+    // =====================================================
     if (isChangingDate && updatedHeader) {
       const newUsageDate = resolveEffectiveDateForCreate(updatedHeader.Tanggal);
 
       const rqUsage = new sql.Request(tx);
       rqUsage
-        .input('NoBJJual', sql.VarChar(50), noBJJual)
-        .input('OldTanggal', sql.Date, oldDocDateOnly)
-        .input('NewTanggal', sql.Date, newUsageDate);
+        .input("NoBJJual", sql.VarChar(50), noBJJual)
+        .input("OldTanggal", sql.Date, oldDocDateOnly)
+        .input("NewTanggal", sql.Date, newUsageDate);
 
-const sqlUpdateUsage = `
-  /* =======================
-     BJ JUAL -> DateUsage Sync
-     ======================= */
+      const sqlUpdateUsage = `
+        /* =======================
+           BJ JUAL -> DateUsage Sync
+           ======================= */
 
-  /* A) BARANG JADI (FULL) */
-  UPDATE bj
-  SET bj.DateUsage = @NewTanggal
-  FROM dbo.BarangJadi bj
-  WHERE EXISTS (
-    SELECT 1
-    FROM dbo.BJJual_dLabelBarangJadi map
-    WHERE map.NoBJJual = @NoBJJual
-      AND map.NoBJ = bj.NoBJ
-  )
-  AND (bj.DateUsage IS NULL OR CONVERT(date, bj.DateUsage) = @OldTanggal);
+        /* A) BARANG JADI (FULL) */
+        UPDATE bj
+        SET bj.DateUsage = @NewTanggal
+        FROM dbo.BarangJadi bj
+        WHERE EXISTS (
+          SELECT 1
+          FROM dbo.BJJual_dLabelBarangJadi map
+          WHERE map.NoBJJual = @NoBJJual
+            AND map.NoBJ = bj.NoBJ
+        )
+        AND (bj.DateUsage IS NULL OR CONVERT(date, bj.DateUsage) = @OldTanggal);
 
-  /* B) BARANG JADI (PARTIAL)
-     Asumsi: NoBJPartial = BarangJadi.NoBJ (IsPartial=1)  ✅ kalau beda tabel, nanti kita ubah joinnya
-  */
-  UPDATE bj
-  SET bj.DateUsage = @NewTanggal
-  FROM dbo.BarangJadi bj
-  WHERE EXISTS (
-    SELECT 1
-    FROM dbo.BJJual_dLabelBarangJadiPartial mp
-    WHERE mp.NoBJJual = @NoBJJual
-      AND mp.NoBJPartial = bj.NoBJ
-  )
-  AND (bj.DateUsage IS NULL OR CONVERT(date, bj.DateUsage) = @OldTanggal);
+        /* B) BARANG JADI (PARTIAL) */
+        UPDATE bj
+        SET bj.DateUsage = @NewTanggal
+        FROM dbo.BarangJadi bj
+        WHERE EXISTS (
+          SELECT 1
+          FROM dbo.BJJual_dLabelBarangJadiPartial mp
+          WHERE mp.NoBJJual = @NoBJJual
+            AND mp.NoBJPartial = bj.NoBJ
+        )
+        AND (bj.DateUsage IS NULL OR CONVERT(date, bj.DateUsage) = @OldTanggal);
 
-  /* C) FURNITURE WIP (FULL) */
-  UPDATE fw
-  SET fw.DateUsage = @NewTanggal
-  FROM dbo.FurnitureWIP fw
-  WHERE EXISTS (
-    SELECT 1
-    FROM dbo.BJJual_dLabelFurnitureWIP mf
-    WHERE mf.NoBJJual = @NoBJJual
-      AND mf.NoFurnitureWIP = fw.NoFurnitureWIP
-  )
-  AND (fw.DateUsage IS NULL OR CONVERT(date, fw.DateUsage) = @OldTanggal);
+        /* C) FURNITURE WIP (FULL) */
+        UPDATE fw
+        SET fw.DateUsage = @NewTanggal
+        FROM dbo.FurnitureWIP fw
+        WHERE EXISTS (
+          SELECT 1
+          FROM dbo.BJJual_dLabelFurnitureWIP mf
+          WHERE mf.NoBJJual = @NoBJJual
+            AND mf.NoFurnitureWIP = fw.NoFurnitureWIP
+        )
+        AND (fw.DateUsage IS NULL OR CONVERT(date, fw.DateUsage) = @OldTanggal);
 
-  /* D) FURNITURE WIP (PARTIAL) */
-  UPDATE fw
-  SET fw.DateUsage = @NewTanggal
-  FROM dbo.FurnitureWIP AS fw
-  WHERE EXISTS (
-    SELECT 1
-    FROM dbo.BJJual_dLabelFurnitureWIPPartial AS mp
-    JOIN dbo.FurnitureWIPPartial AS fwp
-      ON fwp.NoFurnitureWIPPartial = mp.NoFurnitureWIPPartial
-    WHERE mp.NoBJJual = @NoBJJual
-      AND fwp.NoFurnitureWIP = fw.NoFurnitureWIP
-  )
-  AND (fw.DateUsage IS NULL OR CONVERT(date, fw.DateUsage) = @OldTanggal);
-`;
-
+        /* D) FURNITURE WIP (PARTIAL) */
+        UPDATE fw
+        SET fw.DateUsage = @NewTanggal
+        FROM dbo.FurnitureWIP AS fw
+        WHERE EXISTS (
+          SELECT 1
+          FROM dbo.BJJual_dLabelFurnitureWIPPartial AS mp
+          JOIN dbo.FurnitureWIPPartial AS fwp
+            ON fwp.NoFurnitureWIPPartial = mp.NoFurnitureWIPPartial
+          WHERE mp.NoBJJual = @NoBJJual
+            AND fwp.NoFurnitureWIP = fw.NoFurnitureWIP
+        )
+        AND (fw.DateUsage IS NULL OR CONVERT(date, fw.DateUsage) = @OldTanggal);
+      `;
 
       await rqUsage.query(sqlUpdateUsage);
     }
 
     await tx.commit();
-    return { header: updatedHeader };
+    return { header: updatedHeader, audit: auditCtx };
   } catch (e) {
-    try { await tx.rollback(); } catch (_) {}
-    throw e;
+    try {
+      await tx.rollback();
+    } catch (_) {}
+    // attach auditCtx agar controller tetap bisa kirim meta audit
+    throw Object.assign(e, auditCtx);
   }
 }
 
+async function deleteBJJual(noBJJual, ctx) {
+  if (!noBJJual) throw badReq("noBJJual wajib");
 
-async function deleteBJJual(noBJJual) {
-  if (!noBJJual) throw badReq('noBJJual wajib');
+  // ===============================
+  // Audit context
+  // ===============================
+  const actorIdNum = Number(ctx?.actorId);
+  if (!Number.isFinite(actorIdNum) || actorIdNum <= 0) {
+    throw badReq("ctx.actorId wajib. Controller harus inject dari token.");
+  }
+
+  const actorUsername = String(ctx?.actorUsername || "").trim() || "system";
+  const requestId = String(ctx?.requestId || "").trim();
+
+  const auditCtx = {
+    actorId: Math.trunc(actorIdNum),
+    actorUsername,
+    requestId,
+  };
 
   const pool = await poolPromise;
   const tx = new sql.Transaction(pool);
   await tx.begin(sql.ISOLATION_LEVEL.SERIALIZABLE);
 
   try {
-    // 0) lock header + get doc date (untuk guard)
+    // ===============================
+    // 0) LOCK HEADER + AMBIL docDateOnly
+    // ===============================
     const { docDateOnly } = await loadDocDateOnlyFromConfig({
-      entityKey: 'bjJual',     // ✅ pastikan ada di config
-      codeValue: noBJJual,     // ✅ NoBJJual
+      entityKey: "bjJual",
+      codeValue: noBJJual,
       runner: tx,
       useLock: true,
       throwIfNotFound: true,
     });
 
-    // 1) guard tutup transaksi
+    // ===============================
+    // 1) GUARD TUTUP TRANSAKSI
+    // ===============================
     await assertNotLocked({
       date: docDateOnly,
       runner: tx,
-      action: 'delete BJJual',
+      action: "delete BJJual",
       useLock: true,
     });
 
-    // 2) delete mappings + reset usage + delete header
-    const req = new sql.Request(tx);
-    req.input('NoBJJual', sql.VarChar(50), noBJJual);
+    // ===============================
+    // 2) DELETE MAPPINGS + RESET DATEUSAGE + DELETE HEADER
+    // ===============================
+    const rqDel = new sql.Request(tx);
+    rqDel.input("NoBJJual", sql.VarChar(50), noBJJual);
+
+    // apply audit context sebelum eksekusi
+    await applyAuditContext(rqDel, auditCtx);
 
     const sqlDelete = `
       /* ===================================================
@@ -357,38 +469,31 @@ async function deleteBJJual(noBJJual) {
       DECLARE @BJKeys TABLE (NoBJ varchar(50) PRIMARY KEY);
       DECLARE @FWIPKeys TABLE (NoFurnitureWIP varchar(50) PRIMARY KEY);
 
-      /* =======================
-         A) collect BJ keys (FULL)
-         ======================= */
+      /* A) BARANG JADI (FULL) */
       INSERT INTO @BJKeys (NoBJ)
       SELECT DISTINCT d.NoBJ
       FROM dbo.BJJual_dLabelBarangJadi d
       WHERE d.NoBJJual = @NoBJJual
         AND d.NoBJ IS NOT NULL;
 
-      /* =======================
-         B) collect BJ keys (PARTIAL)
-         NOTE: asumsi NoBJPartial = BarangJadi.NoBJ (IsPartial=1)
-         ======================= */
+      /* B) BARANG JADI (PARTIAL) */
       INSERT INTO @BJKeys (NoBJ)
       SELECT DISTINCT p.NoBJPartial
       FROM dbo.BJJual_dLabelBarangJadiPartial p
       WHERE p.NoBJJual = @NoBJJual
         AND p.NoBJPartial IS NOT NULL
-        AND NOT EXISTS (SELECT 1 FROM @BJKeys k WHERE k.NoBJ = p.NoBJPartial);
+        AND NOT EXISTS (
+          SELECT 1 FROM @BJKeys k WHERE k.NoBJ = p.NoBJPartial
+        );
 
-      /* =======================
-         C) collect FWIP keys (FULL)
-         ======================= */
+      /* C) FURNITURE WIP (FULL) */
       INSERT INTO @FWIPKeys (NoFurnitureWIP)
       SELECT DISTINCT f.NoFurnitureWIP
       FROM dbo.BJJual_dLabelFurnitureWIP f
       WHERE f.NoBJJual = @NoBJJual
         AND f.NoFurnitureWIP IS NOT NULL;
 
-      /* =======================
-         D) collect FWIP keys (PARTIAL -> FurnitureWIPPartial)
-         ======================= */
+      /* D) FURNITURE WIP (PARTIAL) */
       INSERT INTO @FWIPKeys (NoFurnitureWIP)
       SELECT DISTINCT fwp.NoFurnitureWIP
       FROM dbo.BJJual_dLabelFurnitureWIPPartial fp
@@ -396,35 +501,28 @@ async function deleteBJJual(noBJJual) {
         ON fwp.NoFurnitureWIPPartial = fp.NoFurnitureWIPPartial
       WHERE fp.NoBJJual = @NoBJJual
         AND fwp.NoFurnitureWIP IS NOT NULL
-        AND NOT EXISTS (SELECT 1 FROM @FWIPKeys k WHERE k.NoFurnitureWIP = fwp.NoFurnitureWIP);
+        AND NOT EXISTS (
+          SELECT 1 FROM @FWIPKeys k WHERE k.NoFurnitureWIP = fwp.NoFurnitureWIP
+        );
 
-      /* =======================
-         E) reset DateUsage BarangJadi
-         ======================= */
+      /* E) RESET DATEUSAGE BARANG JADI */
       UPDATE bj
       SET bj.DateUsage = NULL
       FROM dbo.BarangJadi bj
-      JOIN @BJKeys k
-        ON k.NoBJ = bj.NoBJ;
+      JOIN @BJKeys k ON k.NoBJ = bj.NoBJ;
 
-      /* =======================
-         F) reset DateUsage FurnitureWIP + recalc IsPartial
-         ======================= */
+      /* F) RESET DATEUSAGE FURNITURE WIP */
       UPDATE fw
       SET fw.DateUsage = NULL,
           fw.IsPartial = CASE
             WHEN EXISTS (
-              SELECT 1
-              FROM dbo.FurnitureWIPPartial p
+              SELECT 1 FROM dbo.FurnitureWIPPartial p
               WHERE p.NoFurnitureWIP = fw.NoFurnitureWIP
             ) THEN 1 ELSE 0 END
       FROM dbo.FurnitureWIP fw
-      JOIN @FWIPKeys k
-        ON k.NoFurnitureWIP = fw.NoFurnitureWIP;
+      JOIN @FWIPKeys k ON k.NoFurnitureWIP = fw.NoFurnitureWIP;
 
-      /* =======================
-         G) delete BJ Jual inputs (detail tables)
-         ======================= */
+      /* G) DELETE DETAIL TABLES */
       DELETE FROM dbo.BJJualCabinetMaterial_d
       WHERE NoBJJual = @NoBJJual;
 
@@ -440,27 +538,29 @@ async function deleteBJJual(noBJJual) {
       DELETE FROM dbo.BJJual_dLabelFurnitureWIP
       WHERE NoBJJual = @NoBJJual;
 
-      /* =======================
-         H) delete header last
-         ======================= */
+      /* H) DELETE HEADER LAST */
       DELETE FROM dbo.BJJual_h
       WHERE NoBJJual = @NoBJJual;
     `;
 
-    await req.query(sqlDelete);
-
+    await rqDel.query(sqlDelete);
     await tx.commit();
-    return { success: true };
+
+    return { success: true, audit: auditCtx };
   } catch (e) {
-    try { await tx.rollback(); } catch (_) {}
-    throw e;
+    try {
+      await tx.rollback();
+    } catch (_) {}
+
+    // attach audit context agar controller tetap bisa kirim meta.audit
+    throw Object.assign(e, auditCtx);
   }
 }
 
 async function fetchInputs(noBJJual) {
   const pool = await poolPromise;
   const req = pool.request();
-  req.input('no', sql.VarChar(50), noBJJual);
+  req.input("no", sql.VarChar(50), noBJJual);
 
   const q = `
     /* ===================== [1] MAIN INPUTS (UNION) ===================== */
@@ -614,24 +714,24 @@ async function fetchInputs(noBJJual) {
     };
 
     switch (r.Src) {
-      case 'bj':
+      case "bj":
         out.barangJadi.push({
           noBJ: r.Ref1,
           ...base,
         });
         break;
 
-      case 'fwip':
+      case "fwip":
         out.furnitureWip.push({
           noFurnitureWip: r.Ref1,
           ...base,
         });
         break;
 
-      case 'material':
+      case "material":
         out.cabinetMaterial.push({
           idCabinetMaterial: r.Ref1, // string cast (konsisten)
-          pcs: r.Pcs ?? null,        // kalau mau samakan dgn packing: rename ke "jumlah"
+          pcs: r.Pcs ?? null, // kalau mau samakan dgn packing: rename ke "jumlah"
           ...base,
         });
         break;
@@ -641,9 +741,9 @@ async function fetchInputs(noBJJual) {
   // PARTIAL BJ (merge into barangJadi bucket)
   for (const p of bjPartialRows) {
     out.barangJadi.push({
-      noBJPartial: p.NoBJPartial,     // BL...
-      noBJ: p.NoBJ ?? null,           // BA... (header)
-      pcs: p.PcsPartial ?? null,      // pcs partial (BarangJadiPartial)
+      noBJPartial: p.NoBJPartial, // BL...
+      noBJ: p.NoBJ ?? null, // BA... (header)
+      pcs: p.PcsPartial ?? null, // pcs partial (BarangJadiPartial)
       pcsHeader: p.PcsHeader ?? null, // pcs header (BarangJadi)
       berat: p.Berat ?? null,
       idJenis: p.IdJenis ?? null,
@@ -690,24 +790,24 @@ async function fetchInputs(noBJJual) {
  * }
  */
 async function upsertInputsAndPartials(noProduksi, payload, ctx) {
-  const no = String(noProduksi || '').trim();
-  if (!no) throw badReq('noProduksi wajib diisi');
+  const no = String(noProduksi || "").trim();
+  if (!no) throw badReq("noProduksi wajib diisi");
 
-  const body = payload && typeof payload === 'object' ? payload : {};
+  const body = payload && typeof payload === "object" ? payload : {};
 
   // ✅ ctx wajib (audit)
   const actorIdNum = Number(ctx?.actorId);
   if (!Number.isFinite(actorIdNum) || actorIdNum <= 0) {
-    throw badReq('ctx.actorId wajib. Controller harus inject dari token.');
+    throw badReq("ctx.actorId wajib. Controller harus inject dari token.");
   }
 
-  const actorUsername = String(ctx?.actorUsername || '').trim() || 'system';
+  const actorUsername = String(ctx?.actorUsername || "").trim() || "system";
 
   // requestId wajib string (kalau kosong, nanti di applyAuditContext dibuat fallback juga)
-  const requestId = String(ctx?.requestId || '').trim();
+  const requestId = String(ctx?.requestId || "").trim();
 
   // ✅ forward ctx yang sudah dinormalisasi ke shared service
-  return sharedInputService.upsertInputsAndPartials('bjJual', no, body, {
+  return sharedInputService.upsertInputsAndPartials("bjJual", no, body, {
     actorId: Math.trunc(actorIdNum),
     actorUsername,
     requestId,
@@ -715,28 +815,27 @@ async function upsertInputsAndPartials(noProduksi, payload, ctx) {
 }
 
 async function deleteInputsAndPartials(noProduksi, payload, ctx) {
-  const no = String(noProduksi || '').trim();
-  if (!no) throw badReq('noProduksi wajib diisi');
+  const no = String(noProduksi || "").trim();
+  if (!no) throw badReq("noProduksi wajib diisi");
 
-  const body = payload && typeof payload === 'object' ? payload : {};
+  const body = payload && typeof payload === "object" ? payload : {};
 
   // ✅ Validate audit context
   const actorIdNum = Number(ctx?.actorId);
   if (!Number.isFinite(actorIdNum) || actorIdNum <= 0) {
-    throw badReq('ctx.actorId wajib. Controller harus inject dari token.');
+    throw badReq("ctx.actorId wajib. Controller harus inject dari token.");
   }
 
-  const actorUsername = String(ctx?.actorUsername || '').trim() || 'system';
-  const requestId = String(ctx?.requestId || '').trim();
+  const actorUsername = String(ctx?.actorUsername || "").trim() || "system";
+  const requestId = String(ctx?.requestId || "").trim();
 
   // ✅ Forward to shared service
-  return sharedInputService.deleteInputsAndPartials('bjJual', no, body, {
+  return sharedInputService.deleteInputsAndPartials("bjJual", no, body, {
     actorId: Math.trunc(actorIdNum),
     actorUsername,
     requestId,
   });
 }
-
 
 module.exports = {
   getAllBJJual,
@@ -745,5 +844,5 @@ module.exports = {
   deleteBJJual,
   fetchInputs,
   upsertInputsAndPartials,
-  deleteInputsAndPartials
+  deleteInputsAndPartials,
 };

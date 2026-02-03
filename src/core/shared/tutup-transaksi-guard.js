@@ -1,19 +1,19 @@
 // src/core/shared/tutup-transaksi.js
 // ✅ UTC-only implementation + helper config-based doc date lookup
-const { sql, poolPromise } = require('../config/db');
+const { sql, poolPromise } = require("../config/db");
 
 // Optional config (kalau file config belum dibuat, helper config-based akan throw dengan pesan jelas)
 let TUTUP_TRANSAKSI_SOURCES = null;
 try {
   // 👉 buat file ini: src/core/config/tutup-transaksi-config.js
   // module.exports = { TUTUP_TRANSAKSI_SOURCES: { ... } }
-  ({ TUTUP_TRANSAKSI_SOURCES } = require('../config/tutup-transaksi-config'));
+  ({ TUTUP_TRANSAKSI_SOURCES } = require("../config/tutup-transaksi-config"));
 } catch (_) {
   TUTUP_TRANSAKSI_SOURCES = null;
 }
 
 async function getRequest(runner) {
-  const r = (typeof runner?.then === 'function') ? await runner : runner;
+  const r = typeof runner?.then === "function" ? await runner : runner;
   if (r instanceof sql.Request) return r;
   if (r instanceof sql.Transaction) return new sql.Request(r);
   if (r?.request) return r.request();
@@ -30,11 +30,9 @@ function toDateOnly(value) {
 
   // If Date object: take its UTC Y/M/D as date-only
   if (value instanceof Date && !isNaN(value.getTime())) {
-    return new Date(Date.UTC(
-      value.getUTCFullYear(),
-      value.getUTCMonth(),
-      value.getUTCDate()
-    ));
+    return new Date(
+      Date.UTC(value.getUTCFullYear(), value.getUTCMonth(), value.getUTCDate()),
+    );
   }
 
   const s = String(value).trim();
@@ -44,7 +42,9 @@ function toDateOnly(value) {
   const s10 = s.length >= 10 ? s.substring(0, 10) : s;
   const m = /^(\d{4})-(\d{2})-(\d{2})$/.exec(s10);
   if (m) {
-    const y = Number(m[1]), mo = Number(m[2]), d = Number(m[3]);
+    const y = Number(m[1]),
+      mo = Number(m[2]),
+      d = Number(m[3]);
     const dt = new Date(Date.UTC(y, mo - 1, d)); // ✅ UTC midnight
     if (!isNaN(dt.getTime())) return dt;
   }
@@ -52,11 +52,9 @@ function toDateOnly(value) {
   // Otherwise parse as Date (ISO datetime etc.), then normalize to UTC date-only
   const dt2 = new Date(s);
   if (!isNaN(dt2.getTime())) {
-    return new Date(Date.UTC(
-      dt2.getUTCFullYear(),
-      dt2.getUTCMonth(),
-      dt2.getUTCDate()
-    ));
+    return new Date(
+      Date.UTC(dt2.getUTCFullYear(), dt2.getUTCMonth(), dt2.getUTCDate()),
+    );
   }
 
   return null;
@@ -77,7 +75,7 @@ function formatYMD(d) {
  */
 async function getLastClosedPeriod({ runner, useLock = false } = {}) {
   const request = await getRequest(runner);
-  const hint = useLock ? 'WITH (UPDLOCK, HOLDLOCK)' : 'WITH (NOLOCK)';
+  const hint = useLock ? "WITH (UPDLOCK, HOLDLOCK)" : "WITH (NOLOCK)";
 
   const q = `
     SELECT TOP 1 Id, CONVERT(date, PeriodHarian) AS PeriodHarian, [Lock]
@@ -98,7 +96,12 @@ async function getLastClosedPeriod({ runner, useLock = false } = {}) {
  * RULE: trxDate must be > lastClosed
  * Semua compare dilakukan dalam UTC date-only.
  */
-async function assertDateAfterLastClosed({ date, runner, action = 'transaction', useLock = false } = {}) {
+async function assertDateAfterLastClosed({
+  date,
+  runner,
+  action = "transaction",
+  useLock = false,
+} = {}) {
   const trxDate = toDateOnly(date);
   if (!trxDate) return { ok: true, trxDate: null, lastClosed: null, row: null };
 
@@ -110,11 +113,15 @@ async function assertDateAfterLastClosed({ date, runner, action = 'transaction',
 
     const e = new Error(
       `Tidak bisa ${action}: transaksi tanggal ${formatYMD(trxDate)} sudah ditutup (last closed: ${formatYMD(lastClosed)}). ` +
-      `Silakan input minimal tanggal ${formatYMD(nextAllowed)}.`
+        `Silakan input minimal tanggal ${formatYMD(nextAllowed)}.`,
     );
     e.statusCode = 423;
-    e.code = 'TUTUP_TRANSAKSI_LOCKED';
-    e.meta = { trxDate: formatYMD(trxDate), lastClosed: formatYMD(lastClosed), row };
+    e.code = "TUTUP_TRANSAKSI_LOCKED";
+    e.meta = {
+      trxDate: formatYMD(trxDate),
+      lastClosed: formatYMD(lastClosed),
+      row,
+    };
     throw e;
   }
 
@@ -162,28 +169,32 @@ async function loadDocDateOnlyFromTable({
   throwIfNotFound = true,
 } = {}) {
   if (!table) {
-    const e = new Error('table wajib diisi');
+    const e = new Error("table wajib diisi");
     e.statusCode = 500;
     throw e;
   }
   if (!codeColumn) {
-    const e = new Error('codeColumn wajib diisi');
+    const e = new Error("codeColumn wajib diisi");
     e.statusCode = 500;
     throw e;
   }
   if (!dateColumn) {
-    const e = new Error('dateColumn wajib diisi');
+    const e = new Error("dateColumn wajib diisi");
     e.statusCode = 500;
     throw e;
   }
-  if (codeValue === undefined || codeValue === null || String(codeValue).trim() === '') {
-    const e = new Error('codeValue wajib diisi');
+  if (
+    codeValue === undefined ||
+    codeValue === null ||
+    String(codeValue).trim() === ""
+  ) {
+    const e = new Error("codeValue wajib diisi");
     e.statusCode = 400;
     throw e;
   }
 
   const request = await getRequest(runner);
-  const hint = useLock ? 'WITH (UPDLOCK, HOLDLOCK)' : 'WITH (NOLOCK)';
+  const hint = useLock ? "WITH (UPDLOCK, HOLDLOCK)" : "WITH (NOLOCK)";
 
   // NOTE: table/column tidak bisa jadi parameter, jadi harus dari config/static.
   // Pastikan table/column berasal dari kode internal (bukan input user mentah).
@@ -195,15 +206,19 @@ async function loadDocDateOnlyFromTable({
     WHERE ${codeColumn} = @code
   `;
 
-  const res = await request.input('code', sql.VarChar, String(codeValue)).query(q);
+  const res = await request
+    .input("code", sql.VarChar, String(codeValue))
+    .query(q);
   const row = res.recordset?.[0] || null;
 
   if (!row) {
     if (!throwIfNotFound) return { found: false, docDateOnly: null, row: null };
 
-    const e = new Error(`Dokumen tidak ditemukan: ${table}.${codeColumn} = ${String(codeValue)}`);
+    const e = new Error(
+      `Dokumen tidak ditemukan: ${table}.${codeColumn} = ${String(codeValue)}`,
+    );
     e.statusCode = 404;
-    e.code = 'DOC_NOT_FOUND';
+    e.code = "DOC_NOT_FOUND";
     e.meta = { table, codeColumn, dateColumn, codeValue: String(codeValue) };
     throw e;
   }
@@ -231,24 +246,26 @@ async function loadDocDateOnlyFromConfig({
   throwIfNotFound = true,
 } = {}) {
   if (!entityKey) {
-    const e = new Error('entityKey wajib diisi');
+    const e = new Error("entityKey wajib diisi");
     e.statusCode = 500;
     throw e;
   }
   if (!TUTUP_TRANSAKSI_SOURCES) {
     const e = new Error(
-      `TUTUP_TRANSAKSI_SOURCES belum tersedia. Buat file: src/core/config/tutup-transaksi-config.js`
+      `TUTUP_TRANSAKSI_SOURCES belum tersedia. Buat file: src/core/config/tutup-transaksi-config.js`,
     );
     e.statusCode = 500;
-    e.code = 'TUTUP_TRANSAKSI_CONFIG_MISSING';
+    e.code = "TUTUP_TRANSAKSI_CONFIG_MISSING";
     throw e;
   }
 
   const cfg = TUTUP_TRANSAKSI_SOURCES[entityKey];
   if (!cfg) {
-    const e = new Error(`Config tutup transaksi tidak ditemukan untuk entityKey=${entityKey}`);
+    const e = new Error(
+      `Config tutup transaksi tidak ditemukan untuk entityKey=${entityKey}`,
+    );
     e.statusCode = 500;
-    e.code = 'TUTUP_TRANSAKSI_CONFIG_NOT_FOUND';
+    e.code = "TUTUP_TRANSAKSI_CONFIG_NOT_FOUND";
     e.meta = { entityKey, availableKeys: Object.keys(TUTUP_TRANSAKSI_SOURCES) };
     throw e;
   }

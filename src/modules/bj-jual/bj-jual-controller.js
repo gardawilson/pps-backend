@@ -1,7 +1,21 @@
 // controllers/bj-jual-controller.js
-const bjJualService = require('./bj-jual-service'); // sesuaikan path
-const { getActorId, getActorUsername, makeRequestId } = require('../../core/utils/http-context');
-
+const bjJualService = require("./bj-jual-service"); // sesuaikan path
+const {
+  getActorId,
+  getActorUsername,
+  makeRequestId,
+} = require("../../core/utils/http-context");
+const {
+  toInt,
+  toFloat,
+  normalizeTime,
+  toBit,
+  toIntUndef,
+  toFloatUndef,
+  toBitUndef,
+  toStrUndef,
+  toJamInt,
+} = require("../../core/utils/parse");
 
 // ✅ GET ALL (paging + search + optional date range)
 async function getAllBJJual(req, res) {
@@ -11,16 +25,16 @@ async function getAllBJJual(req, res) {
 
   // support both ?noBJJual= and ?search=
   const search =
-    (typeof req.query.noBJJual === 'string' && req.query.noBJJual) ||
-    (typeof req.query.search === 'string' && req.query.search) ||
-    '';
+    (typeof req.query.noBJJual === "string" && req.query.noBJJual) ||
+    (typeof req.query.search === "string" && req.query.search) ||
+    "";
 
   // OPTIONAL date filter
   // Example: ?dateFrom=2025-12-01&dateTo=2025-12-31
   const dateFrom =
-    (typeof req.query.dateFrom === 'string' && req.query.dateFrom) || null;
+    (typeof req.query.dateFrom === "string" && req.query.dateFrom) || null;
   const dateTo =
-    (typeof req.query.dateTo === 'string' && req.query.dateTo) || null;
+    (typeof req.query.dateTo === "string" && req.query.dateTo) || null;
 
   try {
     const { data, total } = await bjJualService.getAllBJJual(
@@ -28,12 +42,12 @@ async function getAllBJJual(req, res) {
       pageSize,
       search,
       dateFrom,
-      dateTo
+      dateTo,
     );
 
     return res.status(200).json({
       success: true,
-      message: 'BJJual_h retrieved successfully',
+      message: "BJJual_h retrieved successfully",
       totalData: total,
       data,
       meta: {
@@ -48,10 +62,10 @@ async function getAllBJJual(req, res) {
       },
     });
   } catch (error) {
-    console.error('Error fetching BJJual_h:', error);
+    console.error("Error fetching BJJual_h:", error);
     return res.status(500).json({
       success: false,
-      message: 'Internal Server Error',
+      message: "Internal Server Error",
       error: error.message,
     });
   }
@@ -59,142 +73,295 @@ async function getAllBJJual(req, res) {
 
 async function createBJJual(req, res) {
   try {
-    const username = req.username || req.user?.username || 'system';
-    const b = req.body || {};
+    // ===============================
+    // Audit context
+    // ===============================
+    const actorId = getActorId(req);
+    if (!actorId) {
+      return res.status(401).json({
+        success: false,
+        message: "Unauthorized (actorId missing)",
+      });
+    }
 
-    const toInt = (v) => {
-      if (v === undefined || v === null || v === '') return null;
-      const n = Number(v);
-      return Number.isNaN(n) ? null : Math.trunc(n);
-    };
+    const actorUsername =
+      getActorUsername(req) || req.username || req.user?.username || "system";
 
+    const requestId = String(makeRequestId(req) || "").trim();
+    if (requestId) res.setHeader("x-request-id", requestId);
+
+    // ===============================
+    // Body tanpa audit fields dari client
+    // ===============================
+    const body = req.body && typeof req.body === "object" ? req.body : {};
+    const {
+      createBy: _cCreateBy, // ❌ jangan percaya client
+      ...b
+    } = body;
+
+    // ===============================
+    // Payload business
+    // ===============================
     const payload = {
-      tanggal: b.tanggal || b.tglJual || b.tgl || null, // required (pick one)
-      idPembeli: toInt(b.idPembeli),                   // required
-      remark: b.remark ?? null,                        // optional
-      createBy: username,                              // optional if you later add column
+      tanggal: b.tanggal || b.tglJual || b.tgl || null, // required
+      idPembeli: toInt(b.idPembeli), // required
+      remark: b.remark ?? null,
+
+      // ✅ audit field (server-side)
+      createBy: actorUsername,
     };
 
-    const result = await bjJualService.createBJJual(payload);
+    // ===============================
+    // Quick validation
+    // ===============================
+    const must = [];
+    if (!payload.tanggal) must.push("tanggal");
+    if (payload.idPembeli == null) must.push("idPembeli");
+
+    if (must.length) {
+      return res.status(400).json({
+        success: false,
+        message: `Field wajib: ${must.join(", ")}`,
+        error: { fields: must },
+      });
+    }
+
+    // ===============================
+    // Call service
+    // ===============================
+    const result = await bjJualService.createBJJual(payload, {
+      actorId,
+      actorUsername,
+      requestId,
+    });
 
     return res.status(201).json({
       success: true,
-      message: 'BJJual_h created',
+      message: "BJJual_h created",
       data: result.header,
+      meta: {
+        audit: {
+          actorId,
+          actorUsername,
+          requestId,
+        },
+      },
     });
   } catch (err) {
-    const status = err.statusCode || 500;
+    console.error("[BJJual][createBJJual]", err);
+
+    const status = err.statusCode || err.status || 500;
     return res.status(status).json({
       success: false,
-      message: err.message || 'Internal Error',
+      message:
+        status === 500 ? "Internal Server Error" : err.message || "Error",
+      error: {
+        message: err.message,
+        details: process.env.NODE_ENV === "development" ? err.stack : undefined,
+      },
+      meta:
+        err.actorId && err.actorUsername
+          ? {
+              actorId: err.actorId,
+              actorUsername: err.actorUsername,
+              requestId: err.requestId,
+            }
+          : undefined,
     });
   }
 }
 
 async function updateBJJual(req, res) {
   try {
-    const username = req.username || req.user?.username || 'system';
-    const noBJJual = String(req.params.noBJJual || '').trim();
-
-    if (!noBJJual) {
-      return res.status(400).json({ success: false, message: 'noBJJual wajib' });
+    // ===============================
+    // Audit context
+    // ===============================
+    const actorId = getActorId(req);
+    if (!actorId) {
+      return res
+        .status(401)
+        .json({ success: false, message: "Unauthorized (actorId missing)" });
     }
 
-    const b = req.body || {};
+    const actorUsername =
+      getActorUsername(req) || req.username || req.user?.username || "system";
 
-    const toInt = (v) => {
-      if (v === undefined || v === null || v === '') return null;
-      const n = Number(v);
-      return Number.isNaN(n) ? null : Math.trunc(n);
-    };
+    const requestId = String(makeRequestId(req) || "").trim();
+    if (requestId) res.setHeader("x-request-id", requestId);
 
+    // ===============================
+    // Get noBJJual
+    // ===============================
+    const noBJJual = String(req.params.noBJJual || "").trim();
+    if (!noBJJual) {
+      return res
+        .status(400)
+        .json({ success: false, message: "noBJJual wajib" });
+    }
+
+    // ===============================
+    // Body tanpa audit fields dari client
+    // ===============================
+    const b = req.body && typeof req.body === "object" ? req.body : {};
+    const {
+      actorId: _cActorId,
+      actorUsername: _cActorUsername,
+      actor: _cActor,
+      requestId: _cRequestId,
+      createBy: _cCreateBy,
+      updateBy: _cUpdateBy,
+      ...body
+    } = b;
+
+    // ===============================
+    // Build payload normalized
+    // ===============================
     const payload = {
-      // optional
-      tanggal: b.tanggal ?? b.tglJual ?? b.tgl ?? undefined, // ✅ undefined berarti "tidak dikirim"
+      // undefined → tidak diupdate
+      tanggal: body.tanggal ?? body.tglJual ?? body.tgl ?? undefined,
 
-      idPembeli: b.idPembeli !== undefined ? toInt(b.idPembeli) : undefined,
-      remark: b.remark ?? undefined,
+      idPembeli:
+        body.idPembeli !== undefined ? toIntUndef(body.idPembeli) : undefined,
 
-      updateBy: username,
+      remark: toStrUndef(body.remark),
     };
 
-    const result = await bjJualService.updateBJJual(noBJJual, payload);
+    // ===============================
+    // Call service with audit context
+    // ===============================
+    const result = await bjJualService.updateBJJual(noBJJual, payload, {
+      actorId,
+      actorUsername,
+      requestId,
+    });
 
     return res.status(200).json({
       success: true,
-      message: 'BJJual_h updated',
+      message: "BJJual_h updated",
       data: result.header,
+      meta: { audit: result.audit },
     });
   } catch (err) {
-    const status = err.statusCode || 500;
+    console.error("[BJJual][updateBJJual]", err);
+    const status = err.statusCode || err.status || 500;
+
     return res.status(status).json({
       success: false,
-      message: err.message || 'Internal Error',
+      message: status === 500 ? "Internal Server Error" : err.message,
+      error: {
+        message: err.message,
+        details: process.env.NODE_ENV === "development" ? err.stack : undefined,
+      },
+      meta:
+        err.actorId && err.actorUsername
+          ? {
+              actorId: err.actorId,
+              actorUsername: err.actorUsername,
+              requestId: err.requestId,
+            }
+          : undefined,
     });
   }
 }
 
 async function deleteBJJual(req, res) {
   try {
-    const noBJJual = String(req.params.noBJJual || '').trim();
-
-    if (!noBJJual) {
-      return res.status(400).json({
+    // ===============================
+    // Audit context
+    // ===============================
+    const actorId = getActorId(req);
+    if (!actorId) {
+      return res.status(401).json({
         success: false,
-        message: 'noBJJual is required in route param',
+        message: "Unauthorized (actorId missing)",
       });
     }
 
-    await bjJualService.deleteBJJual(noBJJual);
+    const actorUsername =
+      getActorUsername(req) || req.username || req.user?.username || "system";
 
-    return res.status(200).json({ success: true, message: 'Deleted' });
+    const requestId = String(makeRequestId(req) || "").trim();
+    if (requestId) res.setHeader("x-request-id", requestId);
+
+    // ===============================
+    // Get noBJJual
+    // ===============================
+    const noBJJual = String(req.params.noBJJual || "").trim();
+    if (!noBJJual) {
+      return res.status(400).json({
+        success: false,
+        message: "noBJJual wajib",
+      });
+    }
+
+    // ===============================
+    // Call service with audit context
+    // ===============================
+    const result = await bjJualService.deleteBJJual(noBJJual, {
+      actorId,
+      actorUsername,
+      requestId,
+    });
+
+    return res.status(200).json({
+      success: true,
+      message: "BJJual_h deleted",
+      meta: { audit: result.audit },
+    });
   } catch (err) {
-    const status = err.statusCode || 500;
+    console.error("[BJJual][deleteBJJual]", err);
+    const status = err.statusCode || err.status || 500;
+
     return res.status(status).json({
       success: false,
-      message: err.message || 'Internal Error',
+      message: status === 500 ? "Internal Server Error" : err.message,
+      error: {
+        message: err.message,
+        details: process.env.NODE_ENV === "development" ? err.stack : undefined,
+      },
     });
   }
 }
 
-
 async function getInputsByNoBJJual(req, res) {
-  const noBJJual = String(req.params.noBJJual || '').trim();
+  const noBJJual = String(req.params.noBJJual || "").trim();
   if (!noBJJual) {
     return res
       .status(400)
-      .json({ success: false, message: 'noBJJual is required' });
+      .json({ success: false, message: "noBJJual is required" });
   }
 
   try {
     const data = await bjJualService.fetchInputs(noBJJual);
     return res
       .status(200)
-      .json({ success: true, message: 'Inputs retrieved', data });
+      .json({ success: true, message: "Inputs retrieved", data });
   } catch (e) {
-    console.error('[bjJual.getInputsByNoBJJual]', e);
+    console.error("[bjJual.getInputsByNoBJJual]", e);
     return res.status(500).json({
       success: false,
-      message: 'Internal Server Error',
+      message: "Internal Server Error",
       error: e.message,
     });
   }
 }
 
-
 async function upsertInputsAndPartials(req, res) {
-  const noProduksi = String(req.params.noProduksi || '').trim();
-  
+  const noProduksi = String(req.params.noBJJual || "").trim();
+
   if (!noProduksi) {
     return res.status(400).json({
       success: false,
-      message: 'noProduksi is required',
-      error: { field: 'noProduksi', message: 'Parameter noProduksi tidak boleh kosong' },
+      message: "noProduksi is required",
+      error: {
+        field: "noProduksi",
+        message: "Parameter noProduksi tidak boleh kosong",
+      },
     });
   }
 
   // ✅ Pastikan body object
-  const body = req.body && typeof req.body === 'object' ? req.body : {};
+  const body = req.body && typeof req.body === "object" ? req.body : {};
 
   // ✅ Strip client audit fields (jangan percaya dari client)
   const {
@@ -210,32 +377,36 @@ async function upsertInputsAndPartials(req, res) {
   if (!actorId) {
     return res.status(401).json({
       success: false,
-      message: 'Unauthorized (idUsername missing)',
+      message: "Unauthorized (idUsername missing)",
     });
   }
 
-  const actorUsername = getActorUsername(req) || req.username || req.user?.username || 'system';
-  const requestId = String(makeRequestId(req) || '').trim();
+  const actorUsername =
+    getActorUsername(req) || req.username || req.user?.username || "system";
+  const requestId = String(makeRequestId(req) || "").trim();
 
   // Optional: echo header for tracing
-  if (requestId) res.setHeader('x-request-id', requestId);
+  if (requestId) res.setHeader("x-request-id", requestId);
 
   // ✅ Validate: at least one input exists
   const hasInput = [
-    'barangJadi',
-    'furnitureWip',
-    'cabinetMaterial',
-    'barangJadiPartial',
-    'furnitureWipPartial',
-  ].some((key) => payload[key] && Array.isArray(payload[key]) && payload[key].length > 0);
-
+    "barangJadi",
+    "furnitureWip",
+    "cabinetMaterial",
+    "barangJadiPartial",
+    "furnitureWipPartial",
+  ].some(
+    (key) =>
+      payload[key] && Array.isArray(payload[key]) && payload[key].length > 0,
+  );
 
   if (!hasInput) {
     return res.status(400).json({
       success: false,
-      message: 'Tidak ada data input yang diberikan',
+      message: "Tidak ada data input yang diberikan",
       error: {
-        message: 'Request body harus berisi minimal satu array input yang tidak kosong',
+        message:
+          "Request body harus berisi minimal satu array input yang tidak kosong",
       },
     });
   }
@@ -247,7 +418,7 @@ async function upsertInputsAndPartials(req, res) {
     const result = await bjJualService.upsertInputsAndPartials(
       noProduksi,
       payload,
-      ctx
+      ctx,
     );
 
     // Support beberapa bentuk return (backward compatible)
@@ -256,23 +427,28 @@ async function upsertInputsAndPartials(req, res) {
     const data = result?.data ?? result;
 
     let statusCode = 200;
-    let message = 'Inputs & partials processed successfully';
+    let message = "Inputs & partials processed successfully";
 
     if (!success) {
       const totalInvalid = Number(data?.summary?.totalInvalid ?? 0);
       const totalInserted = Number(data?.summary?.totalInserted ?? 0);
       const totalUpdated = Number(data?.summary?.totalUpdated ?? 0); // ✅ Support UPSERT
-      const totalPartialsCreated = Number(data?.summary?.totalPartialsCreated ?? 0);
+      const totalPartialsCreated = Number(
+        data?.summary?.totalPartialsCreated ?? 0,
+      );
 
       if (totalInvalid > 0) {
         statusCode = 422;
-        message = 'Beberapa data tidak valid';
-      } else if ((totalInserted + totalUpdated) === 0 && totalPartialsCreated === 0) {
+        message = "Beberapa data tidak valid";
+      } else if (
+        totalInserted + totalUpdated === 0 &&
+        totalPartialsCreated === 0
+      ) {
         statusCode = 400;
-        message = 'Tidak ada data yang berhasil diproses';
+        message = "Tidak ada data yang berhasil diproses";
       }
     } else if (hasWarnings) {
-      message = 'Inputs & partials processed with warnings';
+      message = "Inputs & partials processed with warnings";
     }
 
     return res.status(statusCode).json({
@@ -286,29 +462,31 @@ async function upsertInputsAndPartials(req, res) {
       },
     });
   } catch (e) {
-    console.error('[inject.upsertInputsAndPartials]', e);
+    console.error("[inject.upsertInputsAndPartials]", e);
     const status = e.statusCode || e.status || 500;
 
     return res.status(status).json({
       success: false,
-      message: status === 500 ? 'Internal Server Error' : e.message,
+      message: status === 500 ? "Internal Server Error" : e.message,
       error: {
         message: e.message,
-        details: process.env.NODE_ENV === 'development' ? e.stack : undefined,
+        details: process.env.NODE_ENV === "development" ? e.stack : undefined,
       },
     });
   }
 }
 
-
 async function deleteInputsAndPartials(req, res) {
-  const noProduksi = String(req.params.noProduksi || '').trim();
+  const noProduksi = String(req.params.noBJJual || "").trim();
 
   if (!noProduksi) {
     return res.status(400).json({
       success: false,
-      message: 'noProduksi is required',
-      error: { field: 'noProduksi', message: 'Parameter noProduksi tidak boleh kosong' },
+      message: "noProduksi is required",
+      error: {
+        field: "noProduksi",
+        message: "Parameter noProduksi tidak boleh kosong",
+      },
     });
   }
 
@@ -326,29 +504,36 @@ async function deleteInputsAndPartials(req, res) {
   if (!actorId) {
     return res.status(401).json({
       success: false,
-      message: 'Unauthorized (idUsername missing)',
+      message: "Unauthorized (idUsername missing)",
     });
   }
 
-  const actorUsername = getActorUsername(req) || req.username || req.user?.username || 'system';
-  const requestId = String(makeRequestId(req) || '').trim();
+  const actorUsername =
+    getActorUsername(req) || req.username || req.user?.username || "system";
+  const requestId = String(makeRequestId(req) || "").trim();
 
-  if (requestId) res.setHeader('x-request-id', requestId);
+  if (requestId) res.setHeader("x-request-id", requestId);
 
   // ✅ Validate input
   const hasInput = [
-    'barangJadi',
-    'furnitureWip',
-    'cabinetMaterial',
-    'barangJadiPartial',
-    'furnitureWipPartial',
-  ].some((key) => payload[key] && Array.isArray(payload[key]) && payload[key].length > 0);
+    "barangJadi",
+    "furnitureWip",
+    "cabinetMaterial",
+    "barangJadiPartial",
+    "furnitureWipPartial",
+  ].some(
+    (key) =>
+      payload[key] && Array.isArray(payload[key]) && payload[key].length > 0,
+  );
 
   if (!hasInput) {
     return res.status(400).json({
       success: false,
-      message: 'Tidak ada data input yang diberikan',
-      error: { message: 'Request body harus berisi minimal satu array input yang tidak kosong' },
+      message: "Tidak ada data input yang diberikan",
+      error: {
+        message:
+          "Request body harus berisi minimal satu array input yang tidak kosong",
+      },
     });
   }
 
@@ -359,19 +544,19 @@ async function deleteInputsAndPartials(req, res) {
     const result = await bjJualService.deleteInputsAndPartials(
       noProduksi,
       payload,
-      ctx
+      ctx,
     );
 
     const { success, hasWarnings, data } = result;
 
     let statusCode = 200;
-    let message = 'Inputs & partials deleted successfully';
+    let message = "Inputs & partials deleted successfully";
 
     if (!success) {
       statusCode = 404;
-      message = 'Tidak ada data yang berhasil dihapus';
+      message = "Tidak ada data yang berhasil dihapus";
     } else if (hasWarnings) {
-      message = 'Inputs & partials deleted with warnings';
+      message = "Inputs & partials deleted with warnings";
     }
 
     return res.status(statusCode).json({
@@ -385,20 +570,19 @@ async function deleteInputsAndPartials(req, res) {
       },
     });
   } catch (e) {
-    console.error('[inject.deleteInputsAndPartials]', e);
+    console.error("[inject.deleteInputsAndPartials]", e);
     const status = e.statusCode || e.status || 500;
 
     return res.status(status).json({
       success: false,
-      message: status === 500 ? 'Internal Server Error' : e.message,
+      message: status === 500 ? "Internal Server Error" : e.message,
       error: {
         message: e.message,
-        details: process.env.NODE_ENV === 'development' ? e.stack : undefined,
+        details: process.env.NODE_ENV === "development" ? e.stack : undefined,
       },
     });
   }
 }
-
 
 module.exports = {
   getAllBJJual,
@@ -407,5 +591,5 @@ module.exports = {
   deleteBJJual,
   getInputsByNoBJJual,
   upsertInputsAndPartials,
-  deleteInputsAndPartials
+  deleteInputsAndPartials,
 };

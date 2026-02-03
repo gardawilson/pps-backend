@@ -1,15 +1,15 @@
 // src/core/utils/sequence-code-helper.js
-const { sql } = require('../config/db');
+const { sql } = require("../config/db");
 
 function padLeft(num, width) {
   const s = String(num);
-  return s.length >= width ? s : '0'.repeat(width - s.length) + s;
+  return s.length >= width ? s : "0".repeat(width - s.length) + s;
 }
 
 function escapeIdent(name) {
   // very strict: allow only letters, numbers, underscore, dot, brackets
   // to reduce injection risk because table/column can't be parameterized
-  const s = String(name || '').trim();
+  const s = String(name || "").trim();
   if (!/^[A-Za-z0-9_.\[\]]+$/.test(s)) {
     throw new Error(`Invalid identifier: ${name}`);
   }
@@ -33,25 +33,28 @@ function escapeIdent(name) {
  * - extraWhereSql: optional additional SQL (safe static string) like "AND IdWarehouse=@IdWarehouse"
  * - extraInputs: optional fn(req) to bind extra parameters to request
  */
-async function generateNextCode(tx, {
-  tableName,
-  columnName,
-  prefix = '',
-  width = 10,
-  extraWhereSql = '',
-  extraInputs = null,
-} = {}) {
-  if (!tx) throw new Error('tx is required');
-  if (!tableName) throw new Error('tableName is required');
-  if (!columnName) throw new Error('columnName is required');
+async function generateNextCode(
+  tx,
+  {
+    tableName,
+    columnName,
+    prefix = "",
+    width = 10,
+    extraWhereSql = "",
+    extraInputs = null,
+  } = {},
+) {
+  if (!tx) throw new Error("tx is required");
+  if (!tableName) throw new Error("tableName is required");
+  if (!columnName) throw new Error("columnName is required");
 
   const table = escapeIdent(tableName);
   const col = escapeIdent(columnName);
 
   const rq = new sql.Request(tx);
-  rq.input('prefix', sql.VarChar(50), prefix);
+  rq.input("prefix", sql.VarChar(50), prefix);
 
-  if (typeof extraInputs === 'function') {
+  if (typeof extraInputs === "function") {
     extraInputs(rq);
   }
 
@@ -59,7 +62,7 @@ async function generateNextCode(tx, {
     SELECT TOP 1 h.${col} AS Code
     FROM ${table} AS h WITH (UPDLOCK, HOLDLOCK)
     WHERE (@prefix = '' OR h.${col} LIKE @prefix + '%')
-    ${extraWhereSql ? ` ${extraWhereSql} ` : ''}
+    ${extraWhereSql ? ` ${extraWhereSql} ` : ""}
     ORDER BY
       TRY_CONVERT(BIGINT, SUBSTRING(h.${col}, LEN(@prefix) + 1, 50)) DESC,
       h.${col} DESC;
@@ -69,7 +72,7 @@ async function generateNextCode(tx, {
 
   let lastNum = 0;
   if (r.recordset?.length) {
-    const last = String(r.recordset[0].Code || '');
+    const last = String(r.recordset[0].Code || "");
     const numericPart = last.substring(prefix.length);
     lastNum = parseInt(numericPart, 10) || 0;
   }

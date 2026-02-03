@@ -103,122 +103,260 @@ async function getCrusherMasters(req, res) {
   }
 }
 
-
 async function createProduksi(req, res) {
+  // body bisa datang sebagai string (x-www-form-urlencoded) atau JSON
+  const body = req.body && typeof req.body === 'object' ? req.body : {};
+
+  // ❌ jangan percaya audit fields dari client
+  const {
+    actorId: _clientActorId,
+    actorUsername: _clientActorUsername,
+    actor: _clientActor,
+    requestId: _clientRequestId,
+    ...b
+  } = body;
+
+  // ✅ actor wajib (audit)
+  const actorId = getActorId(req);
+  if (!actorId) {
+    return res.status(401).json({
+      success: false,
+      message: 'Unauthorized (idUsername missing)',
+    });
+  }
+
+  // ✅ username dari token / session
+  const actorUsername =
+    getActorUsername(req) || req.username || req.user?.username || 'system';
+
+  // ✅ request id per HTTP request
+  const requestId = String(makeRequestId(req) || '').trim();
+  if (requestId) res.setHeader('x-request-id', requestId);
+
+  // ===============================
+  // Helper parsing (SAMA DENGAN WASHING)
+  // ===============================
+  const toInt = (v) => {
+    if (v === undefined || v === null || v === '') return null;
+    const n = Number(v);
+    return Number.isNaN(n) ? null : Math.trunc(n);
+  };
+
+  const toFloat = (v) => {
+    if (v === undefined || v === null || v === '') return null;
+    const n = Number(v);
+    return Number.isNaN(n) ? null : n;
+  };
+
+  const normalizeTime = (v) => {
+    if (v === undefined) return undefined; // penting utk update / partial
+    if (v === null) return null;
+    const s = String(v).trim();
+    return s ? s : null;
+  };
+
+  // ===============================
+  // Payload business (tanpa audit)
+  // ===============================
+  const payload = {
+    tanggal: b.tanggal,                 // 'YYYY-MM-DD'
+    idMesin: toInt(b.idMesin),
+    idOperator: toInt(b.idOperator),
+
+    // crusher pakai jam / jamKerja (alias support)
+    jam: b.jam ?? b.jamKerja,
+    shift: toInt(b.shift),
+
+    // audit/business fields (OVERWRITE)
+    createBy: actorUsername,
+
+    checkBy1: b.checkBy1 ?? null,
+    checkBy2: b.checkBy2 ?? null,
+    approveBy: b.approveBy ?? null,
+    jmlhAnggota: toInt(b.jmlhAnggota),
+    hadir: toInt(b.hadir),
+    hourMeter: toFloat(b.hourMeter),
+
+    hourStart: normalizeTime(b.hourStart) ?? null,
+    hourEnd: normalizeTime(b.hourEnd) ?? null,
+  };
+
+  // ===============================
+  // Optional quick validation (400 rapi)
+  // ===============================
+  const must = [];
+  if (!payload.tanggal) must.push('tanggal');
+  if (payload.idMesin == null) must.push('idMesin');
+  if (payload.idOperator == null) must.push('idOperator');
+  if (payload.jam == null) must.push('jam');
+  if (payload.shift == null) must.push('shift');
+
+  if (must.length) {
+    return res.status(400).json({
+      success: false,
+      message: `Field wajib: ${must.join(', ')}`,
+      error: { fields: must },
+    });
+  }
+
   try {
-    // dari verifyToken middleware
-    const username = req.username || req.user?.username || 'system';
+    // ✅ forward audit context ke service
+    const ctx = { actorId, actorUsername, requestId };
 
-    // body bisa datang sebagai string (x-www-form-urlencoded) atau JSON
-    const b = req.body || {};
+    // ⚠️ signature service: (payload, ctx)
+    const result = await service.createCrusherProduksi(payload, ctx);
+    const header = result?.header ?? result;
 
-    // helper kecil buat parse number
-    const toInt = (v) => {
-      if (v === undefined || v === null || v === '') return null;
-      const n = Number(v);
-      return Number.isNaN(n) ? null : n;
-    };
-    const toFloat = (v) => {
-      if (v === undefined || v === null || v === '') return null;
-      const n = Number(v);
-      return Number.isNaN(n) ? null : n;
-    };
-
-    const payload = {
-      tanggal: b.tanggal,                         // 'YYYY-MM-DD'
-      idMesin: toInt(b.idMesin),                  // number
-      idOperator: toInt(b.idOperator),            // number
-      jam: toInt(b.jam) || toInt(b.jamKerja),     // number (alias support)
-      shift: toInt(b.shift),                      // number
-      createBy: username,
-      checkBy1: b.checkBy1,
-      checkBy2: b.checkBy2,
-      approveBy: b.approveBy,
-      jmlhAnggota: toInt(b.jmlhAnggota),
-      hadir: toInt(b.hadir),
-      hourMeter: toFloat(b.hourMeter),
-      hourStart: b.hourStart || null,             // ex: '08:00:00'
-      hourEnd: b.hourEnd || null,                 // ex: '16:00:00'
-    };
-
-    const result = await service.createCrusherProduksi(payload);
-
-    return res
-      .status(201)
-      .json({ success: true, message: 'Created', data: result.header });
+    return res.status(201).json({
+      success: true,
+      message: 'Created',
+      data: header,
+      meta: {
+        audit: { actorId, actorUsername, requestId },
+      },
+    });
   } catch (err) {
-    const status = err.statusCode || 500;
-    return res
-      .status(status)
-      .json({ success: false, message: err.message || 'Internal Error' });
+    console.error('[Crusher][createProduksi]', err);
+    const status = err.statusCode || err.status || 500;
+
+    return res.status(status).json({
+      success: false,
+      message: status === 500 ? 'Internal Server Error' : (err.message || 'Error'),
+      error: {
+        message: err.message,
+        details: process.env.NODE_ENV === 'development' ? err.stack : undefined,
+      },
+      meta: {
+        audit: { actorId, actorUsername, requestId },
+      },
+    });
   }
 }
-
 
 /**
  * PUT /api/produksi/crusher/:noCrusherProduksi
  * Update crusher production header
  */
 async function updateProduksi(req, res) {
+  // route param
+  const noCrusherProduksi = req.params.noCrusherProduksi;
+  if (!noCrusherProduksi) {
+    return res.status(400).json({
+      success: false,
+      message: 'noCrusherProduksi is required in route param',
+    });
+  }
+
+  // body bisa datang sebagai string (x-www-form-urlencoded) atau JSON
+  const body = req.body && typeof req.body === 'object' ? req.body : {};
+
+  // ❌ jangan percaya audit fields dari client
+  const {
+    actorId: _clientActorId,
+    actorUsername: _clientActorUsername,
+    actor: _clientActor,
+    requestId: _clientRequestId,
+    ...b
+  } = body;
+
+  // ✅ actor wajib (audit)
+  const actorId = getActorId(req);
+  if (!actorId) {
+    return res.status(401).json({
+      success: false,
+      message: 'Unauthorized (idUsername missing)',
+    });
+  }
+
+  // ✅ username dari token / session
+  const actorUsername =
+    getActorUsername(req) || req.username || req.user?.username || 'system';
+
+  // ✅ request id per HTTP request
+  const requestId = String(makeRequestId(req) || '').trim();
+  if (requestId) res.setHeader('x-request-id', requestId);
+
+  // ===============================
+  // Helper parsing (SAMA DENGAN WASHING)
+  // ===============================
+  const toInt = (v) => {
+    if (v === undefined || v === null || v === '') return null;
+    const n = Number(v);
+    return Number.isNaN(n) ? null : Math.trunc(n);
+  };
+
+  const toFloat = (v) => {
+    if (v === undefined || v === null || v === '') return null;
+    const n = Number(v);
+    return Number.isNaN(n) ? null : n;
+  };
+
+  const normalizeTime = (v) => {
+    if (v === undefined) return undefined; // penting utk update partial
+    if (v === null) return null;
+    const s = String(v).trim();
+    return s ? s : null;
+  };
+
+  // ===============================
+  // Payload business (PARTIAL OK)
+  // ===============================
+  const payload = {
+    tanggal: b.tanggal,                 // 'YYYY-MM-DD' (optional)
+    idMesin: toInt(b.idMesin),
+    idOperator: toInt(b.idOperator),
+
+    // crusher pakai jam (atau jamKerja alias)
+    jam: b.jam ?? b.jamKerja,
+    shift: toInt(b.shift),
+
+    checkBy1: b.checkBy1 ?? undefined,
+    checkBy2: b.checkBy2 ?? undefined,
+    approveBy: b.approveBy ?? undefined,
+    jmlhAnggota: toInt(b.jmlhAnggota),
+    hadir: toInt(b.hadir),
+    hourMeter: toFloat(b.hourMeter),
+
+    hourStart: normalizeTime(b.hourStart),
+    hourEnd: normalizeTime(b.hourEnd),
+  };
+
   try {
-    const noCrusherProduksi = req.params.noCrusherProduksi;
-    if (!noCrusherProduksi) {
-      return res.status(400).json({
-        success: false,
-        message: 'noCrusherProduksi is required in route param',
-      });
-    }
+    // ✅ forward audit context ke service
+    const ctx = { actorId, actorUsername, requestId };
 
-    // Get username from verifyToken middleware
-    const username = req.username || req.user?.username || 'system';
-
-    const b = req.body || {};
-
-    const toInt = (v) => {
-      if (v === undefined || v === null || v === '') return null;
-      const n = Number(v);
-      return Number.isNaN(n) ? null : n;
-    };
-    const toFloat = (v) => {
-      if (v === undefined || v === null || v === '') return null;
-      const n = Number(v);
-      return Number.isNaN(n) ? null : n;
-    };
-
-    // Body can be partial, don't require all fields
-    const payload = {
-      tanggal: b.tanggal,                       // 'YYYY-MM-DD'
-      idMesin: toInt(b.idMesin),
-      idOperator: toInt(b.idOperator),
-      jam: b.jam,                               // will be parsed again
-      shift: toInt(b.shift),
-      updateBy: username,
-      checkBy1: b.checkBy1,
-      checkBy2: b.checkBy2,
-      approveBy: b.approveBy,
-      jmlhAnggota: toInt(b.jmlhAnggota),
-      hadir: toInt(b.hadir),
-      hourMeter: toFloat(b.hourMeter),
-      hourStart: b.hourStart || null,
-      hourEnd: b.hourEnd || null,
-    };
-
-    const result = await service.updateCrusherProduksi(noCrusherProduksi, payload);
+    const result = await service.updateCrusherProduksi(
+      noCrusherProduksi,
+      payload,
+      ctx
+    );
+    const header = result?.header ?? result;
 
     return res.status(200).json({
       success: true,
       message: 'Updated',
-      data: result.header,
+      data: header,
+      meta: {
+        audit: { actorId, actorUsername, requestId },
+      },
     });
   } catch (err) {
-    const status = err.statusCode || 500;
+    console.error('[Crusher][updateProduksi]', err);
+    const status = err.statusCode || err.status || 500;
+
     return res.status(status).json({
       success: false,
-      message: err.message || 'Internal Error',
+      message: status === 500 ? 'Internal Server Error' : (err.message || 'Error'),
+      error: {
+        message: err.message,
+        details: process.env.NODE_ENV === 'development' ? err.stack : undefined,
+      },
+      meta: {
+        audit: { actorId, actorUsername, requestId },
+      },
     });
   }
 }
-
 
 
 /**
@@ -226,29 +364,88 @@ async function updateProduksi(req, res) {
  * Delete crusher production header and all related inputs/partials
  */
 async function deleteProduksi(req, res) {
-  try {
-    const noCrusherProduksi = req.params.noCrusherProduksi;
-    if (!noCrusherProduksi) {
-      return res.status(400).json({
-        success: false,
-        message: 'noCrusherProduksi is required in route param',
-      });
-    }
+  const noCrusherProduksi = req.params.noCrusherProduksi;
+  if (!noCrusherProduksi) {
+    return res.status(400).json({
+      success: false,
+      message: 'noCrusherProduksi is required in route param',
+    });
+  }
 
-    await service.deleteCrusherProduksi(noCrusherProduksi);
+  // body bisa datang sebagai string (x-www-form-urlencoded) atau JSON
+  const body = req.body && typeof req.body === 'object' ? req.body : {};
+
+  // ✅ jangan percaya audit fields dari client
+  const {
+    actorId: _clientActorId,
+    actorUsername: _clientActorUsername,
+    actor: _clientActor,
+    requestId: _clientRequestId,
+    ..._b
+  } = body;
+
+  // ✅ actor wajib (audit)
+  const actorId = getActorId(req);
+  if (!actorId) {
+    return res.status(401).json({
+      success: false,
+      message: 'Unauthorized (idUsername missing)',
+    });
+  }
+
+  // username untuk audit actor string
+  const actorUsername =
+    getActorUsername(req) ||
+    req.username ||
+    req.user?.username ||
+    'system';
+
+  // request id per HTTP request
+  const requestId = String(makeRequestId(req) || '').trim();
+  if (requestId) res.setHeader('x-request-id', requestId);
+
+  try {
+    const ctx = { actorId, actorUsername, requestId };
+
+    // ⚠️ signature service HARUS (noCrusherProduksi, ctx)
+    const result = await service.deleteCrusherProduksi(
+      noCrusherProduksi,
+      ctx
+    );
 
     return res.status(200).json({
       success: true,
       message: 'Deleted',
+      data: result?.header ?? undefined,
+      meta: {
+        audit: { actorId, actorUsername, requestId },
+      },
     });
   } catch (err) {
-    const status = err.statusCode || 500;
+    console.error('[Crusher][deleteProduksi]', err);
+
+    const status = err.statusCode || err.status || 500;
+
     return res.status(status).json({
       success: false,
-      message: err.message || 'Internal Error',
+      message:
+        status === 500
+          ? 'Internal Server Error'
+          : (err.message || 'Error'),
+      error: {
+        message: err.message,
+        details:
+          process.env.NODE_ENV === 'development'
+            ? err.stack
+            : undefined,
+      },
+      meta: {
+        audit: { actorId, actorUsername, requestId },
+      },
     });
   }
 }
+
 
 
 async function getInputsByNoCrusherProduksi(req, res) {

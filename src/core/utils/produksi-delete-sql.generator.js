@@ -9,7 +9,7 @@ const {
   INPUT_CONFIGS,
   PARTIAL_CONFIGS,
   PRODUKSI_CONFIGS,
-} = require('../config/produksi-input-mapping.config');
+} = require("../config/produksi-input-mapping.config");
 
 /** convert "NoSak" -> "noSak", "NoBahanBaku" -> "noBahanBaku" */
 function toCamelField(dbKey) {
@@ -24,9 +24,9 @@ function jsonPath(dbKey) {
 
 /** choose sql type based on key name */
 function sqlTypeForKey(dbKey) {
-  const k = String(dbKey || '').toLowerCase();
-  if (k === 'nosak' || k === 'nopallet') return 'int';
-  return 'varchar(50)';
+  const k = String(dbKey || "").toLowerCase();
+  if (k === "nosak" || k === "nopallet") return "int";
+  return "varchar(50)";
 }
 
 /**
@@ -38,8 +38,10 @@ function generateInputsDeleteSQL(produksiType, requestedTypes) {
   const produksiConfig = PRODUKSI_CONFIGS[produksiType];
   const inputConfigs = INPUT_CONFIGS[produksiType];
 
-  if (!produksiConfig) throw new Error(`Unknown produksi type: ${produksiType}`);
-  if (!inputConfigs) throw new Error(`No input configs found for ${produksiType}`);
+  if (!produksiConfig)
+    throw new Error(`Unknown produksi type: ${produksiType}`);
+  if (!inputConfigs)
+    throw new Error(`No input configs found for ${produksiType}`);
 
   const activeConfigs = requestedTypes.reduce((acc, type) => {
     const config = inputConfigs[type];
@@ -50,8 +52,10 @@ function generateInputsDeleteSQL(produksiType, requestedTypes) {
   if (Object.keys(activeConfigs).length === 0) return _generateEmptySQL();
 
   const sections = Object.entries(activeConfigs)
-    .map(([type, config]) => _generateSingleInputDeleteSection(type, config, produksiConfig))
-    .join('\n\n');
+    .map(([type, config]) =>
+      _generateSingleInputDeleteSection(type, config, produksiConfig),
+    )
+    .join("\n\n");
 
   return `
 SET NOCOUNT ON;
@@ -71,24 +75,24 @@ function _generateSingleInputDeleteSection(type, config, produksiConfig) {
   const varPrefix = type.toUpperCase();
 
   const keys = config.keys || [];
-  const keyFieldsLower = keys.map(toCamelField).join(', ');
+  const keyFieldsLower = keys.map(toCamelField).join(", ");
 
   // OPENJSON WITH clause
   const withClause = keys
-    .map(k => `${toCamelField(k)} ${sqlTypeForKey(k)} '${jsonPath(k)}'`)
-    .join(', ');
+    .map((k) => `${toCamelField(k)} ${sqlTypeForKey(k)} '${jsonPath(k)}'`)
+    .join(", ");
 
   // JOIN conditions untuk mapping table
   const joinConditions = keys
-    .map(k => `map.${k} = j.${toCamelField(k)}`)
-    .join(' AND ');
+    .map((k) => `map.${k} = j.${toCamelField(k)}`)
+    .join(" AND ");
 
   // JOIN conditions untuk source table DateUsage reset
   const sourceJoinConditions = keys
-    .map(k => `d.${k} = map.${k}`)
-    .join(' AND ');
+    .map((k) => `d.${k} = map.${k}`)
+    .join(" AND ");
 
-  const dateUsageColumn = config.dateUsageColumn || 'DateUsage';
+  const dateUsageColumn = config.dateUsageColumn || "DateUsage";
 
   return `
 -- ${varPrefix}
@@ -141,7 +145,8 @@ INSERT INTO @out SELECT '${type}', @${type}Deleted, @${type}NotFound;
  */
 function generatePartialsDeleteSQL(produksiType, requestedTypes) {
   const produksiConfig = PRODUKSI_CONFIGS[produksiType];
-  if (!produksiConfig) throw new Error(`Unknown produksi type: ${produksiType}`);
+  if (!produksiConfig)
+    throw new Error(`Unknown produksi type: ${produksiType}`);
 
   // Filter hanya partial types yang valid untuk produksiType ini
   const activeTypes = (requestedTypes || []).filter((type) => {
@@ -154,8 +159,14 @@ function generatePartialsDeleteSQL(produksiType, requestedTypes) {
   }
 
   const sections = activeTypes
-    .map((type) => _generateSinglePartialDeleteSection(type, PARTIAL_CONFIGS[type], produksiType))
-    .join('\n\n');
+    .map((type) =>
+      _generateSinglePartialDeleteSection(
+        type,
+        PARTIAL_CONFIGS[type],
+        produksiType,
+      ),
+    )
+    .join("\n\n");
 
   return `
 SET NOCOUNT ON;
@@ -177,28 +188,28 @@ function _generateSinglePartialDeleteSection(type, config, produksiType) {
   const produksiConfig = PRODUKSI_CONFIGS[produksiType];
 
   const keys = config.keys || [];
-  const keyFieldsDb = keys.join(', ');
+  const keyFieldsDb = keys.join(", ");
 
   // WITH clause untuk partial column
   const partialWithClause = `${toCamelField(config.partialColumn)} varchar(50) '$.${toCamelField(config.partialColumn)}'`;
 
   // Temp table untuk track deleted source keys
-  const tempTableDef = keys.map(k => `${k} ${sqlTypeForKey(k)}`).join(', ');
+  const tempTableDef = keys.map((k) => `${k} ${sqlTypeForKey(k)}`).join(", ");
 
   // JOIN conditions untuk deleted partials temp table
   const deletedJoinConditions = keys
-    .map(k => `bp.${k} = del.${k}`)
-    .join(' AND ');
+    .map((k) => `bp.${k} = del.${k}`)
+    .join(" AND ");
 
   // Source table UPDATE conditions
   const sourceUpdateConditions = keys
-    .map(k => `d.${k} = del.${k}`)
-    .join(' AND ');
+    .map((k) => `d.${k} = del.${k}`)
+    .join(" AND ");
 
   // Partial EXISTS check
   const partialExistsConditions = keys
-    .map(k => `bp.${k} = d.${k}`)
-    .join(' AND ');
+    .map((k) => `bp.${k} = d.${k}`)
+    .join(" AND ");
 
   return `
 -- ${type.toUpperCase()} PARTIAL

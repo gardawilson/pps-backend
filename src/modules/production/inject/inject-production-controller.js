@@ -1,77 +1,21 @@
 // controllers/inject-production-controller.js
-const injectProduksiService = require('./inject-production-service');
-const { getActorId, getActorUsername, makeRequestId } = require('../../../core/utils/http-context');
-
-// ------------------------------------------------------------
-// helpers (shared)
-// ------------------------------------------------------------
-const toIntCreate = (v) => {
-  // CREATE: missing -> null (so service can validate required fields)
-  if (v === undefined || v === null || v === '') return null;
-  const n = Number(v);
-  return Number.isNaN(n) ? null : Math.trunc(n);
-};
-
-const toFloatCreate = (v) => {
-  if (v === undefined || v === null || v === '') return null;
-  const n = Number(v);
-  return Number.isNaN(n) ? null : n;
-};
-
-const toBitCreate = (v) => {
-  if (v === true || v === 1 || v === '1' || v === 'true') return 1;
-  if (v === false || v === 0 || v === '0' || v === 'false') return 0;
-  return null;
-};
-
-const toIntUndef = (v) => {
-  // UPDATE: undefined = not sent, null/'' = set null
-  if (v === undefined) return undefined;
-  if (v === null || v === '') return null;
-  const n = Number(v);
-  return Number.isNaN(n) ? null : Math.trunc(n);
-};
-
-const toFloatUndef = (v) => {
-  if (v === undefined) return undefined;
-  if (v === null || v === '') return null;
-  const n = Number(v);
-  return Number.isNaN(n) ? null : n;
-};
-
-const toBitUndef = (v) => {
-  if (v === undefined) return undefined;
-  if (v === null || v === '') return null;
-  if (v === true || v === 1 || v === '1' || v === 'true') return 1;
-  if (v === false || v === 0 || v === '0' || v === 'false') return 0;
-  return null;
-};
-
-const toJamInt = (v) => {
-  // Jam column is INT in DB
-  if (v === undefined) return undefined; // not sent (for update)
-  if (v === null || v === '') return null;
-
-  if (typeof v === 'number') return Number.isFinite(v) ? Math.trunc(v) : null;
-
-  const s = String(v).trim();
-  if (!s) return null;
-
-  // "HH:mm" or "HH:mm:ss" -> HH
-  const m = s.match(/^(\d{1,2})(?::\d{2})?(?::\d{2})?$/);
-  if (m) return parseInt(m[1], 10);
-
-  // "8" -> 8
-  const n = parseInt(s, 10);
-  return Number.isNaN(n) ? null : n;
-};
-
-const toStrUndef = (v) => {
-  if (v === undefined) return undefined;
-  if (v === null) return null;
-  const s = String(v);
-  return s;
-};
+const injectProduksiService = require("./inject-production-service");
+const {
+  getActorId,
+  getActorUsername,
+  makeRequestId,
+} = require("../../../core/utils/http-context");
+const {
+  toInt,
+  toFloat,
+  normalizeTime,
+  toBit,
+  toIntUndef,
+  toFloatUndef,
+  toBitUndef,
+  toStrUndef,
+  toJamInt,
+} = require("../../../core/utils/parse");
 
 // ------------------------------------------------------------
 // ✅ GET ALL (paged)
@@ -82,16 +26,20 @@ async function getAllProduksi(req, res) {
   const pageSize = Math.min(Math.max(pageSizeRaw, 1), 100);
 
   const search =
-    (typeof req.query.noProduksi === 'string' && req.query.noProduksi) ||
-    (typeof req.query.search === 'string' && req.query.search) ||
-    '';
+    (typeof req.query.noProduksi === "string" && req.query.noProduksi) ||
+    (typeof req.query.search === "string" && req.query.search) ||
+    "";
 
   try {
-    const { data, total } = await injectProduksiService.getAllProduksi(page, pageSize, search);
+    const { data, total } = await injectProduksiService.getAllProduksi(
+      page,
+      pageSize,
+      search,
+    );
 
     return res.status(200).json({
       success: true,
-      message: 'InjectProduksi_h retrieved successfully',
+      message: "InjectProduksi_h retrieved successfully",
       totalData: total,
       data,
       meta: {
@@ -104,10 +52,10 @@ async function getAllProduksi(req, res) {
       },
     });
   } catch (error) {
-    console.error('Error fetching InjectProduksi_h:', error);
+    console.error("Error fetching InjectProduksi_h:", error);
     return res.status(500).json({
       success: false,
-      message: 'Internal Server Error',
+      message: "Internal Server Error",
       error: error.message,
     });
   }
@@ -119,7 +67,12 @@ async function getAllProduksi(req, res) {
 async function getProduksiByDate(req, res) {
   const { username } = req;
   const date = req.params.date;
-  console.log('🔍 Fetching InjectProduksi_h | Username:', username, '| date:', date);
+  console.log(
+    "🔍 Fetching InjectProduksi_h | Username:",
+    username,
+    "| date:",
+    date,
+  );
 
   try {
     const data = await injectProduksiService.getProduksiByDate(date);
@@ -142,10 +95,10 @@ async function getProduksiByDate(req, res) {
       meta: { date },
     });
   } catch (error) {
-    console.error('Error fetching InjectProduksi_h:', error);
+    console.error("Error fetching InjectProduksi_h:", error);
     return res.status(500).json({
       success: false,
-      message: 'Internal Server Error',
+      message: "Internal Server Error",
       error: error.message,
     });
   }
@@ -159,14 +112,15 @@ async function getFurnitureWipByNoProduksi(req, res) {
   const { noProduksi } = req.params;
 
   console.log(
-    '🔍 Fetching FurnitureWIP from InjectProduksi_h | Username:',
+    "🔍 Fetching FurnitureWIP from InjectProduksi_h | Username:",
     username,
-    '| NoProduksi:',
-    noProduksi
+    "| NoProduksi:",
+    noProduksi,
   );
 
   try {
-    const rows = await injectProduksiService.getFurnitureWipListByNoProduksi(noProduksi);
+    const rows =
+      await injectProduksiService.getFurnitureWipListByNoProduksi(noProduksi);
 
     if (!rows || rows.length === 0) {
       return res.status(404).json({
@@ -191,10 +145,10 @@ async function getFurnitureWipByNoProduksi(req, res) {
       meta: { noProduksi },
     });
   } catch (error) {
-    console.error('Error fetching FurnitureWIP from InjectProduksi_h:', error);
+    console.error("Error fetching FurnitureWIP from InjectProduksi_h:", error);
     return res.status(500).json({
       success: false,
-      message: 'Internal Server Error',
+      message: "Internal Server Error",
       error: error.message,
     });
   }
@@ -208,14 +162,15 @@ async function getPackingByNoProduksi(req, res) {
   const { noProduksi } = req.params;
 
   console.log(
-    '🔍 Fetching BarangJadi (Packing) from InjectProduksi_h | Username:',
+    "🔍 Fetching BarangJadi (Packing) from InjectProduksi_h | Username:",
     username,
-    '| NoProduksi:',
-    noProduksi
+    "| NoProduksi:",
+    noProduksi,
   );
 
   try {
-    const rows = await injectProduksiService.getPackingListByNoProduksi(noProduksi);
+    const rows =
+      await injectProduksiService.getPackingListByNoProduksi(noProduksi);
 
     if (!rows || rows.length === 0) {
       return res.status(404).json({
@@ -240,10 +195,13 @@ async function getPackingByNoProduksi(req, res) {
       meta: { noProduksi },
     });
   } catch (error) {
-    console.error('Error fetching BarangJadi (Packing) from InjectProduksi_h:', error);
+    console.error(
+      "Error fetching BarangJadi (Packing) from InjectProduksi_h:",
+      error,
+    );
     return res.status(500).json({
       success: false,
-      message: 'Internal Server Error',
+      message: "Internal Server Error",
       error: error.message,
     });
   }
@@ -254,54 +212,126 @@ async function getPackingByNoProduksi(req, res) {
 // ------------------------------------------------------------
 async function createProduksi(req, res) {
   try {
-    const username = req.username || req.user?.username || 'system';
-    const b = req.body || {};
+    // ===============================
+    // Audit context
+    // ===============================
+    const actorId = getActorId(req);
+    if (!actorId) {
+      return res
+        .status(401)
+        .json({ success: false, message: "Unauthorized (actorId missing)" });
+    }
 
+    const actorUsername =
+      getActorUsername(req) || req.username || req.user?.username || "system";
+    const requestId = String(makeRequestId(req) || "").trim();
+    if (requestId) res.setHeader("x-request-id", requestId);
+
+    // ===============================
+    // Body tanpa audit fields dari client
+    // ===============================
+    const body = req.body && typeof req.body === "object" ? req.body : {};
+    const {
+      actorId: _cActorId,
+      actorUsername: _cActorUsername,
+      actor: _cActor,
+      requestId: _cRequestId,
+      createBy: _cCreateBy,
+      checkBy1: _cCheckBy1,
+      checkBy2: _cCheckBy2,
+      approveBy: _cApproveBy,
+      ...b
+    } = body;
+
+    // ===============================
+    // Payload business
+    // ===============================
     const payload = {
-      tglProduksi: b.tglProduksi, // 'YYYY-MM-DD'
-      idMesin: toIntCreate(b.idMesin),
-      idOperator: toIntCreate(b.idOperator),
-      shift: toIntCreate(b.shift),
+      tglProduksi: b.tglProduksi,
+      idMesin: toInt(b.idMesin),
+      idOperator: toInt(b.idOperator),
+      shift: toInt(b.shift),
+      jam: toInt(b.jam),
 
-      // Jam = INT (accept "08:00" -> 8)
-      jam: toJamInt(b.jam) ?? null,
+      jmlhAnggota: toInt(b.jmlhAnggota),
+      hadir: toInt(b.hadir),
 
-      jmlhAnggota: toIntCreate(b.jmlhAnggota),
-      hadir: toIntCreate(b.hadir),
+      idCetakan: toInt(b.idCetakan),
+      idWarna: toInt(b.idWarna),
 
-      idCetakan: toIntCreate(b.idCetakan),
-      idWarna: toIntCreate(b.idWarna),
+      enableOffset: toBit(b.enableOffset) ?? 0,
+      offsetCurrent: toInt(b.offsetCurrent),
+      offsetNext: toInt(b.offsetNext),
 
-      enableOffset: toBitCreate(b.enableOffset) ?? 0,
-      offsetCurrent: toIntCreate(b.offsetCurrent),
-      offsetNext: toIntCreate(b.offsetNext),
+      idFurnitureMaterial: toInt(b.idFurnitureMaterial),
 
-      idFurnitureMaterial: toIntCreate(b.idFurnitureMaterial),
+      hourMeter: toFloat(b.hourMeter),
+      beratProdukHasilTimbang: toFloat(b.beratProdukHasilTimbang),
 
-      hourMeter: toFloatCreate(b.hourMeter),
-      beratProdukHasilTimbang: toFloatCreate(b.beratProdukHasilTimbang),
+      hourStart: normalizeTime(b.hourStart) ?? null,
+      hourEnd: normalizeTime(b.hourEnd) ?? null,
 
-      hourStart: b.hourStart || null, // 'HH:mm' / 'HH:mm:ss'
-      hourEnd: b.hourEnd || null,     // 'HH:mm' / 'HH:mm:ss'
-
-      createBy: username,
-      checkBy1: b.checkBy1,
-      checkBy2: b.checkBy2,
-      approveBy: b.approveBy,
+      // ✅ audit
+      createBy: actorUsername,
+      checkBy1: null,
+      checkBy2: null,
+      approveBy: null,
     };
 
-    const result = await injectProduksiService.createInjectProduksi(payload);
+    // ===============================
+    // Quick validation
+    // ===============================
+    const must = [];
+    if (!payload.tglProduksi) must.push("tglProduksi");
+    if (payload.idMesin == null) must.push("idMesin");
+    if (payload.idOperator == null) must.push("idOperator");
+    if (payload.shift == null) must.push("shift");
+
+    if (must.length) {
+      return res.status(400).json({
+        success: false,
+        message: `Field wajib: ${must.join(", ")}`,
+        error: { fields: must },
+      });
+    }
+
+    // ===============================
+    // Call service
+    // ===============================
+    const result = await injectProduksiService.createInjectProduksi(payload, {
+      actorId,
+      actorUsername,
+      requestId,
+    });
+    const header = result?.header ?? result;
 
     return res.status(201).json({
       success: true,
-      message: 'InjectProduksi_h created',
-      data: result.header,
+      message: "InjectProduksi_h created",
+      data: header,
+      meta: { audit: { actorId, actorUsername, requestId } },
     });
   } catch (err) {
-    const status = err.statusCode || 500;
+    console.error("[Inject][createProduksi]", err);
+    const status = err.statusCode || err.status || 500;
     return res.status(status).json({
       success: false,
-      message: err.message || 'Internal Error',
+      message:
+        status === 500 ? "Internal Server Error" : err.message || "Error",
+      error: {
+        message: err.message,
+        details: process.env.NODE_ENV === "development" ? err.stack : undefined,
+      },
+      meta: {
+        audit:
+          err.actorId && err.actorUsername
+            ? {
+                actorId: err.actorId,
+                actorUsername: err.actorUsername,
+                requestId: err.requestId,
+              }
+            : undefined,
+      },
     });
   }
 }
@@ -311,63 +341,107 @@ async function createProduksi(req, res) {
 // ------------------------------------------------------------
 async function updateProduksi(req, res) {
   try {
-    const username = req.username || req.user?.username || 'system';
-    const noProduksi = String(req.params.noProduksi || '').trim();
-
-    if (!noProduksi) {
-      return res.status(400).json({ success: false, message: 'noProduksi wajib' });
+    // ===============================
+    // Audit context
+    // ===============================
+    const actorId = getActorId(req);
+    if (!actorId) {
+      return res
+        .status(401)
+        .json({ success: false, message: "Unauthorized (idUsername missing)" });
     }
 
+    const actorUsername =
+      getActorUsername(req) || req.username || req.user?.username || "system";
+    const requestId = String(makeRequestId(req) || "").trim();
+    if (requestId) res.setHeader("x-request-id", requestId);
+
+    // ===============================
+    // Get noProduksi
+    // ===============================
+    const noProduksi = String(req.params.noProduksi || "").trim();
+    if (!noProduksi) {
+      return res
+        .status(400)
+        .json({ success: false, message: "noProduksi wajib" });
+    }
+
+    // ===============================
+    // Body tanpa audit fields dari client
+    // ===============================
     const b = req.body || {};
+    const {
+      actorId: _cActorId,
+      actorUsername: _cActorUsername,
+      actor: _cActor,
+      requestId: _cRequestId,
+      ...body
+    } = b;
 
-    // NOTE:
-    // - undefined => field not sent (do not update)
-    // - null      => sent null (set DB to NULL)
+    // ===============================
+    // Build payload normalized
+    // ===============================
     const payload = {
-      tglProduksi: b.tglProduksi, // undefined or 'YYYY-MM-DD' or null (if you allow null, service should reject)
+      tglProduksi: body.tglProduksi, // undefined | 'YYYY-MM-DD' | null
 
-      idMesin: toIntUndef(b.idMesin),
-      idOperator: toIntUndef(b.idOperator),
-      shift: toIntUndef(b.shift),
+      idMesin: toIntUndef(body.idMesin),
+      idOperator: toIntUndef(body.idOperator),
+      shift: toIntUndef(body.shift),
 
-      jam: toJamInt(b.jam),
+      jam: toJamInt(body.jam),
 
-      jmlhAnggota: toIntUndef(b.jmlhAnggota),
-      hadir: toIntUndef(b.hadir),
+      jmlhAnggota: toIntUndef(body.jmlhAnggota),
+      hadir: toIntUndef(body.hadir),
 
-      idCetakan: toIntUndef(b.idCetakan),
-      idWarna: toIntUndef(b.idWarna),
+      idCetakan: toIntUndef(body.idCetakan),
+      idWarna: toIntUndef(body.idWarna),
 
-      enableOffset: toBitUndef(b.enableOffset),
-      offsetCurrent: toIntUndef(b.offsetCurrent),
-      offsetNext: toIntUndef(b.offsetNext),
+      enableOffset: toBitUndef(body.enableOffset),
+      offsetCurrent: toIntUndef(body.offsetCurrent),
+      offsetNext: toIntUndef(body.offsetNext),
 
-      idFurnitureMaterial: toIntUndef(b.idFurnitureMaterial),
+      idFurnitureMaterial: toIntUndef(body.idFurnitureMaterial),
 
-      hourMeter: toFloatUndef(b.hourMeter),
-      beratProdukHasilTimbang: toFloatUndef(b.beratProdukHasilTimbang),
+      hourMeter: toFloatUndef(body.hourMeter),
+      beratProdukHasilTimbang: toFloatUndef(body.beratProdukHasilTimbang),
 
-      hourStart: toStrUndef(b.hourStart),
-      hourEnd: toStrUndef(b.hourEnd),
+      hourStart: toStrUndef(body.hourStart),
+      hourEnd: toStrUndef(body.hourEnd),
 
-      updateBy: username,
-      checkBy1: toStrUndef(b.checkBy1),
-      checkBy2: toStrUndef(b.checkBy2),
-      approveBy: toStrUndef(b.approveBy),
+      checkBy1: toStrUndef(body.checkBy1),
+      checkBy2: toStrUndef(body.checkBy2),
+      approveBy: toStrUndef(body.approveBy),
     };
 
-    const result = await injectProduksiService.updateInjectProduksi(noProduksi, payload);
+    // ===============================
+    // Call service with audit context
+    // ===============================
+    const result = await injectProduksiService.updateInjectProduksi(
+      noProduksi,
+      payload,
+      {
+        actorId,
+        actorUsername,
+        requestId,
+      },
+    );
 
     return res.status(200).json({
       success: true,
-      message: 'InjectProduksi_h updated',
+      message: "InjectProduksi_h updated",
       data: result.header,
+      meta: { audit: result.audit },
     });
   } catch (err) {
-    const status = err.statusCode || 500;
+    console.error("[Inject][updateProduksi]", err);
+    const status = err.statusCode || err.status || 500;
     return res.status(status).json({
       success: false,
-      message: err.message || 'Internal Error',
+      message: status === 500 ? "Internal Server Error" : err.message,
+      error: {
+        message: err.message,
+        details: process.env.NODE_ENV === "development" ? err.stack : undefined,
+      },
     });
   }
 }
@@ -377,58 +451,97 @@ async function updateProduksi(req, res) {
 // ------------------------------------------------------------
 async function deleteProduksi(req, res) {
   try {
-    const noProduksi = String(req.params.noProduksi || '').trim();
+    // ===============================
+    // Validasi route param
+    // ===============================
+    const noProduksi = req.params.noProduksi;
     if (!noProduksi) {
       return res.status(400).json({
         success: false,
-        message: 'noProduksi is required in route param',
+        message: "noProduksi is required in route param",
       });
     }
 
-    await injectProduksiService.deleteInjectProduksi(noProduksi);
+    // ===============================
+    // Audit context
+    // ===============================
+    const actorId = getActorId(req);
+    if (!actorId) {
+      return res.status(401).json({
+        success: false,
+        message: "Unauthorized (idUsername missing)",
+      });
+    }
+
+    const actorUsername =
+      getActorUsername(req) || req.username || req.user?.username || "system";
+    const requestId = String(makeRequestId(req) || "").trim();
+    if (requestId) res.setHeader("x-request-id", requestId);
+
+    const ctx = { actorId, actorUsername, requestId };
+
+    // ===============================
+    // Call service
+    // ===============================
+    await injectProduksiService.deleteInjectProduksi(noProduksi, ctx);
 
     return res.status(200).json({
       success: true,
-      message: 'Deleted',
+      message: "Deleted",
+      meta: { audit: ctx },
     });
   } catch (err) {
-    const status = err.statusCode || 500;
+    console.error("[Gilingan][deleteProduksi]", err);
+    const status = err.statusCode || err.status || 500;
+
     return res.status(status).json({
       success: false,
-      message: err.message || 'Internal Error',
+      message:
+        status === 500 ? "Internal Server Error" : err.message || "Error",
+      error: {
+        message: err.message,
+        details: process.env.NODE_ENV === "development" ? err.stack : undefined,
+      },
+      meta: {
+        audit: {
+          actorId: err.actorId || null,
+          actorUsername: err.actorUsername || null,
+          requestId: err.requestId || null,
+        },
+      },
     });
   }
 }
 
-
-
-
 async function getInputsByNoProduksi(req, res) {
-  const noProduksi = (req.params.noProduksi || '').trim();
+  const noProduksi = (req.params.noProduksi || "").trim();
   if (!noProduksi) {
-    return res.status(400).json({ success: false, message: 'noProduksi is required' });
+    return res
+      .status(400)
+      .json({ success: false, message: "noProduksi is required" });
   }
 
   try {
     const data = await injectProduksiService.fetchInputs(noProduksi);
-    return res.status(200).json({ success: true, message: 'Inputs retrieved', data });
+    return res
+      .status(200)
+      .json({ success: true, message: "Inputs retrieved", data });
   } catch (e) {
-    console.error('[inject.getInputsByNoProduksi]', e);
+    console.error("[inject.getInputsByNoProduksi]", e);
     return res.status(e.statusCode || 500).json({
       success: false,
-      message: e.message || 'Internal Server Error',
+      message: e.message || "Internal Server Error",
     });
   }
 }
 
-
 async function validateLabel(req, res) {
-  const labelCode = String(req.params.labelCode || '').trim();
+  const labelCode = String(req.params.labelCode || "").trim();
 
   if (!labelCode) {
     return res.status(400).json({
       success: false,
-      message: 'labelCode is required',
+      message: "labelCode is required",
     });
   }
 
@@ -446,22 +559,21 @@ async function validateLabel(req, res) {
 
     return res.status(200).json({
       success: true,
-      message: 'Label validated successfully',
+      message: "Label validated successfully",
       prefix: result.prefix,
       tableName: result.tableName,
       totalRecords: result.count,
       data: result.data,
     });
   } catch (e) {
-    console.error('[inject.validateLabel]', e);
+    console.error("[inject.validateLabel]", e);
     return res.status(500).json({
       success: false,
-      message: 'Internal Server Error',
+      message: "Internal Server Error",
       error: e.message,
     });
   }
 }
-
 
 /**
  * ✅ UPSERT Inputs & Partials untuk Inject Production
@@ -469,18 +581,21 @@ async function validateLabel(req, res) {
  * Support: partials (existing + new)
  */
 async function upsertInputsAndPartials(req, res) {
-  const noProduksi = String(req.params.noProduksi || '').trim();
-  
+  const noProduksi = String(req.params.noProduksi || "").trim();
+
   if (!noProduksi) {
     return res.status(400).json({
       success: false,
-      message: 'noProduksi is required',
-      error: { field: 'noProduksi', message: 'Parameter noProduksi tidak boleh kosong' },
+      message: "noProduksi is required",
+      error: {
+        field: "noProduksi",
+        message: "Parameter noProduksi tidak boleh kosong",
+      },
     });
   }
 
   // ✅ Pastikan body object
-  const body = req.body && typeof req.body === 'object' ? req.body : {};
+  const body = req.body && typeof req.body === "object" ? req.body : {};
 
   // ✅ Strip client audit fields (jangan percaya dari client)
   const {
@@ -496,29 +611,37 @@ async function upsertInputsAndPartials(req, res) {
   if (!actorId) {
     return res.status(401).json({
       success: false,
-      message: 'Unauthorized (idUsername missing)',
+      message: "Unauthorized (idUsername missing)",
     });
   }
 
-  const actorUsername = getActorUsername(req) || req.username || req.user?.username || 'system';
-  const requestId = String(makeRequestId(req) || '').trim();
+  const actorUsername =
+    getActorUsername(req) || req.username || req.user?.username || "system";
+  const requestId = String(makeRequestId(req) || "").trim();
 
   // Optional: echo header for tracing
-  if (requestId) res.setHeader('x-request-id', requestId);
+  if (requestId) res.setHeader("x-request-id", requestId);
 
   // ✅ Validate: at least one input exists
-  const hasInput =[
-  'broker', 'mixer', 'gilingan', 'furnitureWip', 'cabinetMaterial',
-  'brokerPartial', 'mixerPartial', 'gilinganPartial', 'furnitureWipPartial',
-].some(k => Array.isArray(payload?.[k]) && payload[k].length > 0);
-
+  const hasInput = [
+    "broker",
+    "mixer",
+    "gilingan",
+    "furnitureWip",
+    "cabinetMaterial",
+    "brokerPartial",
+    "mixerPartial",
+    "gilinganPartial",
+    "furnitureWipPartial",
+  ].some((k) => Array.isArray(payload?.[k]) && payload[k].length > 0);
 
   if (!hasInput) {
     return res.status(400).json({
       success: false,
-      message: 'Tidak ada data input yang diberikan',
+      message: "Tidak ada data input yang diberikan",
       error: {
-        message: 'Request body harus berisi minimal satu array input yang tidak kosong',
+        message:
+          "Request body harus berisi minimal satu array input yang tidak kosong",
       },
     });
   }
@@ -530,7 +653,7 @@ async function upsertInputsAndPartials(req, res) {
     const result = await injectProduksiService.upsertInputsAndPartials(
       noProduksi,
       payload,
-      ctx
+      ctx,
     );
 
     // Support beberapa bentuk return (backward compatible)
@@ -539,23 +662,28 @@ async function upsertInputsAndPartials(req, res) {
     const data = result?.data ?? result;
 
     let statusCode = 200;
-    let message = 'Inputs & partials processed successfully';
+    let message = "Inputs & partials processed successfully";
 
     if (!success) {
       const totalInvalid = Number(data?.summary?.totalInvalid ?? 0);
       const totalInserted = Number(data?.summary?.totalInserted ?? 0);
       const totalUpdated = Number(data?.summary?.totalUpdated ?? 0); // ✅ Support UPSERT
-      const totalPartialsCreated = Number(data?.summary?.totalPartialsCreated ?? 0);
+      const totalPartialsCreated = Number(
+        data?.summary?.totalPartialsCreated ?? 0,
+      );
 
       if (totalInvalid > 0) {
         statusCode = 422;
-        message = 'Beberapa data tidak valid';
-      } else if ((totalInserted + totalUpdated) === 0 && totalPartialsCreated === 0) {
+        message = "Beberapa data tidak valid";
+      } else if (
+        totalInserted + totalUpdated === 0 &&
+        totalPartialsCreated === 0
+      ) {
         statusCode = 400;
-        message = 'Tidak ada data yang berhasil diproses';
+        message = "Tidak ada data yang berhasil diproses";
       }
     } else if (hasWarnings) {
-      message = 'Inputs & partials processed with warnings';
+      message = "Inputs & partials processed with warnings";
     }
 
     return res.status(statusCode).json({
@@ -569,29 +697,31 @@ async function upsertInputsAndPartials(req, res) {
       },
     });
   } catch (e) {
-    console.error('[inject.upsertInputsAndPartials]', e);
+    console.error("[inject.upsertInputsAndPartials]", e);
     const status = e.statusCode || e.status || 500;
 
     return res.status(status).json({
       success: false,
-      message: status === 500 ? 'Internal Server Error' : e.message,
+      message: status === 500 ? "Internal Server Error" : e.message,
       error: {
         message: e.message,
-        details: process.env.NODE_ENV === 'development' ? e.stack : undefined,
+        details: process.env.NODE_ENV === "development" ? e.stack : undefined,
       },
     });
   }
 }
 
-
 async function deleteInputsAndPartials(req, res) {
-  const noProduksi = String(req.params.noProduksi || '').trim();
+  const noProduksi = String(req.params.noProduksi || "").trim();
 
   if (!noProduksi) {
     return res.status(400).json({
       success: false,
-      message: 'noProduksi is required',
-      error: { field: 'noProduksi', message: 'Parameter noProduksi tidak boleh kosong' },
+      message: "noProduksi is required",
+      error: {
+        field: "noProduksi",
+        message: "Parameter noProduksi tidak boleh kosong",
+      },
     });
   }
 
@@ -609,28 +739,39 @@ async function deleteInputsAndPartials(req, res) {
   if (!actorId) {
     return res.status(401).json({
       success: false,
-      message: 'Unauthorized (idUsername missing)',
+      message: "Unauthorized (idUsername missing)",
     });
   }
 
-  const actorUsername = getActorUsername(req) || req.username || req.user?.username || 'system';
-  const requestId = String(makeRequestId(req) || '').trim();
+  const actorUsername =
+    getActorUsername(req) || req.username || req.user?.username || "system";
+  const requestId = String(makeRequestId(req) || "").trim();
 
-  if (requestId) res.setHeader('x-request-id', requestId);
+  if (requestId) res.setHeader("x-request-id", requestId);
 
   // ✅ Validate input
   const hasInput = [
     // Full inputs
-    'broker', 'mixer', 'gilingan', 'furnitureWip', 'cabinetMaterial',
+    "broker",
+    "mixer",
+    "gilingan",
+    "furnitureWip",
+    "cabinetMaterial",
     // Existing partial labels
-    'brokerPartial', 'mixerPartial', 'gilinganPartial', 'furnitureWipPartial',
-  ].some(k => Array.isArray(payload?.[k]) && payload[k].length > 0);
+    "brokerPartial",
+    "mixerPartial",
+    "gilinganPartial",
+    "furnitureWipPartial",
+  ].some((k) => Array.isArray(payload?.[k]) && payload[k].length > 0);
 
   if (!hasInput) {
     return res.status(400).json({
       success: false,
-      message: 'Tidak ada data input yang diberikan',
-      error: { message: 'Request body harus berisi minimal satu array input yang tidak kosong' },
+      message: "Tidak ada data input yang diberikan",
+      error: {
+        message:
+          "Request body harus berisi minimal satu array input yang tidak kosong",
+      },
     });
   }
 
@@ -641,19 +782,19 @@ async function deleteInputsAndPartials(req, res) {
     const result = await injectProduksiService.deleteInputsAndPartials(
       noProduksi,
       payload,
-      ctx
+      ctx,
     );
 
     const { success, hasWarnings, data } = result;
 
     let statusCode = 200;
-    let message = 'Inputs & partials deleted successfully';
+    let message = "Inputs & partials deleted successfully";
 
     if (!success) {
       statusCode = 404;
-      message = 'Tidak ada data yang berhasil dihapus';
+      message = "Tidak ada data yang berhasil dihapus";
     } else if (hasWarnings) {
-      message = 'Inputs & partials deleted with warnings';
+      message = "Inputs & partials deleted with warnings";
     }
 
     return res.status(statusCode).json({
@@ -667,21 +808,19 @@ async function deleteInputsAndPartials(req, res) {
       },
     });
   } catch (e) {
-    console.error('[inject.deleteInputsAndPartials]', e);
+    console.error("[inject.deleteInputsAndPartials]", e);
     const status = e.statusCode || e.status || 500;
 
     return res.status(status).json({
       success: false,
-      message: status === 500 ? 'Internal Server Error' : e.message,
+      message: status === 500 ? "Internal Server Error" : e.message,
       error: {
         message: e.message,
-        details: process.env.NODE_ENV === 'development' ? e.stack : undefined,
+        details: process.env.NODE_ENV === "development" ? e.stack : undefined,
       },
     });
   }
 }
-
-
 
 module.exports = {
   getAllProduksi,
@@ -694,5 +833,5 @@ module.exports = {
   getInputsByNoProduksi,
   validateLabel,
   upsertInputsAndPartials,
-  deleteInputsAndPartials
+  deleteInputsAndPartials,
 };

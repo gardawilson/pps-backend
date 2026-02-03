@@ -9,9 +9,19 @@ const {
   loadDocDateOnlyFromConfig
 } = require('../../../core/shared/tutup-transaksi-guard');
 
+const {
+  parseJamToInt,
+  calcJamKerjaFromStartEnd,
+} = require('../../../core/utils/jam-kerja-helper');
+
 const sharedInputService = require('../../../core/shared/produksi-input.service');
 
 const { badReq, conflict } = require('../../../core/utils/http-error'); 
+
+const { applyAuditContext } = require('../../../core/utils/db-audit-context');
+const { generateNextCode } = require('../../../core/utils/sequence-code-helper'); 
+
+
 
 
 
@@ -492,147 +502,147 @@ async function getProduksiByDate(date) {
 
 
 
-function padLeft(num, width) {
-  const s = String(num);
-  return s.length >= width ? s : '0'.repeat(width - s.length) + s;
-}
+async function createBrokerProduksi(payload, ctx) {
+  // ===============================
+  // 0) Validasi payload basic (business)
+  // ===============================
+  const body = payload && typeof payload === 'object' ? payload : {};
 
-async function generateNextNoProduksi(tx, { prefix = 'E.', width = 10 } = {}) {
-  const rq = new sql.Request(tx);
-  const q = `
-    SELECT TOP 1 h.NoProduksi
-    FROM dbo.BrokerProduksi_h AS h WITH (UPDLOCK, HOLDLOCK)
-    WHERE h.NoProduksi LIKE @prefix + '%'
-    ORDER BY
-      TRY_CONVERT(BIGINT, SUBSTRING(h.NoProduksi, LEN(@prefix) + 1, 50)) DESC,
-      h.NoProduksi DESC;
-  `;
-  const r = await rq.input('prefix', sql.VarChar, prefix).query(q);
-
-  let lastNum = 0;
-  if (r.recordset.length > 0) {
-    const last = r.recordset[0].NoProduksi;
-    const numericPart = last.substring(prefix.length);
-    lastNum = parseInt(numericPart, 10) || 0;
-  }
-  const next = lastNum + 1;
-  return prefix + padLeft(next, width);
-}
-
-function parseJamToInt(jam) {
-  if (jam == null) throw badReq('Format jam tidak valid');
-  if (typeof jam === 'number') return Math.max(0, Math.round(jam)); // hours
-
-  const s = String(jam).trim();
-  const mRange = s.match(/^(\d{1,2}):(\d{2})\s*-\s*(\d{1,2}):(\d{2})$/);
-  if (mRange) {
-    const sh = +mRange[1], sm = +mRange[2], eh = +mRange[3], em = +mRange[4];
-    let mins = (eh * 60 + em) - (sh * 60 + sm);
-    if (mins < 0) mins += 24 * 60; // cross-midnight
-    return Math.max(0, Math.round(mins / 60));
-  }
-  const mTime = s.match(/^(\d{1,2}):(\d{2})$/);
-  if (mTime) return Math.max(0, parseInt(mTime[1], 10));
-  const mHour = s.match(/^(\d{1,2})$/);
-  if (mHour) return Math.max(0, parseInt(mHour[1], 10));
-
-  throw badReq('Format jam tidak valid. Gunakan angka (mis. 8) atau "HH:mm-HH:mm"');
-}
-
-
-async function createBrokerProduksi(payload) {
   const must = [];
-  if (!payload?.tglProduksi) must.push('tglProduksi');
-  if (payload?.idMesin == null) must.push('idMesin');
-  if (payload?.idOperator == null) must.push('idOperator');
-  if (payload?.jam == null) must.push('jam'); // durasi (int)
-  if (payload?.shift == null) must.push('shift');
+  if (!body?.tglProduksi) must.push('tglProduksi');
+  if (body?.idMesin == null) must.push('idMesin');
+  if (body?.idOperator == null) must.push('idOperator');
+  if (body?.shift == null) must.push('shift');
   if (must.length) throw badReq(`Field wajib: ${must.join(', ')}`);
 
-  // ---- helper: date-only (tanpa geser hari) ----
-  // input payload.tglProduksi bisa Date / string "YYYY-MM-DD" / ISO
-  const toDateOnly = (d) => {
-    if (!d) return null;
+  // jam bisa dari body.jam atau dihitung dari hourStart-hourEnd
+  let jamKerja = body?.jam ?? null;
+  if (jamKerja == null) {
+    const calc = calcJamKerjaFromStartEnd(body?.hourStart, body?.hourEnd);
+    if (calc != null) jamKerja = calc;
+  }
+  if (jamKerja == null) throw badReq('Field wajib: jam (atau isi hourStart-hourEnd)');
 
-    // kalau sudah Date
-    if (d instanceof Date) {
-      // date-only lokal -> pakai YYYY-MM-DD dari lokal, lalu new Date(YYYY-MM-DD) (anggap UTC midnight)
-      const y = d.getFullYear();
-      const m = String(d.getMonth() + 1).padStart(2, '0');
-      const dd = String(d.getDate()).padStart(2, '0');
-      return new Date(`${y}-${m}-${dd}`);
-    }
+  const jamInt = parseJamToInt(jamKerja);
+  const docDateOnly = toDateOnly(body.tglProduksi);
 
-    // kalau string (ISO atau YYYY-MM-DD)
-    const s = String(d).trim();
-    // ambil 10 char pertama biar jadi YYYY-MM-DD
-    const ymd = s.length >= 10 ? s.slice(0, 10) : s;
-    if (!/^\d{4}-\d{2}-\d{2}$/.test(ymd)) {
-      throw badReq('Format tglProduksi harus YYYY-MM-DD atau ISO date');
-    }
-    return new Date(ymd); // UTC midnight untuk tanggal tsb
+  // ===============================
+  // 1) Validasi + normalisasi ctx (audit) seperti upsert
+  // ===============================
+  const actorIdNum = Number(ctx?.actorId);
+  if (!Number.isFinite(actorIdNum) || actorIdNum <= 0) {
+    throw badReq('ctx.actorId wajib. Controller harus inject dari token.');
+  }
+
+  const actorUsername = String(ctx?.actorUsername || '').trim() || 'system';
+  const requestId = String(ctx?.requestId || '').trim(); // boleh kosong, applyAuditContext akan fallback
+
+  const auditCtx = {
+    actorId: Math.trunc(actorIdNum),
+    actorUsername,
+    requestId,
   };
-
-  const docDateOnly = toDateOnly(payload.tglProduksi);
 
   const pool = await poolPromise;
   const tx = new sql.Transaction(pool);
   await tx.begin(sql.ISOLATION_LEVEL.SERIALIZABLE);
 
   try {
-    // -------------------------------------------------------
-    // 1) GUARD TUTUP TRANSAKSI (CREATE = WRITE)
-    // -------------------------------------------------------
+    // =====================================================
+    // 2) Set SESSION_CONTEXT untuk trigger audit (1x di awal tx)
+    // =====================================================
+    const auditReq = new sql.Request(tx);
+    const audit = await applyAuditContext(auditReq, auditCtx);
+
+    // =====================================================
+    // 3) Guard tutup transaksi (CREATE = WRITE)
+    // =====================================================
     await assertNotLocked({
       date: docDateOnly,
-      runner: tx, // IMPORTANT: pakai tx biar konsisten dalam transaksi
+      runner: tx,
       action: 'create BrokerProduksi',
       useLock: true,
     });
 
-    // -------------------------------------------------------
-    // 2) Generate NoProduksi (Prefix 'E.' untuk broker)
-    // -------------------------------------------------------
-    const no1 = await generateNextNoProduksi(tx, { prefix: 'E.', width: 10 });
+    // =====================================================
+    // 4) Generate NoProduksi
+    // =====================================================
+    const gen = async () =>
+      generateNextCode(tx, {
+        tableName: 'dbo.BrokerProduksi_h',
+        columnName: 'NoProduksi',
+        prefix: 'E.',
+        width: 10,
+      });
 
-    const rqCheck = new sql.Request(tx);
-    const exist = await rqCheck
-      .input('NoProduksi', sql.VarChar(50), no1)
+    let noProduksi = await gen();
+
+    // optional double-check (lebih bagus kalau kolom ada UNIQUE)
+    const exist = await new sql.Request(tx)
+      .input('NoProduksi', sql.VarChar(50), noProduksi)
       .query(`
         SELECT 1
         FROM dbo.BrokerProduksi_h WITH (UPDLOCK, HOLDLOCK)
         WHERE NoProduksi = @NoProduksi
       `);
 
-    const noProduksi = exist.recordset.length
-      ? await generateNextNoProduksi(tx, { prefix: 'E.', width: 10 })
-      : no1;
+    if (exist.recordset.length > 0) {
+      const retry = await gen();
+      const exist2 = await new sql.Request(tx)
+        .input('NoProduksi', sql.VarChar(50), retry)
+        .query(`
+          SELECT 1
+          FROM dbo.BrokerProduksi_h WITH (UPDLOCK, HOLDLOCK)
+          WHERE NoProduksi = @NoProduksi
+        `);
 
-    const jamInt = parseJamToInt(payload.jam);
+      if (exist2.recordset.length > 0) {
+        throw conflict('Gagal generate NoProduksi unik, coba lagi.');
+      }
+      noProduksi = retry;
+    }
 
-    // -------------------------------------------------------
-    // 3) Insert header (pakai docDateOnly)
-    // -------------------------------------------------------
+    // =====================================================
+    // 5) Insert header (FIX: OUTPUT ... INTO @out)
+    // =====================================================
     const rqIns = new sql.Request(tx);
     rqIns
-      .input('NoProduksi',  sql.VarChar(50),    noProduksi)
-      .input('TglProduksi', sql.Date,           docDateOnly)
-      .input('IdMesin',     sql.Int,            payload.idMesin)
-      .input('IdOperator',  sql.Int,            payload.idOperator)
-      .input('Jam',         sql.Int,            jamInt)
-      .input('Shift',       sql.Int,            payload.shift)
-      .input('CreateBy',    sql.VarChar(100),   payload.createBy)
-      .input('CheckBy1',    sql.VarChar(100),   payload.checkBy1 ?? null)
-      .input('CheckBy2',    sql.VarChar(100),   payload.checkBy2 ?? null)
-      .input('ApproveBy',   sql.VarChar(100),   payload.approveBy ?? null)
-      .input('JmlhAnggota', sql.Int,            payload.jmlhAnggota ?? null)
-      .input('Hadir',       sql.Int,            payload.hadir ?? null)
-      .input('HourMeter',   sql.Decimal(18, 2), payload.hourMeter ?? null)
-      // optional kalau kolom ada
-      .input('HourStart',   sql.VarChar(20),    payload.hourStart ?? null)
-      .input('HourEnd',     sql.VarChar(20),    payload.hourEnd ?? null);
+      .input('NoProduksi',  sql.VarChar(50),  noProduksi)
+      .input('TglProduksi', sql.Date,         docDateOnly)
+      .input('IdMesin',     sql.Int,          body.idMesin)
+      .input('IdOperator',  sql.Int,          body.idOperator)
+      .input('Jam',         sql.Int,          jamInt)
+      .input('Shift',       sql.Int,          body.shift)
+      .input('CreateBy',    sql.VarChar(100), body.createBy) // controller overwrite
+      .input('CheckBy1',    sql.VarChar(100), body.checkBy1 ?? null)
+      .input('CheckBy2',    sql.VarChar(100), body.checkBy2 ?? null)
+      .input('ApproveBy',   sql.VarChar(100), body.approveBy ?? null)
+      .input('JmlhAnggota', sql.Int,          body.jmlhAnggota ?? null)
+      .input('Hadir',       sql.Int,          body.hadir ?? null)
+      .input('HourMeter',   sql.Decimal(18, 2), body.hourMeter ?? null)
+      // kirim string, biar SQL yang CAST ke time(7)
+      .input('HourStart',   sql.VarChar(20),  body.hourStart ?? null)
+      .input('HourEnd',     sql.VarChar(20),  body.hourEnd ?? null);
 
     const insertSql = `
+      DECLARE @out TABLE (
+        NoProduksi   varchar(50),
+        TglProduksi  date,
+        IdMesin      int,
+        IdOperator   int,
+        Jam          int,
+        Shift        int,
+        CreateBy     varchar(100),
+        CheckBy1     varchar(100),
+        CheckBy2     varchar(100),
+        ApproveBy    varchar(100),
+        JmlhAnggota  int,
+        Hadir        int,
+        HourMeter    decimal(18,2),
+        HourStart    time(7),
+        HourEnd      time(7)
+      );
+
       INSERT INTO dbo.BrokerProduksi_h (
         NoProduksi,
         TglProduksi,
@@ -650,7 +660,23 @@ async function createBrokerProduksi(payload) {
         HourStart,
         HourEnd
       )
-      OUTPUT INSERTED.*
+      OUTPUT
+        INSERTED.NoProduksi,
+        INSERTED.TglProduksi,
+        INSERTED.IdMesin,
+        INSERTED.IdOperator,
+        INSERTED.Jam,
+        INSERTED.Shift,
+        INSERTED.CreateBy,
+        INSERTED.CheckBy1,
+        INSERTED.CheckBy2,
+        INSERTED.ApproveBy,
+        INSERTED.JmlhAnggota,
+        INSERTED.Hadir,
+        INSERTED.HourMeter,
+        INSERTED.HourStart,
+        INSERTED.HourEnd
+      INTO @out
       VALUES (
         @NoProduksi,
         @TglProduksi,
@@ -668,12 +694,18 @@ async function createBrokerProduksi(payload) {
         CASE WHEN @HourStart IS NULL OR LTRIM(RTRIM(@HourStart)) = '' THEN NULL ELSE CAST(@HourStart AS time(7)) END,
         CASE WHEN @HourEnd   IS NULL OR LTRIM(RTRIM(@HourEnd))   = '' THEN NULL ELSE CAST(@HourEnd   AS time(7)) END
       );
+
+      SELECT * FROM @out;
     `;
 
     const insRes = await rqIns.query(insertSql);
 
     await tx.commit();
-    return { header: insRes.recordset?.[0] || null };
+
+    return {
+      header: insRes.recordset?.[0] || null,
+      audit, // optional debug / tracing
+    };
   } catch (e) {
     try { await tx.rollback(); } catch (_) {}
     throw e;
@@ -681,7 +713,7 @@ async function createBrokerProduksi(payload) {
 }
 
 
-async function updateBrokerProduksi(noProduksi, payload) {
+async function updateBrokerProduksi(noProduksi, payload, ctx) {
   if (!noProduksi) throw badReq('noProduksi wajib');
 
   const pool = await poolPromise;
@@ -689,20 +721,36 @@ async function updateBrokerProduksi(noProduksi, payload) {
   await tx.begin(sql.ISOLATION_LEVEL.SERIALIZABLE);
 
   try {
+    // =====================================================
+    // 0) Set SESSION_CONTEXT untuk trigger audit (1x di awal tx)
+    // =====================================================
+    const actorIdNum = Number(ctx?.actorId);
+    if (!Number.isFinite(actorIdNum) || actorIdNum <= 0) {
+      throw badReq('ctx.actorId wajib. Controller harus inject dari token.');
+    }
+    const actorUsername = String(ctx?.actorUsername || '').trim() || 'system';
+    const requestId = String(ctx?.requestId || '').trim();
+
+    const auditReq = new sql.Request(tx);
+    await applyAuditContext(auditReq, {
+      actorId: Math.trunc(actorIdNum),
+      actorUsername,
+      requestId,
+    });
+
     // -------------------------------------------------------
-    // 0) AMBIL docDateOnly DARI CONFIG (LOCK HEADER ROW)
-    //    Ini menggantikan SELECT BrokerProduksi_h manual
+    // 1) AMBIL docDateOnly DARI CONFIG (LOCK HEADER ROW)
     // -------------------------------------------------------
     const { docDateOnly: oldDocDateOnly } = await loadDocDateOnlyFromConfig({
-      entityKey: 'brokerProduksi', // pastikan sesuai config tutup-transaksi
+      entityKey: 'brokerProduksi',
       codeValue: noProduksi,
       runner: tx,
-      useLock: true,               // UPDATE = write action
+      useLock: true,
       throwIfNotFound: true,
     });
 
     // -------------------------------------------------------
-    // 1) Jika user mengubah tanggal, hitung tanggal barunya (date-only)
+    // 2) Jika user mengubah tanggal, hitung tanggal barunya (date-only)
     // -------------------------------------------------------
     const isChangingDate = payload?.tglProduksi !== undefined;
     let newDocDateOnly = null;
@@ -713,9 +761,7 @@ async function updateBrokerProduksi(noProduksi, payload) {
     }
 
     // -------------------------------------------------------
-    // 2) GUARD TUTUP TRANSAKSI
-    //    - cek tanggal lama
-    //    - kalau ganti tanggal, cek tanggal baru juga
+    // 3) GUARD TUTUP TRANSAKSI
     // -------------------------------------------------------
     await assertNotLocked({
       date: oldDocDateOnly,
@@ -734,7 +780,7 @@ async function updateBrokerProduksi(noProduksi, payload) {
     }
 
     // -------------------------------------------------------
-    // 3) BUILD SET DINAMIS
+    // 4) BUILD SET DINAMIS
     // -------------------------------------------------------
     const sets = [];
     const rqUpd = new sql.Request(tx);
@@ -818,24 +864,62 @@ async function updateBrokerProduksi(noProduksi, payload) {
 
     rqUpd.input('NoProduksi', sql.VarChar(50), noProduksi);
 
+    // -------------------------------------------------------
+    // 5) UPDATE + RETURN row (FIX: OUTPUT ... INTO @out)
+    // -------------------------------------------------------
     const updateSql = `
+      DECLARE @out TABLE (
+        NoProduksi   varchar(50),
+        TglProduksi  date,
+        IdMesin      int,
+        IdOperator   int,
+        Jam          int,
+        Shift        int,
+        CreateBy     varchar(100),
+        CheckBy1     varchar(100),
+        CheckBy2     varchar(100),
+        ApproveBy    varchar(100),
+        JmlhAnggota  int,
+        Hadir        int,
+        HourMeter    decimal(18,2),
+        HourStart    time(7),
+        HourEnd      time(7)
+      );
+
       UPDATE dbo.BrokerProduksi_h
       SET ${sets.join(', ')}
+      OUTPUT
+        INSERTED.NoProduksi,
+        INSERTED.TglProduksi,
+        INSERTED.IdMesin,
+        INSERTED.IdOperator,
+        INSERTED.Jam,
+        INSERTED.Shift,
+        INSERTED.CreateBy,
+        INSERTED.CheckBy1,
+        INSERTED.CheckBy2,
+        INSERTED.ApproveBy,
+        INSERTED.JmlhAnggota,
+        INSERTED.Hadir,
+        INSERTED.HourMeter,
+        INSERTED.HourStart,
+        INSERTED.HourEnd
+      INTO @out
       WHERE NoProduksi = @NoProduksi;
 
-      SELECT *
-      FROM dbo.BrokerProduksi_h
-      WHERE NoProduksi = @NoProduksi;
+      SELECT * FROM @out;
     `;
 
     const updRes = await rqUpd.query(updateSql);
     const updatedHeader = updRes.recordset?.[0] || null;
 
+    if (!updatedHeader) throw notFound(`NoProduksi tidak ditemukan: ${noProduksi}`);
+
     // -------------------------------------------------------
-    // 4) Jika TglProduksi berubah → sinkron DateUsage full + partial
+    // 6) Jika TglProduksi berubah → sinkron DateUsage full + partial
     //    (pakai tanggal hasil DB agar konsisten)
     // -------------------------------------------------------
-    if (isChangingDate && updatedHeader) {
+    if (isChangingDate) {
       const usageDate = resolveEffectiveDateForCreate(updatedHeader.TglProduksi);
 
       const rqUsage = new sql.Request(tx);
@@ -1005,7 +1089,9 @@ async function updateBrokerProduksi(noProduksi, payload) {
                 AND rp.NoReject   = r.NoReject
             )
           );
-      `;      await rqUsage.query(sqlUpdateUsage);
+      `;
+
+      await rqUsage.query(sqlUpdateUsage);
     }
 
     await tx.commit();
@@ -1017,8 +1103,7 @@ async function updateBrokerProduksi(noProduksi, payload) {
 }
 
 
-// Contoh service delete semua input + reset DateUsage & IsPartial
-async function deleteBrokerProduksi(noProduksi) {
+async function deleteBrokerProduksi(noProduksi, ctx) {
   if (!noProduksi) throw badReq('noProduksi wajib');
 
   const pool = await poolPromise;
@@ -1026,12 +1111,28 @@ async function deleteBrokerProduksi(noProduksi) {
   await tx.begin(sql.ISOLATION_LEVEL.SERIALIZABLE);
 
   try {
+    // =====================================================
+    // 0) Set SESSION_CONTEXT untuk trigger audit (1x di awal tx)
+    // =====================================================
+    const actorIdNum = Number(ctx?.actorId);
+    if (!Number.isFinite(actorIdNum) || actorIdNum <= 0) {
+      throw badReq('ctx.actorId wajib. Controller harus inject dari token.');
+    }
+    const actorUsername = String(ctx?.actorUsername || '').trim() || 'system';
+    const requestId = String(ctx?.requestId || '').trim();
+
+    const auditReq = new sql.Request(tx);
+    await applyAuditContext(auditReq, {
+      actorId: Math.trunc(actorIdNum),
+      actorUsername,
+      requestId,
+    });
+
     // -------------------------------------------------------
-    // 0) AMBIL docDateOnly DARI CONFIG (LOCK HEADER ROW)
-    //    GANTI SELECT BrokerProduksi_h manual (tglProduksi)
+    // 1) AMBIL docDateOnly DARI CONFIG (LOCK HEADER ROW)
     // -------------------------------------------------------
     const { docDateOnly } = await loadDocDateOnlyFromConfig({
-      entityKey: 'brokerProduksi', // pastikan key ini ada di config tutup-transaksi
+      entityKey: 'brokerProduksi',
       codeValue: noProduksi,
       runner: tx,
       useLock: true,               // DELETE = write action
@@ -1039,17 +1140,17 @@ async function deleteBrokerProduksi(noProduksi) {
     });
 
     // -------------------------------------------------------
-    // 1) GUARD TUTUP TRANSAKSI (DELETE = WRITE)
+    // 2) GUARD TUTUP TRANSAKSI (DELETE = WRITE)
     // -------------------------------------------------------
     await assertNotLocked({
       date: docDateOnly,
-      runner: tx,                 // IMPORTANT: same tx
+      runner: tx,
       action: 'delete BrokerProduksi',
       useLock: true,
     });
 
     // -------------------------------------------------------
-    // 2) CEK DULU: SUDAH PUNYA OUTPUT / BONGGOLAN ATAU BELUM
+    // 3) CEK DULU: SUDAH PUNYA OUTPUT / BONGGOLAN ATAU BELUM
     // -------------------------------------------------------
     const rqCheck = new sql.Request(tx);
     const outCheck = await rqCheck
@@ -1076,13 +1177,11 @@ async function deleteBrokerProduksi(noProduksi) {
     const hasOutputBong = (row.CntOutputBong || 0) > 0;
 
     if (hasOutput || hasOutputBong) {
-      // sudah ada data output → tolak delete
       throw badReq('Tidak dapat menghapus Nomor Produksi ini karena memiliki data output.');
     }
 
     // -------------------------------------------------------
-    // 3) LANJUT DELETE INPUT + PARTIAL + RESET DATEUSAGE
-    //    (SQL BESAR kamu tetap)
+    // 4) DELETE INPUT + PARTIAL + RESET DATEUSAGE + DELETE HEADER (OUTPUT INTO)
     // -------------------------------------------------------
     const req = new sql.Request(tx);
     req.input('NoProduksi', sql.VarChar(50), noProduksi);
@@ -1110,6 +1209,38 @@ async function deleteBrokerProduksi(noProduksi) {
       );
 
       DECLARE @RejectKeys TABLE ( NoReject varchar(50) );
+
+      ---------------------------------------------------------
+      -- (OPSIONAL) OUT TABLE: RETURN HEADER YANG TERHAPUS
+      -- Sesuaikan kolom jika tabel header kamu bertambah.
+      ---------------------------------------------------------
+      DECLARE @outHeader TABLE (
+        NoProduksi   varchar(50),
+        TglProduksi  date,
+        IdMesin      int,
+        IdOperator   int,
+        Jam          int,
+        Shift        int,
+        CreateBy     varchar(100),
+        CheckBy1     varchar(100),
+        CheckBy2     varchar(100),
+        ApproveBy    varchar(100),
+        JmlhAnggota  int,
+        Hadir        int,
+        HourMeter    decimal(18,2),
+        HourStart    time(7),
+        HourEnd      time(7)
+      );
+
+      ---------------------------------------------------------
+      -- 0. PASTIKAN HEADER ADA (kalau tidak, stop cepat)
+      ---------------------------------------------------------
+      IF NOT EXISTS (SELECT 1 FROM dbo.BrokerProduksi_h WITH (UPDLOCK, HOLDLOCK) WHERE NoProduksi = @NoProduksi)
+      BEGIN
+        -- hasil kosong, biar service lempar notFound
+        SELECT * FROM @outHeader;
+        RETURN;
+      END
 
       ---------------------------------------------------------
       -- 1. BAHAN BAKU (FULL + PARTIAL)
@@ -1353,22 +1484,43 @@ async function deleteBrokerProduksi(noProduksi) {
       JOIN @RejectKeys AS k ON k.NoReject = r.NoReject;
 
       ---------------------------------------------------------
-      -- 8. TERAKHIR: HAPUS HEADER
+      -- 8. TERAKHIR: HAPUS HEADER (OUTPUT INTO) + RETURN
       ---------------------------------------------------------
       DELETE FROM dbo.BrokerProduksi_h
+      OUTPUT
+        DELETED.NoProduksi,
+        DELETED.TglProduksi,
+        DELETED.IdMesin,
+        DELETED.IdOperator,
+        DELETED.Jam,
+        DELETED.Shift,
+        DELETED.CreateBy,
+        DELETED.CheckBy1,
+        DELETED.CheckBy2,
+        DELETED.ApproveBy,
+        DELETED.JmlhAnggota,
+        DELETED.Hadir,
+        DELETED.HourMeter,
+        DELETED.HourStart,
+        DELETED.HourEnd
+      INTO @outHeader
       WHERE NoProduksi = @NoProduksi;
+
+      SELECT * FROM @outHeader;
     `;
 
-    await req.query(sqlDelete);
+    const delRes = await req.query(sqlDelete);
+    const deletedHeader = delRes.recordset?.[0] || null;
+
+    if (!deletedHeader) throw notFound(`NoProduksi tidak ditemukan: ${noProduksi}`);
 
     await tx.commit();
-    return { success: true };
+    return { success: true, header: deletedHeader };
   } catch (e) {
     try { await tx.rollback(); } catch (_) {}
     throw e;
   }
 }
-
 
 
 

@@ -85,167 +85,329 @@ async function getProduksiByDate(req, res) {
 
 
 async function createProduksi(req, res) {
+  // body bisa datang sebagai string (x-www-form-urlencoded) atau JSON
+  const body = req.body && typeof req.body === 'object' ? req.body : {};
+
+  // ✅ jangan percaya audit fields dari client
+  const {
+    actorId: _clientActorId,
+    actorUsername: _clientActorUsername,
+    actor: _clientActor,
+    requestId: _clientRequestId,
+    ...b
+  } = body;
+
+  // ✅ actor wajib (audit)
+  const actorId = getActorId(req);
+  if (!actorId) {
+    return res.status(401).json({
+      success: false,
+      message: 'Unauthorized (idUsername missing)',
+    });
+  }
+
+  // ✅ username untuk business fields / audit actor string
+  const actorUsername =
+    getActorUsername(req) || req.username || req.user?.username || 'system';
+
+  // ✅ request id per HTTP request (kalau ada header ikut pakai)
+  const requestId = String(makeRequestId(req) || '').trim();
+  if (requestId) res.setHeader('x-request-id', requestId);
+
+  // helper kecil buat parse number
+  const toInt = (v) => {
+    if (v === undefined || v === null || v === '') return null;
+    const n = Number(v);
+    return Number.isNaN(n) ? null : Math.trunc(n);
+  };
+  const toFloat = (v) => {
+    if (v === undefined || v === null || v === '') return null;
+    const n = Number(v);
+    return Number.isNaN(n) ? null : n;
+  };
+
+  const normalizeTime = (v) => {
+    if (v === undefined) return undefined; // penting utk update partial
+    if (v === null) return null;
+    const s = String(v).trim();
+    return s ? s : null;
+  };
+
+  // ✅ payload business (tanpa audit fields)
+  const payload = {
+    tglProduksi: b.tglProduksi,          // 'YYYY-MM-DD'
+    idMesin: toInt(b.idMesin),           // number
+    idOperator: toInt(b.idOperator),     // number
+
+    // washing pakai jamKerja
+    jamKerja: b.jamKerja,               // number atau 'HH:mm-HH:mm'
+    shift: toInt(b.shift),               // number
+
+    createBy: actorUsername,             // controller overwrite dari token
+
+    checkBy1: b.checkBy1 ?? null,
+    checkBy2: b.checkBy2 ?? null,
+    approveBy: b.approveBy ?? null,
+    jmlhAnggota: toInt(b.jmlhAnggota),
+    hadir: toInt(b.hadir),
+    hourMeter: toFloat(b.hourMeter),
+
+    hourStart: normalizeTime(b.hourStart) ?? null,
+    hourEnd: normalizeTime(b.hourEnd) ?? null,
+  };
+
+  // optional: validasi cepat agar error 400 rapih (service juga akan validasi)
+  const must = [];
+  if (!payload.tglProduksi) must.push('tglProduksi');
+  if (payload.idMesin == null) must.push('idMesin');
+  if (payload.idOperator == null) must.push('idOperator');
+  if (payload.jamKerja == null) must.push('jamKerja');
+  if (payload.shift == null) must.push('shift');
+  if (must.length) {
+    return res.status(400).json({
+      success: false,
+      message: `Field wajib: ${must.join(', ')}`,
+      error: { fields: must },
+    });
+  }
+
   try {
-    // dari verifyToken middleware
-    const username = req.username || req.user?.username || 'system';
+    // ✅ Forward audit context ke service
+    const ctx = { actorId, actorUsername, requestId };
 
-    // body bisa datang sebagai string (x-www-form-urlencoded) atau JSON
-    const b = req.body || {};
+    // ⚠️ pastikan signature service: (payload, ctx)
+    const result = await washingProduksiService.createWashingProduksi(payload, ctx);
+    const header = result?.header ?? result;
 
-    // (opsional) debug log
-    console.log('🟢 [Washing] raw body:', b);
-
-    // helper kecil buat parse number
-    const toInt = (v) => {
-      if (v === undefined || v === null || v === '') return null;
-      const n = Number(v);
-      return Number.isNaN(n) ? null : n;
-    };
-    const toFloat = (v) => {
-      if (v === undefined || v === null || v === '') return null;
-      const n = Number(v);
-      return Number.isNaN(n) ? null : n;
-    };
-
-    const normalizeTime = (v) => {
-      if (!v) return null;
-      const s = String(v).trim();
-      if (!s) return null;
-      // boleh kirim 'HH:mm' atau 'HH:mm:ss' dari Flutter,
-      // di DB akan di-CAST ke time(7)
-      return s;
-    };
-
-    const payload = {
-      tglProduksi: b.tglProduksi,              // 'YYYY-MM-DD'
-      idMesin: toInt(b.idMesin),              // number
-      idOperator: toInt(b.idOperator),        // number
-
-      // ⬇️ beda nama di washing (JamKerja di table)
-      jamKerja: b.jamKerja,                   // number atau 'HH:mm-HH:mm'
-
-      shift: toInt(b.shift),                  // number
-      createBy: username,
-      checkBy1: b.checkBy1,
-      checkBy2: b.checkBy2,
-      approveBy: b.approveBy,
-      jmlhAnggota: toInt(b.jmlhAnggota),
-      hadir: toInt(b.hadir),
-      hourMeter: toFloat(b.hourMeter),        // Decimal(18,2)
-
-      // ⬇️ baru: ikutkan ke service
-      hourStart: normalizeTime(b.hourStart),  // mis. '06:00:00'
-      hourEnd:   normalizeTime(b.hourEnd),    // mis. '14:00:00'
-    };
-
-    console.log('🟢 [Washing] payload to service:', payload);
-
-    const result = await washingProduksiService.createWashingProduksi(payload);
-
-    return res
-      .status(201)
-      .json({ success: true, message: 'Created', data: result.header });
+    return res.status(201).json({
+      success: true,
+      message: 'Created',
+      data: header,
+      meta: {
+        audit: { actorId, actorUsername, requestId },
+      },
+    });
   } catch (err) {
-    const status = err.statusCode || 500;
-    return res
-      .status(status)
-      .json({ success: false, message: err.message || 'Internal Error' });
+    console.error('[Washing][createProduksi]', err);
+    const status = err.statusCode || err.status || 500;
+
+    return res.status(status).json({
+      success: false,
+      message: status === 500 ? 'Internal Server Error' : (err.message || 'Error'),
+      error: {
+        message: err.message,
+        details: process.env.NODE_ENV === 'development' ? err.stack : undefined,
+      },
+      meta: {
+        audit: { actorId, actorUsername, requestId },
+      },
+    });
   }
 }
 
-
-
 async function updateProduksi(req, res) {
+  const noCrusherProduksi = req.params.noCrusherProduksi; // dari URL
+  if (!noCrusherProduksi) {
+    return res.status(400).json({
+      success: false,
+      message: 'noCrusherProduksi is required in route param',
+    });
+  }
+
+  // body bisa datang sebagai string (x-www-form-urlencoded) atau JSON
+  const body = req.body && typeof req.body === 'object' ? req.body : {};
+
+  // ✅ jangan percaya audit fields dari client
+  const {
+    actorId: _clientActorId,
+    actorUsername: _clientActorUsername,
+    actor: _clientActor,
+    requestId: _clientRequestId,
+    ...b
+  } = body;
+
+  // ✅ actor wajib (audit)
+  const actorId = getActorId(req);
+  if (!actorId) {
+    return res.status(401).json({
+      success: false,
+      message: 'Unauthorized (idUsername missing)',
+    });
+  }
+
+  // ✅ username untuk business fields / audit actor string
+  const actorUsername =
+    getActorUsername(req) || req.username || req.user?.username || 'system';
+
+  // ✅ request id per HTTP request
+  const requestId = String(makeRequestId(req) || '').trim();
+  if (requestId) res.setHeader('x-request-id', requestId);
+
+  // ===============================
+  // helper parsing (SAMA DENGAN WASHING)
+  // ===============================
+  const toInt = (v) => {
+    if (v === undefined || v === null || v === '') return null;
+    const n = Number(v);
+    return Number.isNaN(n) ? null : Math.trunc(n);
+  };
+
+  const toFloat = (v) => {
+    if (v === undefined || v === null || v === '') return null;
+    const n = Number(v);
+    return Number.isNaN(n) ? null : n;
+  };
+
+  const normalizeTime = (v) => {
+    if (v === undefined) return undefined; // biar bisa partial
+    if (v === null) return null;
+    const s = String(v).trim();
+    return s ? s : null;
+  };
+
+  // ===============================
+  // payload business (PARTIAL OK)
+  // ===============================
+  const payload = {
+    tanggal: b.tanggal, // kalau dikirim, service akan resolve date-only & guard lock
+
+    idMesin: b.idMesin !== undefined ? toInt(b.idMesin) : undefined,
+    idOperator: b.idOperator !== undefined ? toInt(b.idOperator) : undefined,
+
+    // crusher pakai jam / jamKerja (alias support)
+    jam: b.jam !== undefined ? b.jam : (b.jamKerja !== undefined ? b.jamKerja : undefined),
+
+    shift: b.shift !== undefined ? toInt(b.shift) : undefined,
+
+    checkBy1: b.checkBy1 !== undefined ? (b.checkBy1 ?? null) : undefined,
+    checkBy2: b.checkBy2 !== undefined ? (b.checkBy2 ?? null) : undefined,
+    approveBy: b.approveBy !== undefined ? (b.approveBy ?? null) : undefined,
+
+    jmlhAnggota: b.jmlhAnggota !== undefined ? toInt(b.jmlhAnggota) : undefined,
+    hadir: b.hadir !== undefined ? toInt(b.hadir) : undefined,
+
+    hourMeter: b.hourMeter !== undefined ? toFloat(b.hourMeter) : undefined,
+
+    hourStart: b.hourStart !== undefined ? normalizeTime(b.hourStart) : undefined,
+    hourEnd: b.hourEnd !== undefined ? normalizeTime(b.hourEnd) : undefined,
+  };
+
+  // optional: validasi cepat agar error 400 rapih
+  const hasAnyField = Object.values(payload).some((v) => v !== undefined);
+  if (!hasAnyField) {
+    return res.status(400).json({
+      success: false,
+      message: 'No fields to update',
+      error: { fields: [] },
+    });
+  }
+
   try {
-    const noProduksi = req.params.noProduksi; // dari URL
-    if (!noProduksi) {
-      return res.status(400).json({
-        success: false,
-        message: 'noProduksi is required in route param',
-      });
-    }
+    const ctx = { actorId, actorUsername, requestId };
 
-    // dari verifyToken middleware
-    const username = req.username || req.user?.username || 'system';
+    // ⚠️ signature service: (noCrusherProduksi, payload, ctx)
+    const result = await crusherProduksiService.updateCrusherProduksi(
+      noCrusherProduksi,
+      payload,
+      ctx
+    );
 
-    const b = req.body || {};
-
-    const toInt = (v) => {
-      if (v === undefined || v === null || v === '') return null;
-      const n = Number(v);
-      return Number.isNaN(n) ? null : n;
-    };
-    const toFloat = (v) => {
-      if (v === undefined || v === null || v === '') return null;
-      const n = Number(v);
-      return Number.isNaN(n) ? null : n;
-    };
-
-    // body boleh partial, jadi jangan wajibkan semua
-    const payload = {
-      tglProduksi: b.tglProduksi,         // 'YYYY-MM-DD'
-      idMesin: toInt(b.idMesin),
-      idOperator: toInt(b.idOperator),
-      jamKerja: b.jamKerja,               // ⚠️ PERBEDAAN: jamKerja (bukan jam)
-      shift: toInt(b.shift),
-      checkBy1: b.checkBy1,
-      checkBy2: b.checkBy2,
-      approveBy: b.approveBy,
-      jmlhAnggota: toInt(b.jmlhAnggota),
-      hadir: toInt(b.hadir),
-      hourMeter: toFloat(b.hourMeter),
-      hourStart: b.hourStart || null,
-      hourEnd: b.hourEnd || null,
-    };
-
-    const result = await washingProduksiService.updateWashingProduksi(noProduksi, payload);
+    const header = result?.header ?? result;
 
     return res.status(200).json({
       success: true,
       message: 'Updated',
-      data: result.header,
+      data: header,
+      meta: {
+        audit: { actorId, actorUsername, requestId },
+      },
     });
   } catch (err) {
-    const status = err.statusCode || 500;
+    console.error('[Crusher][updateProduksi]', err);
+    const status = err.statusCode || err.status || 500;
+
     return res.status(status).json({
       success: false,
-      message: err.message || 'Internal Error',
+      message: status === 500 ? 'Internal Server Error' : (err.message || 'Error'),
+      error: {
+        message: err.message,
+        details: process.env.NODE_ENV === 'development' ? err.stack : undefined,
+      },
+      meta: {
+        audit: { actorId, actorUsername, requestId },
+      },
     });
   }
 }
 
 
-
-/**
- * DELETE /api/production/washing/:noProduksi
- * Hapus header washing production beserta semua input-nya
- */
 async function deleteProduksi(req, res) {
-  try {
-    const noProduksi = req.params.noProduksi;
-    if (!noProduksi) {
-      return res.status(400).json({
-        success: false,
-        message: 'noProduksi is required in route param',
-      });
-    }
+  const noProduksi = req.params.noProduksi;
+  if (!noProduksi) {
+    return res.status(400).json({
+      success: false,
+      message: 'noProduksi is required in route param',
+    });
+  }
 
-    await washingProduksiService.deleteWashingProduksi(noProduksi);
+  // body bisa datang sebagai string (x-www-form-urlencoded) atau JSON
+  const body = req.body && typeof req.body === 'object' ? req.body : {};
+
+  // ✅ jangan percaya audit fields dari client
+  const {
+    actorId: _clientActorId,
+    actorUsername: _clientActorUsername,
+    actor: _clientActor,
+    requestId: _clientRequestId,
+    ..._b
+  } = body;
+
+  // ✅ actor wajib (audit)
+  const actorId = getActorId(req);
+  if (!actorId) {
+    return res.status(401).json({
+      success: false,
+      message: 'Unauthorized (idUsername missing)',
+    });
+  }
+
+  const actorUsername =
+    getActorUsername(req) || req.username || req.user?.username || 'system';
+
+  const requestId = String(makeRequestId(req) || '').trim();
+  if (requestId) res.setHeader('x-request-id', requestId);
+
+  try {
+    const ctx = { actorId, actorUsername, requestId };
+
+    // ⚠️ pastikan signature service: (noProduksi, ctx)
+    const result = await washingProduksiService.deleteWashingProduksi(noProduksi, ctx);
 
     return res.status(200).json({
       success: true,
       message: 'Deleted',
+      data: result?.header ?? undefined,
+      meta: {
+        audit: { actorId, actorUsername, requestId },
+      },
     });
   } catch (err) {
-    const status = err.statusCode || 500;
+    console.error('[Washing][deleteProduksi]', err);
+    const status = err.statusCode || err.status || 500;
+
     return res.status(status).json({
       success: false,
-      message: err.message || 'Internal Error',
+      message: status === 500 ? 'Internal Server Error' : (err.message || 'Error'),
+      error: {
+        message: err.message,
+        details: process.env.NODE_ENV === 'development' ? err.stack : undefined,
+      },
+      meta: {
+        audit: { actorId, actorUsername, requestId },
+      },
     });
   }
 }
-
-
 
 
 

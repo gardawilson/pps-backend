@@ -99,143 +99,324 @@ async function getProduksiByDate(req, res) {
 
 
 async function createProduksi(req, res) {
+  // body bisa datang sebagai string (x-www-form-urlencoded) atau JSON
+  const body = req.body && typeof req.body === 'object' ? req.body : {};
+
+  // ✅ jangan percaya audit fields dari client
+  const {
+    actorId: _clientActorId,
+    actorUsername: _clientActorUsername,
+    actor: _clientActor,
+    requestId: _clientRequestId,
+    ...b
+  } = body;
+
+  // ✅ actor wajib (audit)
+  const actorId = getActorId(req);
+  if (!actorId) {
+    return res.status(401).json({
+      success: false,
+      message: 'Unauthorized (idUsername missing)',
+    });
+  }
+
+  // ✅ username untuk business fields / audit actor string
+  const actorUsername =
+    getActorUsername(req) || req.username || req.user?.username || 'system';
+
+  // ✅ request id per HTTP request (kalau ada header ikut pakai)
+  const requestId = String(makeRequestId(req) || '').trim();
+  if (requestId) res.setHeader('x-request-id', requestId);
+
+  // helper kecil buat parse number
+  const toInt = (v) => {
+    if (v === undefined || v === null || v === '') return null;
+    const n = Number(v);
+    return Number.isNaN(n) ? null : Math.trunc(n);
+  };
+  const toFloat = (v) => {
+    if (v === undefined || v === null || v === '') return null;
+    const n = Number(v);
+    return Number.isNaN(n) ? null : n;
+  };
+
+  // ✅ payload business (tanpa audit fields)
+  const payload = {
+    tglProduksi: b.tglProduksi,          // 'YYYY-MM-DD'
+    idMesin: toInt(b.idMesin),           // number
+    idOperator: toInt(b.idOperator),     // number
+    jam: b.jam,                          // number or 'HH:mm-HH:mm'
+    shift: toInt(b.shift),               // number
+    createBy: actorUsername,             // controller overwrite dari token
+
+    checkBy1: b.checkBy1 ?? null,
+    checkBy2: b.checkBy2 ?? null,
+    approveBy: b.approveBy ?? null,
+    jmlhAnggota: toInt(b.jmlhAnggota),
+    hadir: toInt(b.hadir),
+    hourMeter: toFloat(b.hourMeter),
+
+    hourStart: b.hourStart || null,      // ex: '08:00:00'
+    hourEnd: b.hourEnd || null,          // ex: '09:00:00'
+  };
+
+  // optional: validasi cepat agar error 400 rapih (service juga akan validasi)
+  const must = [];
+  if (!payload.tglProduksi) must.push('tglProduksi');
+  if (payload.idMesin == null) must.push('idMesin');
+  if (payload.idOperator == null) must.push('idOperator');
+  if (payload.jam == null) must.push('jam');
+  if (payload.shift == null) must.push('shift');
+  if (must.length) {
+    return res.status(400).json({
+      success: false,
+      message: `Field wajib: ${must.join(', ')}`,
+      error: { fields: must },
+    });
+  }
+
   try {
-    // dari verifyToken middleware
-    const username = req.username || req.user?.username || 'system';
+    // ✅ Forward audit context ke service (trigger akan pakai SESSION_CONTEXT dari ctx ini)
+    const ctx = { actorId, actorUsername, requestId };
 
-    // body bisa datang sebagai string (x-www-form-urlencoded) atau JSON
-    const b = req.body || {};
+    // ⚠️ ubah signature service jadi (payload, ctx)
+    const result = await brokerProduksiService.createBrokerProduksi(payload, ctx);
 
-    // helper kecil buat parse number
-    const toInt = (v) => {
-      if (v === undefined || v === null || v === '') return null;
-      const n = Number(v);
-      return Number.isNaN(n) ? null : n;
-    };
-    const toFloat = (v) => {
-      if (v === undefined || v === null || v === '') return null;
-      const n = Number(v);
-      return Number.isNaN(n) ? null : n;
-    };
+    // support return: { header, audit? }
+    const header = result?.header ?? result;
 
-    const payload = {
-      tglProduksi: b.tglProduksi,                 // 'YYYY-MM-DD'
-      idMesin: toInt(b.idMesin),                  // number
-      idOperator: toInt(b.idOperator),            // number
-      jam: b.jam,                                 // number or 'HH:mm-HH:mm'
-      shift: toInt(b.shift),                      // number
-      createBy: username,
-      checkBy1: b.checkBy1,
-      checkBy2: b.checkBy2,
-      approveBy: b.approveBy,
-      jmlhAnggota: toInt(b.jmlhAnggota),
-      hadir: toInt(b.hadir),
-      hourMeter: toFloat(b.hourMeter),
-
-      // ⬇️ tambahin ini
-      hourStart: b.hourStart || null,             // ex: '08:00:00'
-      hourEnd: b.hourEnd || null,                 // ex: '09:00:00'
-    };
-
-    const result = await brokerProduksiService.createBrokerProduksi(payload);
-
-    return res
-      .status(201)
-      .json({ success: true, message: 'Created', data: result.header });
+    return res.status(201).json({
+      success: true,
+      message: 'Created',
+      data: header,
+      meta: {
+        audit: { actorId, actorUsername, requestId },
+      },
+    });
   } catch (err) {
-    const status = err.statusCode || 500;
-    return res
-      .status(status)
-      .json({ success: false, message: err.message || 'Internal Error' });
+    console.error('[createProduksi]', err);
+    const status = err.statusCode || err.status || 500;
+
+    return res.status(status).json({
+      success: false,
+      message: status === 500 ? 'Internal Server Error' : (err.message || 'Error'),
+      error: {
+        message: err.message,
+        details: process.env.NODE_ENV === 'development' ? err.stack : undefined,
+      },
+      meta: {
+        audit: { actorId, actorUsername, requestId },
+      },
+    });
   }
 }
 
-
 async function updateProduksi(req, res) {
+  const noProduksi = req.params.noProduksi; // dari URL
+  if (!noProduksi) {
+    return res.status(400).json({
+      success: false,
+      message: 'noProduksi is required in route param',
+    });
+  }
+
+  // body bisa datang sebagai string (x-www-form-urlencoded) atau JSON
+  const body = req.body && typeof req.body === 'object' ? req.body : {};
+
+  // ✅ jangan percaya audit fields dari client
+  const {
+    actorId: _clientActorId,
+    actorUsername: _clientActorUsername,
+    actor: _clientActor,
+    requestId: _clientRequestId,
+    ...b
+  } = body;
+
+  // ✅ actor wajib (audit)
+  const actorId = getActorId(req);
+  if (!actorId) {
+    return res.status(401).json({
+      success: false,
+      message: 'Unauthorized (idUsername missing)',
+    });
+  }
+
+  // ✅ username untuk business fields / audit actor string
+  const actorUsername =
+    getActorUsername(req) || req.username || req.user?.username || 'system';
+
+  // ✅ request id per HTTP request (kalau ada header ikut pakai)
+  const requestId = String(makeRequestId(req) || '').trim();
+  if (requestId) res.setHeader('x-request-id', requestId);
+
+  // helper kecil buat parse number
+  const toInt = (v) => {
+    if (v === undefined || v === null || v === '') return null;
+    const n = Number(v);
+    return Number.isNaN(n) ? null : Math.trunc(n);
+  };
+  const toFloat = (v) => {
+    if (v === undefined || v === null || v === '') return null;
+    const n = Number(v);
+    return Number.isNaN(n) ? null : n;
+  };
+
+  // ✅ payload business (tanpa audit fields)
+  // body boleh partial, jadi field yang tidak dikirim biarkan undefined
+  const payload = {
+    // kalau dikirim, service akan resolve date-only & guard lock
+    tglProduksi: b.tglProduksi, // 'YYYY-MM-DD'
+
+    idMesin: b.idMesin !== undefined ? toInt(b.idMesin) : undefined,
+    idOperator: b.idOperator !== undefined ? toInt(b.idOperator) : undefined,
+
+    // jam boleh string 'HH:mm-HH:mm' / number / null (kalau mau set null)
+    jam: b.jam !== undefined ? b.jam : undefined,
+
+    shift: b.shift !== undefined ? toInt(b.shift) : undefined,
+
+    // business fields lain
+    checkBy1: b.checkBy1 !== undefined ? (b.checkBy1 ?? null) : undefined,
+    checkBy2: b.checkBy2 !== undefined ? (b.checkBy2 ?? null) : undefined,
+    approveBy: b.approveBy !== undefined ? (b.approveBy ?? null) : undefined,
+
+    jmlhAnggota: b.jmlhAnggota !== undefined ? toInt(b.jmlhAnggota) : undefined,
+    hadir: b.hadir !== undefined ? toInt(b.hadir) : undefined,
+
+    hourMeter: b.hourMeter !== undefined ? toFloat(b.hourMeter) : undefined,
+
+    hourStart: b.hourStart !== undefined ? (b.hourStart || null) : undefined,
+    hourEnd: b.hourEnd !== undefined ? (b.hourEnd || null) : undefined,
+
+    // NOTE:
+    // - Jangan kirim updateBy kalau kolomnya tidak ada di tabel.
+    // - Kalau kamu punya kolom UpdateBy/DateTimeUpdate, baru inject di sini.
+    // updateBy: actorUsername,
+  };
+
+  // optional: validasi cepat agar error 400 rapih (service juga akan validasi)
+  // untuk update: minimal harus ada 1 field yang dikirim
+  const hasAnyField = Object.values(payload).some((v) => v !== undefined);
+  if (!hasAnyField) {
+    return res.status(400).json({
+      success: false,
+      message: 'No fields to update',
+      error: { fields: [] },
+    });
+  }
+
   try {
-    const noProduksi = req.params.noProduksi;        // dari URL
-    if (!noProduksi) {
-      return res.status(400).json({
-        success: false,
-        message: 'noProduksi is required in route param',
-      });
-    }
+    // ✅ Forward audit context ke service (trigger akan pakai SESSION_CONTEXT dari ctx ini)
+    const ctx = { actorId, actorUsername, requestId };
 
-    // dari verifyToken middleware
-    const username = req.username || req.user?.username || 'system';
+    // ⚠️ pastikan signature service: (noProduksi, payload, ctx)
+    const result = await brokerProduksiService.updateBrokerProduksi(
+      noProduksi,
+      payload,
+      ctx
+    );
 
-    const b = req.body || {};
-
-    const toInt = (v) => {
-      if (v === undefined || v === null || v === '') return null;
-      const n = Number(v);
-      return Number.isNaN(n) ? null : n;
-    };
-    const toFloat = (v) => {
-      if (v === undefined || v === null || v === '') return null;
-      const n = Number(v);
-      return Number.isNaN(n) ? null : n;
-    };
-
-    // body boleh partial, jadi jangan wajibkan semua
-    const payload = {
-      tglProduksi: b.tglProduksi,               // 'YYYY-MM-DD'
-      idMesin: toInt(b.idMesin),
-      idOperator: toInt(b.idOperator),
-      jam: b.jam,                               // kalau dikirim, kita parse lagi
-      shift: toInt(b.shift),
-      updateBy: username,
-      checkBy1: b.checkBy1,
-      checkBy2: b.checkBy2,
-      approveBy: b.approveBy,
-      jmlhAnggota: toInt(b.jmlhAnggota),
-      hadir: toInt(b.hadir),
-      hourMeter: toFloat(b.hourMeter),
-      hourStart: b.hourStart || null,
-      hourEnd: b.hourEnd || null,
-    };
-
-    const result = await brokerProduksiService.updateBrokerProduksi(noProduksi, payload);
+    const header = result?.header ?? result;
 
     return res.status(200).json({
       success: true,
       message: 'Updated',
-      data: result.header,
+      data: header,
+      meta: {
+        audit: { actorId, actorUsername, requestId },
+      },
     });
   } catch (err) {
-    const status = err.statusCode || 500;
+    console.error('[updateProduksi]', err);
+    const status = err.statusCode || err.status || 500;
+
     return res.status(status).json({
       success: false,
-      message: err.message || 'Internal Error',
+      message: status === 500 ? 'Internal Server Error' : (err.message || 'Error'),
+      error: {
+        message: err.message,
+        details: process.env.NODE_ENV === 'development' ? err.stack : undefined,
+      },
+      meta: {
+        audit: { actorId, actorUsername, requestId },
+      },
     });
   }
 }
 
-
 async function deleteProduksi(req, res) {
+  const noProduksi = req.params.noProduksi;
+  if (!noProduksi) {
+    return res.status(400).json({
+      success: false,
+      message: 'noProduksi is required in route param',
+    });
+  }
+
+  // body bisa datang sebagai string (x-www-form-urlencoded) atau JSON
+  const body = req.body && typeof req.body === 'object' ? req.body : {};
+
+  // ✅ jangan percaya audit fields dari client
+  const {
+    actorId: _clientActorId,
+    actorUsername: _clientActorUsername,
+    actor: _clientActor,
+    requestId: _clientRequestId,
+    ..._b
+  } = body;
+
+  // ✅ actor wajib (audit)
+  const actorId = getActorId(req);
+  if (!actorId) {
+    return res.status(401).json({
+      success: false,
+      message: 'Unauthorized (idUsername missing)',
+    });
+  }
+
+  // ✅ username untuk audit actor string
+  const actorUsername =
+    getActorUsername(req) || req.username || req.user?.username || 'system';
+
+  // ✅ request id per HTTP request (kalau ada header ikut pakai)
+  const requestId = String(makeRequestId(req) || '').trim();
+  if (requestId) res.setHeader('x-request-id', requestId);
+
   try {
-    const noProduksi = req.params.noProduksi;
-    if (!noProduksi) {
-      return res.status(400).json({
-        success: false,
-        message: 'noProduksi is required in route param',
-      });
-    }
+    // ✅ Forward audit context ke service (trigger akan pakai SESSION_CONTEXT dari ctx ini)
+    const ctx = { actorId, actorUsername, requestId };
 
-    await brokerProduksiService.deleteBrokerProduksi(noProduksi);
+    // ⚠️ pastikan signature service: (noProduksi, ctx)
+    const result = await brokerProduksiService.deleteBrokerProduksi(noProduksi, ctx);
 
+    // kalau service return header deleted, kita support juga
     return res.status(200).json({
       success: true,
       message: 'Deleted',
+      data: result?.header ?? undefined,
+      meta: {
+        audit: { actorId, actorUsername, requestId },
+      },
     });
   } catch (err) {
-    const status = err.statusCode || 500;
+    console.error('[deleteProduksi]', err);
+    const status = err.statusCode || err.status || 500;
+
     return res.status(status).json({
       success: false,
-      message: err.message || 'Internal Error',
+      message: status === 500 ? 'Internal Server Error' : (err.message || 'Error'),
+      error: {
+        message: err.message,
+        details: process.env.NODE_ENV === 'development' ? err.stack : undefined,
+      },
+      meta: {
+        audit: { actorId, actorUsername, requestId },
+      },
     });
   }
 }
+
+
 
 async function validateLabel(req, res) {
   const { labelCode } = req.params;
@@ -277,9 +458,6 @@ async function validateLabel(req, res) {
     });
   }
 }
-
-
-
 
 async function upsertInputsAndPartials(req, res) {
   const noProduksi = String(req.params.noProduksi || '').trim();
@@ -325,7 +503,7 @@ async function upsertInputsAndPartials(req, res) {
   // optional validate: at least one input exists
   const hasInput = [
     'broker', 'bb', 'washing', 'crusher', 'gilingan', 'mixer', 'reject',
-    'bbPartialNew', 'gilinganPartialNew', 'mixerPartialNew', 'rejectPartialNew',
+    'bbPartial', 'gilinganPartial', 'mixerPartial', 'rejectPartial',
   ].some((key) => Array.isArray(payload?.[key]) && payload[key].length > 0);
 
   // if (!hasInput) { ... } // kalau mau strict, aktifkan lagi
@@ -384,8 +562,6 @@ async function upsertInputsAndPartials(req, res) {
     });
   }
 }
-
-
 
 async function deleteInputsAndPartials(req, res) {
   const noProduksi = String(req.params.noProduksi || '').trim();

@@ -1,16 +1,20 @@
 // services/bongkar-susun-service.js
-const { sql, poolPromise } = require('../../core/config/db');
-
+const { sql, poolPromise } = require("../../core/config/db");
 const {
   resolveEffectiveDateForCreate,
   toDateOnly,
-  assertNotLocked,     
+  assertNotLocked,
   formatYMD,
-  loadDocDateOnlyFromConfig
-} = require('../../core/shared/tutup-transaksi-guard');
-
-const sharedInputService = require('../../core/shared/produksi-input.service');
-const { badReq, conflict } = require('../../core/utils/http-error')
+  loadDocDateOnlyFromConfig,
+} = require("../../core/shared/tutup-transaksi-guard");
+const sharedInputService = require("../../core/shared/produksi-input.service");
+const { badReq, conflict } = require("../../core/utils/http-error");
+const { applyAuditContext } = require("../../core/utils/db-audit-context");
+const { generateNextCode } = require("../../core/utils/sequence-code-helper");
+const {
+  parseJamToInt,
+  calcJamKerjaFromStartEnd,
+} = require("../../core/utils/jam-kerja-helper");
 
 async function getByDate(date /* 'YYYY-MM-DD' */) {
   const pool = await poolPromise;
@@ -27,7 +31,7 @@ async function getByDate(date /* 'YYYY-MM-DD' */) {
     ORDER BY Tanggal DESC;
   `;
 
-  request.input('date', sql.Date, date);
+  request.input("date", sql.Date, date);
 
   const result = await request.query(query);
   return result.recordset;
@@ -38,14 +42,14 @@ async function getByDate(date /* 'YYYY-MM-DD' */) {
  * Columns:
  *  NoBongkarSusun, Tanggal, IdUsername, Note + Username (from MstUsername)
  */
-async function getAllBongkarSusun(page = 1, pageSize = 20, search = '') {
+async function getAllBongkarSusun(page = 1, pageSize = 20, search = "") {
   const pool = await poolPromise;
 
   const p = Math.max(1, Number(page) || 1);
   const ps = Math.max(1, Math.min(200, Number(pageSize) || 20));
   const offset = (p - 1) * ps;
 
-  const searchTerm = (search || '').trim();
+  const searchTerm = (search || "").trim();
 
   const whereClause = `
     WHERE (@search = '' OR h.NoBongkarSusun LIKE '%' + @search + '%')
@@ -59,7 +63,7 @@ async function getAllBongkarSusun(page = 1, pageSize = 20, search = '') {
   `;
 
   const countReq = pool.request();
-  countReq.input('search', sql.VarChar(100), searchTerm);
+  countReq.input("search", sql.VarChar(100), searchTerm);
 
   const countRes = await countReq.query(countQry);
   const total = countRes.recordset?.[0]?.total || 0;
@@ -109,9 +113,9 @@ async function getAllBongkarSusun(page = 1, pageSize = 20, search = '') {
   `;
 
   const dataReq = pool.request();
-  dataReq.input('search', sql.VarChar(100), searchTerm);
-  dataReq.input('offset', sql.Int, offset);
-  dataReq.input('limit', sql.Int, ps);
+  dataReq.input("search", sql.VarChar(100), searchTerm);
+  dataReq.input("offset", sql.Int, offset);
+  dataReq.input("limit", sql.Int, ps);
 
   const dataRes = await dataReq.query(dataQry);
 
@@ -121,167 +125,214 @@ async function getAllBongkarSusun(page = 1, pageSize = 20, search = '') {
   };
 }
 
-
-function padLeft(num, width) {
-  const s = String(num);
-  return s.length >= width ? s : '0'.repeat(width - s.length) + s;
-}
-
-async function generateNextNoBongkarSusun(
-  tx,
-  { prefix = 'BG.', width = 10 } = {}
-) {
-  const rq = new sql.Request(tx);
-  const q = `
-    SELECT TOP 1 h.NoBongkarSusun
-    FROM dbo.BongkarSusun_h AS h WITH (UPDLOCK, HOLDLOCK)
-    WHERE h.NoBongkarSusun LIKE @prefix + '%'
-    ORDER BY
-      TRY_CONVERT(BIGINT, SUBSTRING(h.NoBongkarSusun, LEN(@prefix) + 1, 50)) DESC,
-      h.NoBongkarSusun DESC;
-  `;
-  const r = await rq.input('prefix', sql.VarChar, prefix).query(q);
-
-  let lastNum = 0;
-  if (r.recordset.length > 0) {
-    const last = r.recordset[0].NoBongkarSusun;
-    const numericPart = last.substring(prefix.length);
-    lastNum = parseInt(numericPart, 10) || 0;
-  }
-  const next = lastNum + 1;
-  return prefix + padLeft(next, width);
-}
-
-// ===========================
-//  CREATE BongkarSusun_h
-//  idUsername diambil via Username (dari JWT)
-// ===========================
-async function createBongkarSusun(payload) {
+async function createBongkarSusun(payload, ctx) {
   const must = [];
-  if (!payload?.tanggal) must.push('tanggal');
-  if (!payload?.username) must.push('username');
-  if (must.length) throw badReq(`Field wajib: ${must.join(', ')}`);
+  if (!payload?.tanggal) must.push("tanggal");
+  if (!payload?.username) must.push("username");
+  if (must.length) throw badReq(`Field wajib: ${must.join(", ")}`);
+
+  // ===============================
+  // Validasi audit context
+  // ===============================
+  const actorIdNum = Number(ctx?.actorId);
+  if (!Number.isFinite(actorIdNum) || actorIdNum <= 0) {
+    throw badReq("ctx.actorId wajib. Controller harus inject dari token.");
+  }
+  const actorUsername = String(ctx?.actorUsername || "").trim() || "system";
+  const requestId = String(ctx?.requestId || "").trim();
+  const auditCtx = {
+    actorId: Math.trunc(actorIdNum),
+    actorUsername,
+    requestId,
+  };
 
   const pool = await poolPromise;
   const tx = new sql.Transaction(pool);
   await tx.begin(sql.ISOLATION_LEVEL.SERIALIZABLE);
 
   try {
-    // ✅ 1) tanggal “date-only UTC” (stabil, anti timezone shift)
-    const effectiveDate = resolveEffectiveDateForCreate(payload.tanggal);
+    // ===============================
+    // Set audit context (SESSION_CONTEXT)
+    // ===============================
+    const auditReq = new sql.Request(tx);
+    const audit = await applyAuditContext(auditReq, auditCtx);
 
-    // ✅ 2) guard tutup transaksi (CREATE = write)
+    // ===============================
+    // Normalize tanggal + lock guard
+    // ===============================
+    const effectiveDate = resolveEffectiveDateForCreate(payload.tanggal);
     await assertNotLocked({
       date: effectiveDate,
-      runner: tx,                  // wajib tx
-      action: 'create BongkarSusun',
-      useLock: true,               // create/update/delete = true
+      runner: tx,
+      action: "create BongkarSusun",
+      useLock: true,
     });
 
-    // 3) Resolve Username -> IdUsername
+    // ===============================
+    // Resolve username -> IdUsername
+    // ===============================
     const rqUser = new sql.Request(tx);
-    const userRes = await rqUser
-      .input('Username', sql.VarChar(100), String(payload.username).trim())
-      .query(`
+    const userRes = await rqUser.input(
+      "Username",
+      sql.VarChar(100),
+      String(payload.username).trim(),
+    ).query(`
         SELECT TOP 1 IdUsername
         FROM dbo.MstUsername WITH (NOLOCK)
         WHERE Username = @Username;
       `);
 
     if (userRes.recordset.length === 0) {
-      throw badReq(`Username "${payload.username}" tidak ditemukan di MstUsername`);
+      throw badReq(
+        `Username "${payload.username}" tidak ditemukan di MstUsername`,
+      );
     }
-
     const idUsername = userRes.recordset[0].IdUsername;
 
-    // 4) Generate nomor baru BG.XXXXXXXXXX (pakai tx biar aman)
-    const no1 = await generateNextNoBongkarSusun(tx, { prefix: 'BG.', width: 10 });
+    // ===============================
+    // Generate NoBongkarSusun unik
+    // ===============================
+    let noBongkarSusun = await generateNextCode(tx, {
+      tableName: "dbo.BongkarSusun_h",
+      columnName: "NoBongkarSusun",
+      prefix: "BG.",
+      width: 10,
+    });
 
-    // 5) Double-check exist + lock untuk cegah race
+    // Double-check exist + lock untuk race condition
     const rqCheck = new sql.Request(tx);
-    const exist = await rqCheck
-      .input('NoBongkarSusun', sql.VarChar(50), no1)
-      .query(`
+    const exist = await rqCheck.input(
+      "NoBongkarSusun",
+      sql.VarChar(50),
+      noBongkarSusun,
+    ).query(`
         SELECT 1
         FROM dbo.BongkarSusun_h WITH (UPDLOCK, HOLDLOCK)
-        WHERE NoBongkarSusun = @NoBongkarSusun
+        WHERE NoBongkarSusun = @NoBongkarSusun;
       `);
 
-    const noBongkarSusun = exist.recordset.length
-      ? await generateNextNoBongkarSusun(tx, { prefix: 'BG.', width: 10 })
-      : no1;
+    if (exist.recordset.length) {
+      noBongkarSusun = await generateNextCode(tx, {
+        tableName: "dbo.BongkarSusun_h",
+        columnName: "NoBongkarSusun",
+        prefix: "BG.",
+        width: 10,
+      });
+    }
 
-    // 6) Insert header (pakai effectiveDate, bukan payload.tanggal mentah)
+    // ===============================
+    // Insert header (tanpa OUTPUT)
+    // ===============================
     const rqIns = new sql.Request(tx);
     rqIns
-      .input('NoBongkarSusun', sql.VarChar(50), noBongkarSusun)
-      .input('Tanggal', sql.Date, effectiveDate)
-      .input('IdUsername', sql.Int, idUsername)
-      .input('Note', sql.VarChar(255), payload.note ?? null);
+      .input("NoBongkarSusun", sql.VarChar(50), noBongkarSusun)
+      .input("Tanggal", sql.Date, effectiveDate)
+      .input("IdUsername", sql.Int, idUsername)
+      .input("Note", sql.VarChar(255), payload.note ?? null);
 
     const insertSql = `
       INSERT INTO dbo.BongkarSusun_h (NoBongkarSusun, Tanggal, IdUsername, Note)
-      OUTPUT INSERTED.*
       VALUES (@NoBongkarSusun, @Tanggal, @IdUsername, @Note);
     `;
+    await rqIns.query(insertSql);
 
-    const insRes = await rqIns.query(insertSql);
+    // ===============================
+    // SELECT ulang header
+    // ===============================
+    const selRes = await new sql.Request(tx).input(
+      "NoBongkarSusun",
+      sql.VarChar(50),
+      noBongkarSusun,
+    ).query(`
+        SELECT *
+        FROM dbo.BongkarSusun_h
+        WHERE NoBongkarSusun = @NoBongkarSusun;
+      `);
+
+    const header = selRes.recordset?.[0] || null;
+
     await tx.commit();
-
-    return { header: insRes.recordset?.[0] || null };
+    return { header, audit };
   } catch (e) {
-    try { await tx.rollback(); } catch (_) {}
-    throw e;
+    try {
+      await tx.rollback();
+    } catch (_) {}
+    throw Object.assign(e, auditCtx); // attach audit context untuk controller
   }
 }
-
 
 // ===========================
 //  UPDATE BongkarSusun_h
 // ===========================
 
-async function updateBongkarSusunCascade(noBongkarSusun, headerPayload, inputsPayloadOrNull) {
-  if (!noBongkarSusun) throw badReq('noBongkarSusun wajib diisi');
+// ============================================================
+// updateBongkarSusunCascade  —  revised (aligned to BJJual pattern)
+// ============================================================
 
+async function updateBongkarSusunCascade(
+  noBongkarSusun,
+  headerPayload,
+  inputsPayloadOrNull,
+  ctx, // ← NEW: audit context dari controller (actorId, actorUsername, requestId)
+) {
+  if (!noBongkarSusun) throw badReq("noBongkarSusun wajib diisi");
+
+  // ===============================
+  // Audit context  (sama persis BJJual)
+  // ===============================
+  const actorIdNum = Number(ctx?.actorId);
+  if (!Number.isFinite(actorIdNum) || actorIdNum <= 0) {
+    throw badReq("ctx.actorId wajib. Controller harus inject dari token.");
+  }
+  const actorUsername = String(ctx?.actorUsername || "").trim() || "system";
+  const requestId = String(ctx?.requestId || "").trim();
+  const auditCtx = {
+    actorId: Math.trunc(actorIdNum),
+    actorUsername,
+    requestId,
+  };
+
+  // ===============================
+  // Transaction setup  (tx.begin SEBELUM try — sama BJJual)
+  // ===============================
   const pool = await poolPromise;
   const tx = new sql.Transaction(pool);
+  await tx.begin(sql.ISOLATION_LEVEL.SERIALIZABLE);
+
+  // ✅ FIX DI SINI
+  const auditReq = new sql.Request(tx);
+  await applyAuditContext(auditReq, auditCtx);
 
   try {
-    await tx.begin(sql.ISOLATION_LEVEL.SERIALIZABLE);
-
-    // =========================================================
-    // 0) AMBIL docDateOnly DARI CONFIG + LOCK HEADER ROW
-    //    (menggantikan SELECT BongkarSusun_h manual)
-    // =========================================================
+    // =====================================================
+    // 0) Load old doc date + lock header row
+    // =====================================================
     const { docDateOnly: oldDocDateOnly } = await loadDocDateOnlyFromConfig({
-      entityKey: 'bongkarSusun',      // pastikan sesuai config tutup-transaksi
+      entityKey: "bongkarSusun",
       codeValue: noBongkarSusun,
       runner: tx,
-      useLock: true,                 // UPDATE = write action
+      useLock: true,
       throwIfNotFound: true,
     });
 
-    // =========================================================
-    // 1) Kalau user mengubah tanggal, hitung tanggal baru (date-only)
-    // =========================================================
-    const isChangingDate =
-      !!headerPayload && Object.prototype.hasOwnProperty.call(headerPayload, 'tanggal');
-
+    // =====================================================
+    // 1) Handle date change  (simplified detect — sama BJJual)
+    // =====================================================
+    const isChangingDate = headerPayload?.tanggal !== undefined;
     let newDocDateOnly = null;
+
     if (isChangingDate) {
-      if (!headerPayload.tanggal) throw badReq('tanggal tidak boleh kosong');
+      if (!headerPayload.tanggal) throw badReq("tanggal tidak boleh kosong");
       newDocDateOnly = resolveEffectiveDateForCreate(headerPayload.tanggal);
     }
 
-    // =========================================================
-    // 2) GUARD TUTUP TRANSAKSI (UPDATE = write)
-    //    - cek tanggal lama
-    //    - kalau ganti tanggal, cek tanggal baru juga
-    // =========================================================
+    // =====================================================
+    // 2) Guard tutup transaksi
+    // =====================================================
     await assertNotLocked({
       date: oldDocDateOnly,
       runner: tx,
-      action: 'update BongkarSusun (current date)',
+      action: "update BongkarSusun (current date)",
       useLock: true,
     });
 
@@ -289,192 +340,238 @@ async function updateBongkarSusunCascade(noBongkarSusun, headerPayload, inputsPa
       await assertNotLocked({
         date: newDocDateOnly,
         runner: tx,
-        action: 'update BongkarSusun (new date)',
+        action: "update BongkarSusun (new date)",
         useLock: true,
       });
     }
 
-    // =========================================================
+    // =====================================================
     // 3) Update header (kalau ada field)
-    //    - jika tanggal diganti, pastikan yang disimpan date-only
-    // =========================================================
+    //    - fallback ke GET kalau payload kosong/null
+    //      (dipertahankan karena inputs bisa diupdate sendiri)
+    // =====================================================
     let headerUpdated = null;
 
     if (headerPayload && Object.keys(headerPayload).length) {
       const headerToUpdate = { ...headerPayload };
       if (isChangingDate) headerToUpdate.tanggal = newDocDateOnly;
 
-      headerUpdated = await _updateHeaderWithTx(tx, noBongkarSusun, headerToUpdate);
+      headerUpdated = await _updateHeaderWithTx(
+        tx,
+        noBongkarSusun,
+        headerToUpdate,
+      );
     } else {
       headerUpdated = await _getHeaderWithTx(tx, noBongkarSusun);
     }
 
-    // =========================================================
-    // 4) Kalau user kirim inputs: upsert yang baru (pakai tx yang sama)
-    // =========================================================
+    // =====================================================
+    // 4) Upsert inputs (kalau ada)
+    // =====================================================
     let attachmentsSummary = null;
     if (inputsPayloadOrNull) {
-      attachmentsSummary = await upsertInputsWithExistingTx(tx, noBongkarSusun, inputsPayloadOrNull);
+      attachmentsSummary = await upsertInputsWithExistingTx(
+        tx,
+        noBongkarSusun,
+        inputsPayloadOrNull,
+      );
     }
 
-    // =========================================================
-    // 5) Jika tanggal berubah → refresh DateUsage semua item yang attached
-    // =========================================================
+    // =====================================================
+    // 5) Sync DateUsage jika tanggal berubah
+    //    — pakai oldDocDateOnly sebagai guard filter
+    //      (aligned ke BJJual: hanya update row yang
+    //       DateUsage IS NULL OR = old date)
+    // =====================================================
     if (isChangingDate) {
-      await refreshDateUsageByInputsTx(tx, noBongkarSusun);
+      await refreshDateUsageByInputsTx(
+        tx,
+        noBongkarSusun,
+        oldDocDateOnly, // ← NEW param
+        newDocDateOnly, // ← NEW param
+      );
+      // re-fetch header supaya Tanggal reflect yang baru
       headerUpdated = await _getHeaderWithTx(tx, noBongkarSusun);
     }
 
     await tx.commit();
 
-    return { header: headerUpdated, inputs: attachmentsSummary };
-  } catch (err) {
-    try { await tx.rollback(); } catch {}
-    throw err;
+    // =====================================================
+    // Return  — tambahkan audit (sama BJJual)
+    // =====================================================
+    return {
+      header: headerUpdated,
+      inputs: attachmentsSummary,
+      audit: auditCtx,
+    };
+  } catch (e) {
+    try {
+      await tx.rollback();
+    } catch (_) {}
+    // attach auditCtx ke error (sama BJJual)
+    throw Object.assign(e, auditCtx);
   }
 }
 
-
-
+// ============================================================
+// _getHeaderWithTx  —  unchanged
+// ============================================================
 async function _getHeaderWithTx(tx, no) {
   const rq = new sql.Request(tx);
-  rq.input('No', sql.VarChar(50), no);
-  const rs = await rq.query(`SELECT * FROM dbo.BongkarSusun_h WITH (NOLOCK) WHERE NoBongkarSusun=@No;`);
-  if (!rs.recordset.length) throw badReq('BongkarSusun tidak ditemukan');
+  rq.input("No", sql.VarChar(50), no);
+  const rs = await rq.query(
+    `SELECT * FROM dbo.BongkarSusun_h WITH (NOLOCK) WHERE NoBongkarSusun=@No;`,
+  );
+  if (!rs.recordset.length) throw badReq("BongkarSusun tidak ditemukan");
   return rs.recordset[0];
 }
 
+// ============================================================
+// _updateHeaderWithTx  —  unchanged (pattern sudah oke)
+// ============================================================
 async function _updateHeaderWithTx(tx, noBongkarSusun, payload) {
   const setClauses = [];
   const rq = new sql.Request(tx);
 
-  rq.input('NoBongkarSusun', sql.VarChar(50), noBongkarSusun);
+  rq.input("NoBongkarSusun", sql.VarChar(50), noBongkarSusun);
 
-  if (Object.prototype.hasOwnProperty.call(payload, 'tanggal')) {
-    setClauses.push('Tanggal=@Tanggal');
-    rq.input('Tanggal', sql.Date, payload.tanggal);
+  if (Object.prototype.hasOwnProperty.call(payload, "tanggal")) {
+    setClauses.push("Tanggal=@Tanggal");
+    rq.input("Tanggal", sql.Date, payload.tanggal);
   }
-  if (Object.prototype.hasOwnProperty.call(payload, 'idUsername')) {
-    setClauses.push('IdUsername=@IdUsername');
-    rq.input('IdUsername', sql.Int, payload.idUsername);
-  }
-  if (Object.prototype.hasOwnProperty.call(payload, 'note')) {
-    setClauses.push('Note=@Note');
-    rq.input('Note', sql.VarChar(255), payload.note ?? null);
-  }
-  if (!setClauses.length) return _getHeaderWithTx(tx, noBongkarSusun);
 
-  const rs = await rq.query(`
+  if (Object.prototype.hasOwnProperty.call(payload, "note")) {
+    setClauses.push("Note=@Note");
+    rq.input("Note", sql.VarChar(255), payload.note ?? null);
+  }
+
+  if (!setClauses.length) {
+    return _getHeaderWithTx(tx, noBongkarSusun);
+  }
+
+  await rq.query(`
     UPDATE dbo.BongkarSusun_h
-    SET ${setClauses.join(', ')}
-    OUTPUT INSERTED.*
+    SET ${setClauses.join(", ")}
     WHERE NoBongkarSusun=@NoBongkarSusun;
   `);
 
-  if (!rs.recordset.length) throw badReq('BongkarSusun tidak ditemukan');
-  return rs.recordset[0];
+  // ⬇️ SELECT ulang (AMAN + trigger tetap jalan)
+  return _getHeaderWithTx(tx, noBongkarSusun);
 }
 
-/**
- * REFRESH DateUsage jadi Tanggal header untuk SEMUA item yang masih terpasang di input tables
- * (berdasarkan NoBongkarSusun).
- */
-async function refreshDateUsageByInputsTx(tx, no) {
+// ============================================================
+// refreshDateUsageByInputsTx  —  REVISED
+//   - terima oldDocDateOnly + newDocDateOnly sebagai param
+//   - setiap UPDATE pakai guard:
+//       DateUsage IS NULL OR CONVERT(date, DateUsage) = @OldTanggal
+//     → hanya row yang masih "milik" tanggal lama yang tergeser
+//       (aligned ke BJJual pattern)
+// ============================================================
+async function refreshDateUsageByInputsTx(
+  tx,
+  no,
+  oldDocDateOnly,
+  newDocDateOnly,
+) {
   const rq = new sql.Request(tx);
-  rq.input('No', sql.VarChar(50), no);
+  rq.input("No", sql.VarChar(50), no);
+  rq.input("OldTanggal", sql.Date, oldDocDateOnly);
+  rq.input("NewTanggal", sql.Date, newDocDateOnly);
 
   await rq.query(`
     SET NOCOUNT ON;
 
-    DECLARE @tgl datetime;
-    SELECT @tgl = CAST(Tanggal AS datetime)
-    FROM dbo.BongkarSusun_h WITH (NOLOCK)
-    WHERE NoBongkarSusun = @No;
-
-    IF @tgl IS NULL
-      RAISERROR('Header BongkarSusun_h tidak ditemukan / Tanggal NULL', 16, 1);
-
-    -- BROKER
+    -- ─── BROKER ────────────────────────────────────────────
     UPDATE b
-    SET b.DateUsage = @tgl
-    FROM dbo.Broker_d b
+    SET   b.DateUsage = @NewTanggal
+    FROM  dbo.Broker_d b
     INNER JOIN dbo.BongkarSusunInputBroker i
-      ON i.NoBroker=b.NoBroker AND i.NoSak=b.NoSak
-    WHERE i.NoBongkarSusun=@No;
+      ON  i.NoBroker = b.NoBroker
+      AND i.NoSak    = b.NoSak
+    WHERE i.NoBongkarSusun = @No
+      AND (b.DateUsage IS NULL OR CONVERT(date, b.DateUsage) = @OldTanggal);
 
-    -- BB
+    -- ─── BAHAN BAKU ────────────────────────────────────────
     UPDATE d
-    SET d.DateUsage = @tgl
-    FROM dbo.BahanBaku_d d
+    SET   d.DateUsage = @NewTanggal
+    FROM  dbo.BahanBaku_d d
     INNER JOIN dbo.BongkarSusunInputBahanBaku i
-      ON i.NoBahanBaku=d.NoBahanBaku AND i.NoPallet=d.NoPallet AND i.NoSak=d.NoSak
-    WHERE i.NoBongkarSusun=@No;
+      ON  i.NoBahanBaku = d.NoBahanBaku
+      AND i.NoPallet    = d.NoPallet
+      AND i.NoSak       = d.NoSak
+    WHERE i.NoBongkarSusun = @No
+      AND (d.DateUsage IS NULL OR CONVERT(date, d.DateUsage) = @OldTanggal);
 
-    -- WASHING
+    -- ─── WASHING ───────────────────────────────────────────
     UPDATE d
-    SET d.DateUsage = @tgl
-    FROM dbo.Washing_d d
+    SET   d.DateUsage = @NewTanggal
+    FROM  dbo.Washing_d d
     INNER JOIN dbo.BongkarSusunInputWashing i
-      ON i.NoWashing=d.NoWashing AND i.NoSak=d.NoSak
-    WHERE i.NoBongkarSusun=@No;
+      ON  i.NoWashing = d.NoWashing
+      AND i.NoSak     = d.NoSak
+    WHERE i.NoBongkarSusun = @No
+      AND (d.DateUsage IS NULL OR CONVERT(date, d.DateUsage) = @OldTanggal);
 
-    -- CRUSHER
+    -- ─── CRUSHER ───────────────────────────────────────────
     UPDATE c
-    SET c.DateUsage = @tgl
-    FROM dbo.Crusher c
+    SET   c.DateUsage = @NewTanggal
+    FROM  dbo.Crusher c
     INNER JOIN dbo.BongkarSusunInputCrusher i
-      ON i.NoCrusher=c.NoCrusher
-    WHERE i.NoBongkarSusun=@No;
+      ON  i.NoCrusher = c.NoCrusher
+    WHERE i.NoBongkarSusun = @No
+      AND (c.DateUsage IS NULL OR CONVERT(date, c.DateUsage) = @OldTanggal);
 
-    -- GILINGAN
+    -- ─── GILINGAN ──────────────────────────────────────────
     UPDATE g
-    SET g.DateUsage = @tgl
-    FROM dbo.Gilingan g
+    SET   g.DateUsage = @NewTanggal
+    FROM  dbo.Gilingan g
     INNER JOIN dbo.BongkarSusunInputGilingan i
-      ON i.NoGilingan=g.NoGilingan
-    WHERE i.NoBongkarSusun=@No;
+      ON  i.NoGilingan = g.NoGilingan
+    WHERE i.NoBongkarSusun = @No
+      AND (g.DateUsage IS NULL OR CONVERT(date, g.DateUsage) = @OldTanggal);
 
-    -- MIXER
+    -- ─── MIXER ─────────────────────────────────────────────
     UPDATE d
-    SET d.DateUsage = @tgl
-    FROM dbo.Mixer_d d
+    SET   d.DateUsage = @NewTanggal
+    FROM  dbo.Mixer_d d
     INNER JOIN dbo.BongkarSusunInputMixer i
-      ON i.NoMixer=d.NoMixer AND i.NoSak=d.NoSak
-    WHERE i.NoBongkarSusun=@No;
+      ON  i.NoMixer = d.NoMixer
+      AND i.NoSak   = d.NoSak
+    WHERE i.NoBongkarSusun = @No
+      AND (d.DateUsage IS NULL OR CONVERT(date, d.DateUsage) = @OldTanggal);
 
-    -- REJECT (kalau ada tabelnya)
-    -- UPDATE r SET r.DateUsage=@tgl
-    -- FROM dbo.Reject r
-    -- JOIN dbo.BongkarSusunInputReject i ON i.NoReject=r.NoReject
-    -- WHERE i.NoBongkarSusun=@No;
-
-    -- BONGGOLAN
+    -- ─── BONGGOLAN ─────────────────────────────────────────
     UPDATE b
-    SET b.DateUsage = @tgl
-    FROM dbo.Bonggolan b
+    SET   b.DateUsage = @NewTanggal
+    FROM  dbo.Bonggolan b
     INNER JOIN dbo.BongkarSusunInputBonggolan i
-      ON i.NoBonggolan=b.NoBonggolan
-    WHERE i.NoBongkarSusun=@No;
+      ON  i.NoBonggolan = b.NoBonggolan
+    WHERE i.NoBongkarSusun = @No
+      AND (b.DateUsage IS NULL OR CONVERT(date, b.DateUsage) = @OldTanggal);
 
-    -- FURNITURE WIP
+    -- ─── FURNITURE WIP ─────────────────────────────────────
     UPDATE f
-    SET f.DateUsage = @tgl
-    FROM dbo.FurnitureWIP f
+    SET   f.DateUsage = @NewTanggal
+    FROM  dbo.FurnitureWIP f
     INNER JOIN dbo.BongkarSusunInputFurnitureWIP i
-      ON i.NoFurnitureWIP=f.NoFurnitureWIP
-    WHERE i.NoBongkarSusun=@No;
+      ON  i.NoFurnitureWIP = f.NoFurnitureWIP
+    WHERE i.NoBongkarSusun = @No
+      AND (f.DateUsage IS NULL OR CONVERT(date, f.DateUsage) = @OldTanggal);
 
-    -- BARANG JADI
+    -- ─── BARANG JADI ───────────────────────────────────────
     UPDATE b
-    SET b.DateUsage = @tgl
-    FROM dbo.BarangJadi b
+    SET   b.DateUsage = @NewTanggal
+    FROM  dbo.BarangJadi b
     INNER JOIN dbo.BongkarSusunInputBarangJadi i
-      ON i.NoBJ=b.NoBJ
-    WHERE i.NoBongkarSusun=@No;
+      ON  i.NoBJ = b.NoBJ
+    WHERE i.NoBongkarSusun = @No
+      AND (b.DateUsage IS NULL OR CONVERT(date, b.DateUsage) = @OldTanggal);
   `);
 }
 
-
+// ============================================================
+// upsertInputsWithExistingTx  —  unchanged
+// ============================================================
 async function upsertInputsWithExistingTx(tx, noBongkarSusun, payload) {
   const norm = (a) => (Array.isArray(a) ? a : []);
   const body = {
@@ -490,49 +587,64 @@ async function upsertInputsWithExistingTx(tx, noBongkarSusun, payload) {
     barangJadi: norm(payload.barangJadi),
   };
 
-  // ini sudah cocok dengan fungsi kamu:
   return await _insertInputsWithTx(tx, noBongkarSusun, body);
 }
 
 // ===========================
 //  DELETE BongkarSusun_h
 // ===========================
-async function deleteBongkarSusun(noBongkarSusun) {
-  if (!noBongkarSusun) throw badReq('noBongkarSusun wajib diisi');
+async function deleteBongkarSusun(noBongkarSusun, ctx) {
+  if (!noBongkarSusun) throw badReq("noBongkarSusun wajib diisi");
+
+  // ===============================
+  // Audit context
+  // ===============================
+  const actorIdNum = Number(ctx?.actorId);
+  if (!Number.isFinite(actorIdNum) || actorIdNum <= 0) {
+    throw badReq("ctx.actorId wajib. Controller harus inject dari token.");
+  }
+
+  const actorUsername = String(ctx?.actorUsername || "").trim() || "system";
+  const requestId = String(ctx?.requestId || "").trim();
+
+  const auditCtx = {
+    actorId: Math.trunc(actorIdNum),
+    actorUsername,
+    requestId,
+  };
 
   const pool = await poolPromise;
   const tx = new sql.Transaction(pool);
+  await tx.begin(sql.ISOLATION_LEVEL.SERIALIZABLE);
 
   try {
-    await tx.begin(sql.ISOLATION_LEVEL.SERIALIZABLE);
-
-    // =========================================================
-    // 0) AMBIL docDateOnly DARI CONFIG + LOCK HEADER ROW
-    //    (menggantikan SELECT BongkarSusun_h manual)
-    // =========================================================
+    // ===============================
+    // 0) LOCK HEADER + AMBIL docDateOnly
+    // ===============================
     const { docDateOnly } = await loadDocDateOnlyFromConfig({
-      entityKey: 'bongkarSusun',      // pastikan key ini ada di config tutup-transaksi
+      entityKey: "bongkarSusun",
       codeValue: noBongkarSusun,
       runner: tx,
-      useLock: true,                 // DELETE = write action
-      throwIfNotFound: true,         // kalau tidak ada, lempar error
+      useLock: true,
+      throwIfNotFound: true,
     });
 
-    // =========================================================
-    // 1) GUARD TUTUP TRANSAKSI (DELETE = WRITE)
-    // =========================================================
+    // ===============================
+    // 1) GUARD TUTUP TRANSAKSI
+    // ===============================
     await assertNotLocked({
       date: docDateOnly,
       runner: tx,
-      action: 'delete BongkarSusun',
+      action: "delete BongkarSusun",
       useLock: true,
     });
 
-    // =========================================================
-    // 2) CEK OUTPUT: kalau ada label output -> TOLAK DELETE
-    // =========================================================
+    // ===============================
+    // 2) CEK OUTPUT (BongkarSusun-specific)
+    //    kalau ada label output → tolak delete
+    // ===============================
     const rqOut = new sql.Request(tx);
-    rqOut.input('No', sql.VarChar(50), noBongkarSusun);
+    rqOut.input("No", sql.VarChar(50), noBongkarSusun);
 
     const out = await rqOut.query(`
       SET NOCOUNT ON;
@@ -556,21 +668,29 @@ async function deleteBongkarSusun(noBongkarSusun) {
 
     const hasOutput = out.recordset?.[0]?.HasOutput === true;
     if (hasOutput) {
-      throw badReq('Nomor Bongkar Susun ini telah menerbitkan label, hapus labelnya kemudian coba kembali');
+      throw badReq(
+        "Nomor Bongkar Susun ini telah menerbitkan label, hapus labelnya kemudian coba kembali",
+      );
     }
 
-    // =========================================================
-    // 3) CASCADE DELETE INPUTS + DateUsage NULL + delete header
-    // =========================================================
-    const req = new sql.Request(tx);
-    req.input('No', sql.VarChar(50), noBongkarSusun);
+    // ===============================
+    // 3) CASCADE DELETE INPUTS + RESET DATEUSAGE + DELETE HEADER
+    // ===============================
+    const rqDel = new sql.Request(tx);
+    rqDel.input("No", sql.VarChar(50), noBongkarSusun);
 
-    await req.query(`
-      SET NOCOUNT ON;
+    // apply audit context sebelum eksekusi
+    await applyAuditContext(rqDel, auditCtx);
 
-      /* =========================
-         INPUT BROKER -> DateUsage NULL
-         ========================= */
+    const sqlDelete = `
+      /* ===================================================
+         BONGKAR SUSUN DELETE
+         - reset DateUsage on all input source tables
+         - delete all input mapping tables
+         - delete header last
+         =================================================== */
+
+      /* A) BROKER */
       DECLARE @delBroker TABLE(NoBroker varchar(50), NoSak int);
       DELETE map
       OUTPUT DELETED.NoBroker, DELETED.NoSak INTO @delBroker(NoBroker, NoSak)
@@ -582,7 +702,7 @@ async function deleteBongkarSusun(noBongkarSusun) {
       FROM dbo.Broker_d d
       INNER JOIN @delBroker x ON x.NoBroker=d.NoBroker AND x.NoSak=d.NoSak;
 
-      /* BB */
+      /* B) BAHAN BAKU */
       DECLARE @delBB TABLE(NoBahanBaku varchar(50), NoPallet int, NoSak int);
       DELETE map
       OUTPUT DELETED.NoBahanBaku, DELETED.NoPallet, DELETED.NoSak
@@ -596,7 +716,7 @@ async function deleteBongkarSusun(noBongkarSusun) {
       INNER JOIN @delBB x
         ON x.NoBahanBaku=d.NoBahanBaku AND x.NoPallet=d.NoPallet AND x.NoSak=d.NoSak;
 
-      /* WASHING */
+      /* C) WASHING */
       DECLARE @delW TABLE(NoWashing varchar(50), NoSak int);
       DELETE map
       OUTPUT DELETED.NoWashing, DELETED.NoSak INTO @delW(NoWashing, NoSak)
@@ -608,7 +728,7 @@ async function deleteBongkarSusun(noBongkarSusun) {
       FROM dbo.Washing_d d
       INNER JOIN @delW x ON x.NoWashing=d.NoWashing AND x.NoSak=d.NoSak;
 
-      /* CRUSHER */
+      /* D) CRUSHER */
       DECLARE @delC TABLE(NoCrusher varchar(50));
       DELETE map
       OUTPUT DELETED.NoCrusher INTO @delC(NoCrusher)
@@ -620,7 +740,7 @@ async function deleteBongkarSusun(noBongkarSusun) {
       FROM dbo.Crusher c
       INNER JOIN @delC x ON x.NoCrusher=c.NoCrusher;
 
-      /* GILINGAN */
+      /* E) GILINGAN */
       DECLARE @delG TABLE(NoGilingan varchar(50));
       DELETE map
       OUTPUT DELETED.NoGilingan INTO @delG(NoGilingan)
@@ -632,7 +752,7 @@ async function deleteBongkarSusun(noBongkarSusun) {
       FROM dbo.Gilingan g
       INNER JOIN @delG x ON x.NoGilingan=g.NoGilingan;
 
-      /* MIXER */
+      /* F) MIXER */
       DECLARE @delM TABLE(NoMixer varchar(50), NoSak int);
       DELETE map
       OUTPUT DELETED.NoMixer, DELETED.NoSak INTO @delM(NoMixer, NoSak)
@@ -644,7 +764,7 @@ async function deleteBongkarSusun(noBongkarSusun) {
       FROM dbo.Mixer_d d
       INNER JOIN @delM x ON x.NoMixer=d.NoMixer AND x.NoSak=d.NoSak;
 
-      /* BONGGOLAN */
+      /* G) BONGGOLAN */
       DECLARE @delBg TABLE(NoBonggolan varchar(50));
       DELETE map
       OUTPUT DELETED.NoBonggolan INTO @delBg(NoBonggolan)
@@ -656,7 +776,7 @@ async function deleteBongkarSusun(noBongkarSusun) {
       FROM dbo.Bonggolan b
       INNER JOIN @delBg x ON x.NoBonggolan=b.NoBonggolan;
 
-      /* FURNITURE WIP */
+      /* H) FURNITURE WIP */
       DECLARE @delFW TABLE(NoFurnitureWIP varchar(50));
       DELETE map
       OUTPUT DELETED.NoFurnitureWIP INTO @delFW(NoFurnitureWIP)
@@ -668,7 +788,7 @@ async function deleteBongkarSusun(noBongkarSusun) {
       FROM dbo.FurnitureWIP f
       INNER JOIN @delFW x ON x.NoFurnitureWIP=f.NoFurnitureWIP;
 
-      /* BARANG JADI */
+      /* I) BARANG JADI */
       DECLARE @delBJ TABLE(NoBJ varchar(50));
       DELETE map
       OUTPUT DELETED.NoBJ INTO @delBJ(NoBJ)
@@ -680,25 +800,28 @@ async function deleteBongkarSusun(noBongkarSusun) {
       FROM dbo.BarangJadi b
       INNER JOIN @delBJ x ON x.NoBJ=b.NoBJ;
 
-      /* DELETE HEADER TERAKHIR */
-      DELETE dbo.BongkarSusun_h WHERE NoBongkarSusun = @No;
-    `);
+      /* J) DELETE HEADER LAST */
+      DELETE FROM dbo.BongkarSusun_h WHERE NoBongkarSusun = @No;
+    `;
 
+    await rqDel.query(sqlDelete);
     await tx.commit();
-    return true;
-  } catch (err) {
-    try { await tx.rollback(); } catch {}
-    throw err;
+
+    return { success: true, audit: auditCtx };
+  } catch (e) {
+    try {
+      await tx.rollback();
+    } catch (_) {}
+
+    // attach audit context agar controller tetap bisa kirim meta.audit
+    throw Object.assign(e, auditCtx);
   }
 }
-
-
-
 
 async function fetchInputs(noBongkarSusun) {
   const pool = await poolPromise;
   const req = pool.request();
-  req.input('no', sql.VarChar(50), noBongkarSusun);
+  req.input("no", sql.VarChar(50), noBongkarSusun);
 
   const q = `
     /* ===================== [1] MAIN INPUTS (UNION) ===================== */
@@ -1054,12 +1177,12 @@ async function fetchInputs(noBongkarSusun) {
   const rs = await req.query(q);
 
   const mainRows = rs.recordsets?.[0] || [];
-  const bbPart   = rs.recordsets?.[1] || [];
-  const gilPart  = rs.recordsets?.[2] || [];
-  const mixPart  = rs.recordsets?.[3] || [];
-  const brkPart  = rs.recordsets?.[4] || [];
-  const bjPart   = rs.recordsets?.[5] || [];
-  const fwPart   = rs.recordsets?.[6] || [];
+  const bbPart = rs.recordsets?.[1] || [];
+  const gilPart = rs.recordsets?.[2] || [];
+  const mixPart = rs.recordsets?.[3] || [];
+  const brkPart = rs.recordsets?.[4] || [];
+  const bjPart = rs.recordsets?.[5] || [];
+  const fwPart = rs.recordsets?.[6] || [];
 
   const out = {
     bb: [],
@@ -1096,31 +1219,36 @@ async function fetchInputs(noBongkarSusun) {
     };
 
     switch (r.Src) {
-      case 'bb':
-        out.bb.push({ noBahanBaku: r.Ref1, noPallet: r.Ref2, noSak: r.Ref3, ...base });
+      case "bb":
+        out.bb.push({
+          noBahanBaku: r.Ref1,
+          noPallet: r.Ref2,
+          noSak: r.Ref3,
+          ...base,
+        });
         break;
-      case 'washing':
+      case "washing":
         out.washing.push({ noWashing: r.Ref1, noSak: r.Ref2, ...base });
         break;
-      case 'broker':
+      case "broker":
         out.broker.push({ noBroker: r.Ref1, noSak: r.Ref2, ...base });
         break;
-      case 'crusher':
+      case "crusher":
         out.crusher.push({ noCrusher: r.Ref1, ...base });
         break;
-      case 'bonggolan':
+      case "bonggolan":
         out.bonggolan.push({ noBonggolan: r.Ref1, ...base });
         break;
-      case 'gilingan':
+      case "gilingan":
         out.gilingan.push({ noGilingan: r.Ref1, ...base });
         break;
-      case 'mixer':
+      case "mixer":
         out.mixer.push({ noMixer: r.Ref1, noSak: r.Ref2, ...base });
         break;
-      case 'furniture_wip':
+      case "furniture_wip":
         out.furnitureWip.push({ noFurnitureWIP: r.Ref1, ...base });
         break;
-      case 'barang_jadi':
+      case "barang_jadi":
         out.barangJadi.push({ noBJ: r.Ref1, ...base });
         break;
     }
@@ -1131,14 +1259,14 @@ async function fetchInputs(noBongkarSusun) {
     out.bb.push({
       noBBPartial: p.NoBBPartial,
       noBahanBaku: p.NoBahanBaku ?? null,
-      noPallet:    p.NoPallet ?? null,
-      noSak:       p.NoSak ?? null,
-      pcs:         null,
-      berat:       p.Berat ?? null,
-      beratAct:    null,
-      isPartial:   true,
-      idJenis:     p.IdJenis ?? null,
-      namaJenis:   p.NamaJenis ?? null,
+      noPallet: p.NoPallet ?? null,
+      noSak: p.NoSak ?? null,
+      pcs: null,
+      berat: p.Berat ?? null,
+      beratAct: null,
+      isPartial: true,
+      idJenis: p.IdJenis ?? null,
+      namaJenis: p.NamaJenis ?? null,
     });
   }
 
@@ -1146,13 +1274,13 @@ async function fetchInputs(noBongkarSusun) {
   for (const p of gilPart) {
     out.gilingan.push({
       noGilinganPartial: p.NoGilinganPartial,
-      noGilingan:        p.NoGilingan ?? null,
-      pcs:               null,
-      berat:             p.Berat ?? null,
-      beratAct:          null,
-      isPartial:         true,
-      idJenis:           p.IdJenis ?? null,
-      namaJenis:         p.NamaJenis ?? null,
+      noGilingan: p.NoGilingan ?? null,
+      pcs: null,
+      berat: p.Berat ?? null,
+      beratAct: null,
+      isPartial: true,
+      idJenis: p.IdJenis ?? null,
+      namaJenis: p.NamaJenis ?? null,
     });
   }
 
@@ -1160,14 +1288,14 @@ async function fetchInputs(noBongkarSusun) {
   for (const p of mixPart) {
     out.mixer.push({
       noMixerPartial: p.NoMixerPartial,
-      noMixer:        p.NoMixer ?? null,
-      noSak:          p.NoSak ?? null,
-      pcs:            null,
-      berat:          p.Berat ?? null,
-      beratAct:       null,
-      isPartial:      true,
-      idJenis:        p.IdJenis ?? null,
-      namaJenis:      p.NamaJenis ?? null,
+      noMixer: p.NoMixer ?? null,
+      noSak: p.NoSak ?? null,
+      pcs: null,
+      berat: p.Berat ?? null,
+      beratAct: null,
+      isPartial: true,
+      idJenis: p.IdJenis ?? null,
+      namaJenis: p.NamaJenis ?? null,
     });
   }
 
@@ -1175,14 +1303,14 @@ async function fetchInputs(noBongkarSusun) {
   for (const p of brkPart) {
     out.broker.push({
       noBrokerPartial: p.NoBrokerPartial,
-      noBroker:        p.NoBroker ?? null,
-      noSak:           p.NoSak ?? null,
-      pcs:             null,
-      berat:           p.Berat ?? null,
-      beratAct:        null,
-      isPartial:       true,
-      idJenis:         p.IdJenis ?? null,
-      namaJenis:       p.NamaJenis ?? null,
+      noBroker: p.NoBroker ?? null,
+      noSak: p.NoSak ?? null,
+      pcs: null,
+      berat: p.Berat ?? null,
+      beratAct: null,
+      isPartial: true,
+      idJenis: p.IdJenis ?? null,
+      namaJenis: p.NamaJenis ?? null,
     });
   }
 
@@ -1190,13 +1318,13 @@ async function fetchInputs(noBongkarSusun) {
   for (const p of bjPart) {
     out.barangJadi.push({
       noBJPartial: p.NoBJPartial,
-      noBJ:        p.NoBJ ?? null,
-      pcs:         p.Pcs ?? null,
-      berat:       null,
-      beratAct:    null,
-      isPartial:   true,
-      idJenis:     p.IdJenis ?? null,
-      namaJenis:   p.NamaJenis ?? null,
+      noBJ: p.NoBJ ?? null,
+      pcs: p.Pcs ?? null,
+      berat: null,
+      beratAct: null,
+      isPartial: true,
+      idJenis: p.IdJenis ?? null,
+      namaJenis: p.NamaJenis ?? null,
     });
   }
 
@@ -1204,13 +1332,13 @@ async function fetchInputs(noBongkarSusun) {
   for (const p of fwPart) {
     out.furnitureWip.push({
       noFurnitureWIPPartial: p.NoFurnitureWIPPartial,
-      noFurnitureWIP:        p.NoFurnitureWIP ?? null,
-      pcs:                   p.Pcs ?? null,
-      berat:                 null,
-      beratAct:              null,
-      isPartial:             true,
-      idJenis:               p.IdJenis ?? null,
-      namaJenis:             null, // kalau ada master furniture wip nanti kita isi
+      noFurnitureWIP: p.NoFurnitureWIP ?? null,
+      pcs: p.Pcs ?? null,
+      berat: null,
+      beratAct: null,
+      isPartial: true,
+      idJenis: p.IdJenis ?? null,
+      namaJenis: null, // kalau ada master furniture wip nanti kita isi
     });
   }
 
@@ -1219,7 +1347,6 @@ async function fetchInputs(noBongkarSusun) {
 
   return out;
 }
-
 
 /**
  * Validate label khusus untuk Bongkar Susun
@@ -1240,7 +1367,7 @@ async function validateLabelBongkarSusun(labelCode) {
 
   const camelize = (val) => {
     if (Array.isArray(val)) return val.map(camelize);
-    if (val && typeof val === 'object') {
+    if (val && typeof val === "object") {
       const o = {};
       for (const [k, v] of Object.entries(val)) {
         o[toCamel(k)] = camelize(v);
@@ -1251,23 +1378,23 @@ async function validateLabelBongkarSusun(labelCode) {
   };
 
   // ---------- normalize label ----------
-  const raw = String(labelCode || '').trim();
-  if (!raw) throw new Error('Label code is required');
+  const raw = String(labelCode || "").trim();
+  if (!raw) throw new Error("Label code is required");
 
-  let prefix = '';
+  let prefix = "";
   const p3 = raw.substring(0, 3).toUpperCase();
-  if (p3 === 'BF.' || p3 === 'BB.' || p3 === 'BA.') {
+  if (p3 === "BF." || p3 === "BB." || p3 === "BA.") {
     prefix = p3;
   } else {
     prefix = raw.substring(0, 2).toUpperCase();
   }
 
-  let query = '';
-  let tableName = '';
+  let query = "";
+  let tableName = "";
 
   async function run(label) {
     const req = pool.request();
-    req.input('labelCode', sql.VarChar(50), label);
+    req.input("labelCode", sql.VarChar(50), label);
     const rs = await req.query(query);
     const rows = rs.recordset || [];
     return camelize({
@@ -1283,11 +1410,13 @@ async function validateLabelBongkarSusun(labelCode) {
     // =========================
     // A. BahanBaku_d
     // =========================
-    case 'A.': {
-      tableName = 'BahanBaku_d';
-      const parts = raw.split('-');
+    case "A.": {
+      tableName = "BahanBaku_d";
+      const parts = raw.split("-");
       if (parts.length !== 2) {
-        throw new Error('Invalid format for A. prefix. Expected: A.0000000001-1');
+        throw new Error(
+          "Invalid format for A. prefix. Expected: A.0000000001-1",
+        );
       }
       const noBahanBaku = parts[0].trim();
       const noPallet = parseInt(parts[1], 10);
@@ -1333,8 +1462,8 @@ async function validateLabelBongkarSusun(labelCode) {
       `;
 
       const reqA = pool.request();
-      reqA.input('noBahanBaku', sql.VarChar(50), noBahanBaku);
-      reqA.input('noPallet', sql.Int, noPallet);
+      reqA.input("noBahanBaku", sql.VarChar(50), noBahanBaku);
+      reqA.input("noPallet", sql.Int, noPallet);
       const rsA = await reqA.query(query);
       const rows = rsA.recordset || [];
 
@@ -1350,8 +1479,8 @@ async function validateLabelBongkarSusun(labelCode) {
     // =========================
     // B. Washing_d (no isPartial check needed)
     // =========================
-    case 'B.':
-      tableName = 'Washing_d';
+    case "B.":
+      tableName = "Washing_d";
       query = `
         SELECT
           d.NoWashing,
@@ -1376,8 +1505,8 @@ async function validateLabelBongkarSusun(labelCode) {
     // =========================
     // D. Broker_d
     // =========================
-    case 'D.':
-      tableName = 'Broker_d';
+    case "D.":
+      tableName = "Broker_d";
       query = `
         ;WITH PartialSum AS (
           SELECT
@@ -1414,8 +1543,8 @@ async function validateLabelBongkarSusun(labelCode) {
     // =========================
     // M. Bonggolan (no isPartial check needed)
     // =========================
-    case 'M.':
-      tableName = 'Bonggolan';
+    case "M.":
+      tableName = "Bonggolan";
       query = `
         SELECT
           b.NoBonggolan,
@@ -1443,8 +1572,8 @@ async function validateLabelBongkarSusun(labelCode) {
     // =========================
     // F. Crusher (no isPartial check needed)
     // =========================
-    case 'F.':
-      tableName = 'Crusher';
+    case "F.":
+      tableName = "Crusher";
       query = `
         SELECT
           c.NoCrusher,
@@ -1472,8 +1601,8 @@ async function validateLabelBongkarSusun(labelCode) {
     // =========================
     // V. Gilingan
     // =========================
-    case 'V.':
-      tableName = 'Gilingan';
+    case "V.":
+      tableName = "Gilingan";
       query = `
         ;WITH PartialAgg AS (
           SELECT
@@ -1508,8 +1637,8 @@ async function validateLabelBongkarSusun(labelCode) {
     // =========================
     // H. Mixer_d
     // =========================
-    case 'H.':
-      tableName = 'Mixer_d';
+    case "H.":
+      tableName = "Mixer_d";
       query = `
         ;WITH PartialSum AS (
           SELECT
@@ -1547,8 +1676,8 @@ async function validateLabelBongkarSusun(labelCode) {
     // =========================
     // BB. FurnitureWIP
     // =========================
-    case 'BB.':
-      tableName = 'FurnitureWIP';
+    case "BB.":
+      tableName = "FurnitureWIP";
       query = `
         ;WITH PartialAgg AS (
           SELECT
@@ -1592,8 +1721,8 @@ async function validateLabelBongkarSusun(labelCode) {
     // =========================
     // BA. BarangJadi
     // =========================
-    case 'BA.':
-      tableName = 'BarangJadi';
+    case "BA.":
+      tableName = "BarangJadi";
       query = `
         ;WITH PartialAgg AS (
           SELECT
@@ -1636,8 +1765,8 @@ async function validateLabelBongkarSusun(labelCode) {
     // =========================
     // BF. RejectV2
     // =========================
-    case 'BF.':
-      tableName = 'RejectV2';
+    case "BF.":
+      tableName = "RejectV2";
       query = `
         ;WITH PartialSum AS (
           SELECT
@@ -1675,7 +1804,9 @@ async function validateLabelBongkarSusun(labelCode) {
       return await run(raw);
 
     default:
-      throw new Error(`Invalid prefix: ${prefix}. Valid prefixes: A., B., D., M., F., V., H., BB., BA., BF.`);
+      throw new Error(
+        `Invalid prefix: ${prefix}. Valid prefixes: A., B., D., M., F., V., H., BB., BA., BF.`,
+      );
   }
 }
 
@@ -1695,26 +1826,25 @@ async function validateLabelBongkarSusun(labelCode) {
  * }
  */
 
-
 async function upsertInputs(noProduksi, payload, ctx) {
-  const no = String(noProduksi || '').trim();
-  if (!no) throw badReq('noProduksi wajib diisi');
+  const no = String(noProduksi || "").trim();
+  if (!no) throw badReq("noProduksi wajib diisi");
 
-  const body = payload && typeof payload === 'object' ? payload : {};
+  const body = payload && typeof payload === "object" ? payload : {};
 
   // ✅ ctx wajib (audit)
   const actorIdNum = Number(ctx?.actorId);
   if (!Number.isFinite(actorIdNum) || actorIdNum <= 0) {
-    throw badReq('ctx.actorId wajib. Controller harus inject dari token.');
+    throw badReq("ctx.actorId wajib. Controller harus inject dari token.");
   }
 
-  const actorUsername = String(ctx?.actorUsername || '').trim() || 'system';
+  const actorUsername = String(ctx?.actorUsername || "").trim() || "system";
 
   // requestId wajib string (kalau kosong, nanti di applyAuditContext dibuat fallback juga)
-  const requestId = String(ctx?.requestId || '').trim();
+  const requestId = String(ctx?.requestId || "").trim();
 
   // ✅ forward ctx yang sudah dinormalisasi ke shared service
-  return sharedInputService.upsertInputsAndPartials('bongkarSusun', no, body, {
+  return sharedInputService.upsertInputsAndPartials("bongkarSusun", no, body, {
     actorId: Math.trunc(actorIdNum),
     actorUsername,
     requestId,
@@ -1722,32 +1852,27 @@ async function upsertInputs(noProduksi, payload, ctx) {
 }
 
 async function deleteInputs(noProduksi, payload, ctx) {
-  const no = String(noProduksi || '').trim();
-  if (!no) throw badReq('noProduksi wajib diisi');
+  const no = String(noProduksi || "").trim();
+  if (!no) throw badReq("noProduksi wajib diisi");
 
-  const body = payload && typeof payload === 'object' ? payload : {};
+  const body = payload && typeof payload === "object" ? payload : {};
 
   // ✅ Validate audit context
   const actorIdNum = Number(ctx?.actorId);
   if (!Number.isFinite(actorIdNum) || actorIdNum <= 0) {
-    throw badReq('ctx.actorId wajib. Controller harus inject dari token.');
+    throw badReq("ctx.actorId wajib. Controller harus inject dari token.");
   }
 
-  const actorUsername = String(ctx?.actorUsername || '').trim() || 'system';
-  const requestId = String(ctx?.requestId || '').trim();
+  const actorUsername = String(ctx?.actorUsername || "").trim() || "system";
+  const requestId = String(ctx?.requestId || "").trim();
 
   // ✅ Forward to shared service
-  return sharedInputService.deleteInputsAndPartials('bongkarSusun', no, body, {
+  return sharedInputService.deleteInputsAndPartials("bongkarSusun", no, body, {
     actorId: Math.trunc(actorIdNum),
     actorUsername,
     requestId,
   });
 }
-
-
-
-
-
 
 module.exports = {
   getByDate,

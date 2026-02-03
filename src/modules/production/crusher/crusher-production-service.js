@@ -8,9 +8,17 @@ const {
   loadDocDateOnlyFromConfig
 } = require('../../../core/shared/tutup-transaksi-guard');
 
+const {
+  parseJamToInt,
+  calcJamKerjaFromStartEnd,
+} = require('../../../core/utils/jam-kerja-helper');
+
 const sharedInputService = require('../../../core/shared/produksi-input.service');
 
 const { badReq, conflict } = require('../../../core/utils/http-error'); 
+
+const { applyAuditContext } = require('../../../core/utils/db-audit-context');
+const { generateNextCode } = require('../../../core/utils/sequence-code-helper'); 
 
 
 
@@ -204,133 +212,221 @@ async function getCrusherMasters() {
 
 
 
-async function createCrusherProduksi(payload) {
-  // Validasi field wajib
+// crusher-produksi.service.js (revised)
+
+// pastikan import sesuai project kamu
+// const { poolPromise, sql } = require('../config/db');  // atau path yang kamu pakai
+// const { generateNextCode } = require('../core/utils/sequence-code-helper');
+// const { applyAuditContext } = require('../services/audit/apply-audit-context'); // contoh
+// const { assertNotLocked } = require('../services/lock/lock-service');           // contoh
+// const { badReq, conflict } = require('../core/utils/errors');                  // contoh
+// const { toDateOnly, parseJamToInt, calcJamKerjaFromStartEnd } = require('../core/utils/date-helper'); // contoh
+
+async function createCrusherProduksi(payload, ctx) {
+  // ===============================
+  // 0) Validasi payload basic (business)
+  // ===============================
+  const body = payload && typeof payload === 'object' ? payload : {};
+
   const must = [];
-  if (!payload?.tanggal) must.push('tanggal');
-  if (payload?.idMesin == null) must.push('idMesin');
-  if (payload?.idOperator == null) must.push('idOperator');
-  if (payload?.jam == null) must.push('jam');
-  if (payload?.shift == null) must.push('shift');
+  if (!body?.tanggal) must.push('tanggal');
+  if (body?.idMesin == null) must.push('idMesin');
+  if (body?.idOperator == null) must.push('idOperator');
+  if (body?.shift == null) must.push('shift');
   if (must.length) throw badReq(`Field wajib: ${must.join(', ')}`);
+
+  // jam bisa dari body.jam atau dihitung dari hourStart-hourEnd
+  let jamKerja = body?.jam ?? null;
+  if (jamKerja == null) {
+    const calc = calcJamKerjaFromStartEnd(body?.hourStart, body?.hourEnd);
+    if (calc != null) jamKerja = calc;
+  }
+  if (jamKerja == null) throw badReq('Field wajib: jam (atau isi hourStart-hourEnd)');
+
+  const jamInt = parseJamToInt(jamKerja);
+  const docDateOnly = toDateOnly(body.tanggal);
+
+  // ===============================
+  // 1) Validasi + normalisasi ctx (audit)
+  // ===============================
+  const actorIdNum = Number(ctx?.actorId);
+  if (!Number.isFinite(actorIdNum) || actorIdNum <= 0) {
+    throw badReq('ctx.actorId wajib. Controller harus inject dari token.');
+  }
+
+  const actorUsername = String(ctx?.actorUsername || '').trim() || 'system';
+  const requestId = String(ctx?.requestId || '').trim(); // boleh kosong
+
+  const auditCtx = {
+    actorId: Math.trunc(actorIdNum),
+    actorUsername,
+    requestId,
+  };
 
   const pool = await poolPromise;
   const tx = new sql.Transaction(pool);
   await tx.begin(sql.ISOLATION_LEVEL.SERIALIZABLE);
 
   try {
-    // =========================================================
-    // 0) NORMALISASI TANGGAL (DATE-ONLY) + GUARD TUTUP TRANSAKSI
-    // =========================================================
-    const effectiveDate = resolveEffectiveDateForCreate(payload.tanggal);
+    // =====================================================
+    // 2) Set SESSION_CONTEXT untuk trigger audit (1x di awal tx)
+    // =====================================================
+    const auditReq = new sql.Request(tx);
+    const audit = await applyAuditContext(auditReq, auditCtx);
 
+    // =====================================================
+    // 3) Guard tutup transaksi (CREATE = WRITE)
+    // =====================================================
     await assertNotLocked({
-      date: effectiveDate,
+      date: docDateOnly,
       runner: tx,
       action: 'create CrusherProduksi',
-      useLock: true, // create = write action
+      useLock: true,
     });
 
-    // =========================================================
-    // 1) Generate NoCrusherProduksi (inline)
-    // Format: G.0000000420
-    // =========================================================
-    const prefix = 'G.';
-    const width = 10;
+    // =====================================================
+    // 4) Generate NoCrusherProduksi via generateNextCode()
+    //    Format: G.0000000001
+    // =====================================================
+    const gen = async () =>
+      generateNextCode(tx, {
+        tableName: 'dbo.CrusherProduksi_h',
+        columnName: 'NoCrusherProduksi',
+        prefix: 'G.',
+        width: 10,
+      });
 
-    const rqGen = new sql.Request(tx);
-    rqGen.input('Prefix', sql.VarChar(10), prefix);
+    let noCrusherProduksi = await gen();
 
-    const genQry = `
-      SELECT TOP 1 NoCrusherProduksi
-      FROM dbo.CrusherProduksi_h WITH (NOLOCK)
-      WHERE NoCrusherProduksi LIKE @Prefix + '%'
-      ORDER BY NoCrusherProduksi DESC;
-    `;
-
-    const genRes = await rqGen.query(genQry);
-    const last = genRes.recordset?.[0]?.NoCrusherProduksi;
-
-    let no1;
-    if (!last) {
-      no1 = prefix + '1'.padStart(width, '0');
-    } else {
-      const numPart = String(last).replace(prefix, '');
-      const nextNum = parseInt(numPart, 10) + 1;
-      no1 = prefix + String(nextNum).padStart(width, '0');
-    }
-
-    // =========================================================
-    // 2) Check duplicate (UPDLOCK untuk prevent race)
-    // =========================================================
-    const rqCheck = new sql.Request(tx);
-    const exist = await rqCheck
-      .input('NoCrusherProduksi', sql.VarChar(50), no1)
+    // optional double-check (lebih bagus kalau kolom ada UNIQUE)
+    const exist = await new sql.Request(tx)
+      .input('NoCrusherProduksi', sql.VarChar(50), noCrusherProduksi)
       .query(`
         SELECT 1
         FROM dbo.CrusherProduksi_h WITH (UPDLOCK, HOLDLOCK)
         WHERE NoCrusherProduksi = @NoCrusherProduksi
       `);
 
-    let noCrusherProduksi = no1;
+    if (exist.recordset.length > 0) {
+      const retry = await gen();
+      const exist2 = await new sql.Request(tx)
+        .input('NoCrusherProduksi', sql.VarChar(50), retry)
+        .query(`
+          SELECT 1
+          FROM dbo.CrusherProduksi_h WITH (UPDLOCK, HOLDLOCK)
+          WHERE NoCrusherProduksi = @NoCrusherProduksi
+        `);
 
-    if (exist.recordset.length) {
-      // collision => ambil last lagi, hitung lagi
-      const rqGen2 = new sql.Request(tx);
-      rqGen2.input('Prefix', sql.VarChar(10), prefix);
-
-      const genRes2 = await rqGen2.query(genQry);
-      const last2 = genRes2.recordset?.[0]?.NoCrusherProduksi;
-
-      if (!last2) {
-        noCrusherProduksi = prefix + '1'.padStart(width, '0');
-      } else {
-        const numPart2 = String(last2).replace(prefix, '');
-        const nextNum2 = parseInt(numPart2, 10) + 1;
-        noCrusherProduksi = prefix + String(nextNum2).padStart(width, '0');
+      if (exist2.recordset.length > 0) {
+        throw conflict('Gagal generate NoCrusherProduksi unik, coba lagi.');
       }
+      noCrusherProduksi = retry;
     }
 
-    // =========================================================
-    // 3) Insert header (pakai effectiveDate)
-    // =========================================================
+    // =====================================================
+    // 5) Insert header (OUTPUT ... INTO @out) + safe time cast
+    // =====================================================
     const rqIns = new sql.Request(tx);
     rqIns
       .input('NoCrusherProduksi', sql.VarChar(50), noCrusherProduksi)
-      .input('Tanggal',           sql.Date,        effectiveDate) // ✅ date-only
-      .input('IdMesin',           sql.Int,         payload.idMesin)
-      .input('IdOperator',        sql.Int,         payload.idOperator)
-      .input('Jam',               sql.Int,         parseJamToInt(payload.jam)) // jika jam kamu format "HH:mm", kalau int biasa ganti payload.jam
-      .input('Shift',             sql.Int,         payload.shift)
-      .input('CreateBy',          sql.VarChar(100), payload.createBy)
-      .input('CheckBy1',          sql.VarChar(100), payload.checkBy1 ?? null)
-      .input('CheckBy2',          sql.VarChar(100), payload.checkBy2 ?? null)
-      .input('ApproveBy',         sql.VarChar(100), payload.approveBy ?? null)
-      .input('JmlhAnggota',       sql.Int,          payload.jmlhAnggota ?? null)
-      .input('Hadir',             sql.Int,          payload.hadir ?? null)
-      .input('HourMeter',         sql.Decimal(18, 2), payload.hourMeter ?? null)
-      .input('HourStart',         sql.VarChar(20),   payload.hourStart ?? null)
-      .input('HourEnd',           sql.VarChar(20),   payload.hourEnd ?? null);
+      .input('Tanggal',           sql.Date,        docDateOnly)
+      .input('IdMesin',           sql.Int,         body.idMesin)
+      .input('IdOperator',        sql.Int,         body.idOperator)
+      .input('Jam',               sql.Int,         jamInt)
+      .input('Shift',             sql.Int,         body.shift)
+      .input('CreateBy',          sql.VarChar(100), body.createBy) // controller overwrite
+      .input('CheckBy1',          sql.VarChar(100), body.checkBy1 ?? null)
+      .input('CheckBy2',          sql.VarChar(100), body.checkBy2 ?? null)
+      .input('ApproveBy',         sql.VarChar(100), body.approveBy ?? null)
+      .input('JmlhAnggota',       sql.Int,          body.jmlhAnggota ?? null)
+      .input('Hadir',             sql.Int,          body.hadir ?? null)
+      .input('HourMeter',         sql.Decimal(18, 2), body.hourMeter ?? null)
+      // kirim string, biar SQL yang CAST ke time(7)
+      .input('HourStart',         sql.VarChar(20),  body.hourStart ?? null)
+      .input('HourEnd',           sql.VarChar(20),  body.hourEnd ?? null);
 
     const insertSql = `
-      INSERT INTO dbo.CrusherProduksi_h (
-        NoCrusherProduksi, Tanggal, IdMesin, IdOperator, Jam, Shift,
-        CreateBy, CheckBy1, CheckBy2, ApproveBy, JmlhAnggota, Hadir, HourMeter,
-        HourStart, HourEnd
-      )
-      OUTPUT INSERTED.*
-      VALUES (
-        @NoCrusherProduksi, @Tanggal, @IdMesin, @IdOperator, @Jam, @Shift,
-        @CreateBy, @CheckBy1, @CheckBy2, @ApproveBy, @JmlhAnggota, @Hadir, @HourMeter,
-        CAST(@HourStart AS time(7)),
-        CAST(@HourEnd   AS time(7))
+      DECLARE @out TABLE (
+        NoCrusherProduksi varchar(50),
+        Tanggal           date,
+        IdMesin           int,
+        IdOperator        int,
+        Jam               int,
+        Shift             int,
+        CreateBy          varchar(100),
+        CheckBy1          varchar(100),
+        CheckBy2          varchar(100),
+        ApproveBy         varchar(100),
+        JmlhAnggota       int,
+        Hadir             int,
+        HourMeter         decimal(18,2),
+        HourStart         time(7),
+        HourEnd           time(7)
       );
+
+      INSERT INTO dbo.CrusherProduksi_h (
+        NoCrusherProduksi,
+        Tanggal,
+        IdMesin,
+        IdOperator,
+        Jam,
+        Shift,
+        CreateBy,
+        CheckBy1,
+        CheckBy2,
+        ApproveBy,
+        JmlhAnggota,
+        Hadir,
+        HourMeter,
+        HourStart,
+        HourEnd
+      )
+      OUTPUT
+        INSERTED.NoCrusherProduksi,
+        INSERTED.Tanggal,
+        INSERTED.IdMesin,
+        INSERTED.IdOperator,
+        INSERTED.Jam,
+        INSERTED.Shift,
+        INSERTED.CreateBy,
+        INSERTED.CheckBy1,
+        INSERTED.CheckBy2,
+        INSERTED.ApproveBy,
+        INSERTED.JmlhAnggota,
+        INSERTED.Hadir,
+        INSERTED.HourMeter,
+        INSERTED.HourStart,
+        INSERTED.HourEnd
+      INTO @out
+      VALUES (
+        @NoCrusherProduksi,
+        @Tanggal,
+        @IdMesin,
+        @IdOperator,
+        @Jam,
+        @Shift,
+        @CreateBy,
+        @CheckBy1,
+        @CheckBy2,
+        @ApproveBy,
+        @JmlhAnggota,
+        @Hadir,
+        @HourMeter,
+        CASE WHEN @HourStart IS NULL OR LTRIM(RTRIM(@HourStart)) = '' THEN NULL ELSE CAST(@HourStart AS time(7)) END,
+        CASE WHEN @HourEnd   IS NULL OR LTRIM(RTRIM(@HourEnd))   = '' THEN NULL ELSE CAST(@HourEnd   AS time(7)) END
+      );
+
+      SELECT * FROM @out;
     `;
 
     const insRes = await rqIns.query(insertSql);
+
     await tx.commit();
 
-    return { header: insRes.recordset?.[0] || null };
+    return {
+      header: insRes.recordset?.[0] || null,
+      audit, // optional debug/tracing
+    };
   } catch (e) {
     try { await tx.rollback(); } catch (_) {}
     throw e;
@@ -339,23 +435,12 @@ async function createCrusherProduksi(payload) {
 
 
 
-
-/**
- * Helper: Parse jam (tolerant)
- */
-function parseJamToInt(val) {
-  if (val === null || val === undefined) return null;
-  const n = Number(val);
-  return Number.isNaN(n) ? null : n;
-}
-
-
 /**
  * UPDATE CRUSHER PRODUCTION HEADER
  * Supports partial updates of header fields
  * Automatically syncs DateUsage for all inputs when Tanggal is changed
  */
-async function updateCrusherProduksi(noCrusherProduksi, payload) {
+async function updateCrusherProduksi(noCrusherProduksi, payload, ctx) {
   if (!noCrusherProduksi) throw badReq('noCrusherProduksi wajib');
 
   const pool = await poolPromise;
@@ -363,21 +448,39 @@ async function updateCrusherProduksi(noCrusherProduksi, payload) {
   await tx.begin(sql.ISOLATION_LEVEL.SERIALIZABLE);
 
   try {
-    // -------------------------------------------------------
-    // 0) AMBIL docDateOnly DARI CONFIG (LOCK HEADER ROW)
-    //    menggantikan SELECT header manual untuk ambil Tanggal
-    // -------------------------------------------------------
-    const { docDateOnly: oldDocDateOnly } = await loadDocDateOnlyFromConfig({
-      entityKey: 'crusherProduksi',     // ✅ harus ada di config tutup-transaksi
-      codeValue: noCrusherProduksi,
-      runner: tx,
-      useLock: true,                   // UPDATE = write
-      throwIfNotFound: true,
+    // =====================================================
+    // 0) SET AUDIT CONTEXT (PERSIS WASHING)
+    // =====================================================
+    const actorIdNum = Number(ctx?.actorId);
+    if (!Number.isFinite(actorIdNum) || actorIdNum <= 0) {
+      throw badReq('ctx.actorId wajib. Controller harus inject dari token.');
+    }
+
+    const actorUsername = String(ctx?.actorUsername || '').trim() || 'system';
+    const requestId = String(ctx?.requestId || '').trim();
+
+    const auditReq = new sql.Request(tx);
+    await applyAuditContext(auditReq, {
+      actorId: Math.trunc(actorIdNum),
+      actorUsername,
+      requestId,
     });
 
-    // -------------------------------------------------------
-    // 1) Jika user mengubah tanggal, hitung tanggal baru (date-only)
-    // -------------------------------------------------------
+    // =====================================================
+    // 1) LOAD DOC DATE (LOCK)
+    // =====================================================
+    const { docDateOnly: oldDocDateOnly } =
+      await loadDocDateOnlyFromConfig({
+        entityKey: 'crusherProduksi',
+        codeValue: noCrusherProduksi,
+        runner: tx,
+        useLock: true,
+        throwIfNotFound: true,
+      });
+
+    // =====================================================
+    // 2) HANDLE TANGGAL
+    // =====================================================
     const isChangingDate = payload?.tanggal !== undefined;
     let newDocDateOnly = null;
 
@@ -386,11 +489,9 @@ async function updateCrusherProduksi(noCrusherProduksi, payload) {
       newDocDateOnly = resolveEffectiveDateForCreate(payload.tanggal);
     }
 
-    // -------------------------------------------------------
-    // 2) GUARD TUTUP TRANSAKSI
-    //    - cek tanggal lama
-    //    - kalau ganti tanggal, cek tanggal baru juga
-    // -------------------------------------------------------
+    // =====================================================
+    // 3) GUARD TUTUP TRANSAKSI
+    // =====================================================
     await assertNotLocked({
       date: oldDocDateOnly,
       runner: tx,
@@ -407,15 +508,15 @@ async function updateCrusherProduksi(noCrusherProduksi, payload) {
       });
     }
 
-    // -------------------------------------------------------
-    // 3) BUILD DYNAMIC SET
-    // -------------------------------------------------------
+    // =====================================================
+    // 4) BUILD DYNAMIC SET
+    // =====================================================
     const sets = [];
     const rqUpd = new sql.Request(tx);
 
     if (isChangingDate) {
       sets.push('Tanggal = @Tanggal');
-      rqUpd.input('Tanggal', sql.Date, newDocDateOnly); // ✅ date-only
+      rqUpd.input('Tanggal', sql.Date, newDocDateOnly);
     }
 
     if (payload.idMesin !== undefined) {
@@ -463,14 +564,12 @@ async function updateCrusherProduksi(noCrusherProduksi, payload) {
       rqUpd.input('HourMeter', sql.Decimal(18, 2), payload.hourMeter ?? null);
     }
 
-    // Jam (durasi)
     if (payload.jam !== undefined) {
       const jamInt = payload.jam === null ? null : parseJamToInt(payload.jam);
       sets.push('Jam = @Jam');
       rqUpd.input('Jam', sql.Int, jamInt);
     }
 
-    // HourStart / HourEnd (lebih aman kalau null / kosong)
     if (payload.hourStart !== undefined) {
       sets.push(`
         HourStart =
@@ -493,7 +592,7 @@ async function updateCrusherProduksi(noCrusherProduksi, payload) {
 
     rqUpd.input('NoCrusherProduksi', sql.VarChar(50), noCrusherProduksi);
 
-    const updateSql = `
+    const sqlUpdate = `
       UPDATE dbo.CrusherProduksi_h
       SET ${sets.join(', ')}
       WHERE NoCrusherProduksi = @NoCrusherProduksi;
@@ -503,68 +602,8 @@ async function updateCrusherProduksi(noCrusherProduksi, payload) {
       WHERE NoCrusherProduksi = @NoCrusherProduksi;
     `;
 
-    const updRes = await rqUpd.query(updateSql);
-    const updatedHeader = updRes.recordset?.[0] || null;
-
-    // -------------------------------------------------------
-    // 4) Jika Tanggal berubah → sync DateUsage (full + partial)
-    //    pakai tanggal dari DB supaya konsisten
-    // -------------------------------------------------------
-    if (isChangingDate && updatedHeader) {
-      const usageDate = resolveEffectiveDateForCreate(updatedHeader.Tanggal);
-
-      const rqUsage = new sql.Request(tx);
-      rqUsage
-        .input('NoCrusherProduksi', sql.VarChar(50), noCrusherProduksi)
-        .input('Tanggal', sql.Date, usageDate);
-
-      const sqlUpdateUsage = `
-        -------------------------------------------------------
-        -- BAHAN BAKU (FULL + PARTIAL)
-        -------------------------------------------------------
-        UPDATE bb
-        SET bb.DateUsage = @Tanggal
-        FROM dbo.BahanBaku_d AS bb
-        WHERE bb.DateUsage IS NOT NULL
-          AND (
-            EXISTS (
-              SELECT 1
-              FROM dbo.CrusherProduksiInputBB AS map
-              WHERE map.NoCrusherProduksi = @NoCrusherProduksi
-                AND map.NoBahanBaku  = bb.NoBahanBaku
-                AND ISNULL(map.NoPallet,'') = ISNULL(bb.NoPallet,'')
-                AND map.NoSak        = bb.NoSak
-            )
-            OR
-            EXISTS (
-              SELECT 1
-              FROM dbo.CrusherProduksiInputBBPartial AS mp
-              JOIN dbo.BahanBakuPartial AS bp
-                ON bp.NoBBPartial = mp.NoBBPartial
-              WHERE mp.NoCrusherProduksi = @NoCrusherProduksi
-                AND bp.NoBahanBaku = bb.NoBahanBaku
-                AND ISNULL(bp.NoPallet,'') = ISNULL(bb.NoPallet,'')
-                AND bp.NoSak       = bb.NoSak
-            )
-          );
-
-        -------------------------------------------------------
-        -- BONGGOLAN (FULL ONLY)
-        -------------------------------------------------------
-        UPDATE b
-        SET b.DateUsage = @Tanggal
-        FROM dbo.Bonggolan AS b
-        WHERE b.DateUsage IS NOT NULL
-          AND EXISTS (
-            SELECT 1
-            FROM dbo.CrusherProduksiInputBonggolan AS map
-            WHERE map.NoCrusherProduksi = @NoCrusherProduksi
-              AND map.NoBonggolan = b.NoBonggolan
-          );
-      `;
-
-      await rqUsage.query(sqlUpdateUsage);
-    }
+    const resUpd = await rqUpd.query(sqlUpdate);
+    const updatedHeader = resUpd.recordset?.[0] || null;
 
     await tx.commit();
     return { header: updatedHeader };
@@ -582,7 +621,7 @@ async function updateCrusherProduksi(noCrusherProduksi, payload) {
  * Validates that no outputs exist before deletion
  * Resets DateUsage and IsPartial flags for affected materials
  */
-async function deleteCrusherProduksi(noCrusherProduksi) {
+async function deleteCrusherProduksi(noCrusherProduksi, ctx) {
   if (!noCrusherProduksi) throw badReq('noCrusherProduksi wajib');
 
   const pool = await poolPromise;
@@ -590,30 +629,49 @@ async function deleteCrusherProduksi(noCrusherProduksi) {
   await tx.begin(sql.ISOLATION_LEVEL.SERIALIZABLE);
 
   try {
+    // =====================================================
+    // 0) SET SESSION_CONTEXT (WAJIB untuk trigger audit)
+    // =====================================================
+    const actorIdNum = Number(ctx?.actorId);
+    if (!Number.isFinite(actorIdNum) || actorIdNum <= 0) {
+      throw badReq('ctx.actorId wajib. Controller harus inject dari token.');
+    }
+
+    const actorUsername =
+      String(ctx?.actorUsername || '').trim() || 'system';
+    const requestId =
+      String(ctx?.requestId || '').trim();
+
+    const auditReq = new sql.Request(tx);
+    await applyAuditContext(auditReq, {
+      actorId: Math.trunc(actorIdNum),
+      actorUsername,
+      requestId,
+    });
+
     // -------------------------------------------------------
-    // 0) AMBIL docDateOnly DARI CONFIG (LOCK HEADER ROW)
-    //    menggantikan SELECT CrusherProduksi_h manual
+    // 1) AMBIL docDateOnly DARI CONFIG (LOCK HEADER)
     // -------------------------------------------------------
     const { docDateOnly } = await loadDocDateOnlyFromConfig({
-      entityKey: 'crusherProduksi',      // ✅ harus ada di config tutup-transaksi
+      entityKey: 'crusherProduksi',
       codeValue: noCrusherProduksi,
       runner: tx,
-      useLock: true,                    // DELETE = write
+      useLock: true,          // DELETE = write
       throwIfNotFound: true,
     });
 
     // -------------------------------------------------------
-    // 1) GUARD TUTUP TRANSAKSI (DELETE = WRITE)
+    // 2) GUARD TUTUP TRANSAKSI
     // -------------------------------------------------------
     await assertNotLocked({
       date: docDateOnly,
-      runner: tx,                       // IMPORTANT: same tx
+      runner: tx,
       action: 'delete CrusherProduksi',
       useLock: true,
     });
 
     // -------------------------------------------------------
-    // 2) CEK OUTPUT DULU (kalau sudah ada output -> tolak delete)
+    // 3) CEK OUTPUT
     // -------------------------------------------------------
     const rqCheck = new sql.Request(tx);
     const outCheck = await rqCheck
@@ -624,23 +682,22 @@ async function deleteCrusherProduksi(noCrusherProduksi) {
         WHERE NoCrusherProduksi = @NoCrusherProduksi;
       `);
 
-    const row = outCheck.recordset?.[0] || { CntOutput: 0 };
-    const hasOutput = (row.CntOutput || 0) > 0;
-
+    const hasOutput = (outCheck.recordset?.[0]?.CntOutput || 0) > 0;
     if (hasOutput) {
-      throw badReq('Tidak dapat menghapus Nomor Produksi ini karena memiliki data output.');
+      throw badReq(
+        'Tidak dapat menghapus Nomor Produksi ini karena memiliki data output.'
+      );
     }
 
     // -------------------------------------------------------
-    // 3) DELETE INPUTS + PARTIALS + RESET DATEUSAGE + DELETE HEADER
-    //    (SQL besar kamu tetap)
+    // 4) DELETE INPUT + PARTIAL + RESET + DELETE HEADER
     // -------------------------------------------------------
     const req = new sql.Request(tx);
     req.input('NoCrusherProduksi', sql.VarChar(50), noCrusherProduksi);
 
     const sqlDelete = `
       ---------------------------------------------------------
-      -- TABLE VARIABLES TO STORE AFFECTED KEYS
+      -- TABLE VARIABLE UNTUK MENYIMPAN KEY TERDAMPAK
       ---------------------------------------------------------
       DECLARE @BBKeys TABLE (
         NoBahanBaku varchar(50),
@@ -659,88 +716,79 @@ async function deleteCrusherProduksi(noCrusherProduksi) {
       SELECT DISTINCT bb.NoBahanBaku, bb.NoPallet, bb.NoSak
       FROM dbo.BahanBaku_d AS bb
       WHERE EXISTS (
-              SELECT 1
-              FROM dbo.CrusherProduksiInputBB AS map
-              WHERE map.NoCrusherProduksi = @NoCrusherProduksi
-                AND map.NoBahanBaku = bb.NoBahanBaku
-                AND ISNULL(map.NoPallet,'') = ISNULL(bb.NoPallet,'')
-                AND map.NoSak = bb.NoSak
-          )
-         OR EXISTS (
-              SELECT 1
-              FROM dbo.CrusherProduksiInputBBPartial AS mp
-              JOIN dbo.BahanBakuPartial AS bp
-                ON bp.NoBBPartial = mp.NoBBPartial
-              WHERE mp.NoCrusherProduksi = @NoCrusherProduksi
-                AND bp.NoBahanBaku = bb.NoBahanBaku
-                AND ISNULL(bp.NoPallet,'') = ISNULL(bb.NoPallet,'')
-                AND bp.NoSak = bb.NoSak
-          );
+        SELECT 1
+        FROM dbo.CrusherProduksiInputBB AS map
+        WHERE map.NoCrusherProduksi = @NoCrusherProduksi
+          AND map.NoBahanBaku = bb.NoBahanBaku
+          AND ISNULL(map.NoPallet,'') = ISNULL(bb.NoPallet,'')
+          AND map.NoSak = bb.NoSak
+      )
+      OR EXISTS (
+        SELECT 1
+        FROM dbo.CrusherProduksiInputBBPartial AS mp
+        JOIN dbo.BahanBakuPartial AS bp
+          ON bp.NoBBPartial = mp.NoBBPartial
+        WHERE mp.NoCrusherProduksi = @NoCrusherProduksi
+          AND bp.NoBahanBaku = bb.NoBahanBaku
+          AND ISNULL(bp.NoPallet,'') = ISNULL(bb.NoPallet,'')
+          AND bp.NoSak = bb.NoSak
+      );
 
-      -- Delete partial detail records linked to this production
       DELETE bp
       FROM dbo.BahanBakuPartial AS bp
       JOIN dbo.CrusherProduksiInputBBPartial AS mp
         ON mp.NoBBPartial = bp.NoBBPartial
       WHERE mp.NoCrusherProduksi = @NoCrusherProduksi;
 
-      -- Delete partial mapping
       DELETE FROM dbo.CrusherProduksiInputBBPartial
       WHERE NoCrusherProduksi = @NoCrusherProduksi;
 
-      -- Delete full mapping
       DELETE FROM dbo.CrusherProduksiInputBB
       WHERE NoCrusherProduksi = @NoCrusherProduksi;
 
-      -- Reset DateUsage & IsPartial in BahanBaku_d for affected keys
       UPDATE bb
       SET bb.DateUsage = NULL,
           bb.IsPartial = CASE
             WHEN EXISTS (
               SELECT 1
-              FROM dbo.BahanBakuPartial AS bp
+              FROM dbo.BahanBakuPartial bp
               WHERE bp.NoBahanBaku = bb.NoBahanBaku
                 AND ISNULL(bp.NoPallet,'') = ISNULL(bb.NoPallet,'')
                 AND bp.NoSak = bb.NoSak
             ) THEN 1 ELSE 0 END
-      FROM dbo.BahanBaku_d AS bb
-      JOIN @BBKeys AS k
+      FROM dbo.BahanBaku_d bb
+      JOIN @BBKeys k
         ON k.NoBahanBaku = bb.NoBahanBaku
        AND ISNULL(k.NoPallet,'') = ISNULL(bb.NoPallet,'')
        AND k.NoSak = bb.NoSak;
 
       ---------------------------------------------------------
-      -- 2. BONGGOLAN (NO PARTIAL SUPPORT)
+      -- 2. BONGGOLAN (FULL ONLY)
       ---------------------------------------------------------
       INSERT INTO @BonggolanKeys (NoBonggolan)
-      SELECT DISTINCT b.NoBonggolan
-      FROM dbo.Bonggolan AS b
-      WHERE EXISTS (
-        SELECT 1
-        FROM dbo.CrusherProduksiInputBonggolan AS map
-        WHERE map.NoCrusherProduksi = @NoCrusherProduksi
-          AND map.NoBonggolan = b.NoBonggolan
-      );
+      SELECT DISTINCT map.NoBonggolan
+      FROM dbo.CrusherProduksiInputBonggolan map
+      WHERE map.NoCrusherProduksi = @NoCrusherProduksi;
 
-      -- Delete full mapping
       DELETE FROM dbo.CrusherProduksiInputBonggolan
       WHERE NoCrusherProduksi = @NoCrusherProduksi;
 
-      -- Reset DateUsage in Bonggolan for affected keys
       UPDATE b
       SET b.DateUsage = NULL
-      FROM dbo.Bonggolan AS b
-      JOIN @BonggolanKeys AS k
-        ON k.NoBonggolan = b.NoBonggolan;
+      FROM dbo.Bonggolan b
+      JOIN @BonggolanKeys k ON k.NoBonggolan = b.NoBonggolan;
 
       ---------------------------------------------------------
-      -- 3. FINALLY: DELETE HEADER
+      -- 3. DELETE HEADER (TRIGGER AUDIT AKAN JALAN)
       ---------------------------------------------------------
       DELETE FROM dbo.CrusherProduksi_h
       WHERE NoCrusherProduksi = @NoCrusherProduksi;
     `;
 
-    await req.query(sqlDelete);
+    const res = await req.query(sqlDelete);
+    if (res.rowsAffected?.[res.rowsAffected.length - 1] === 0) {
+      throw notFound(`NoCrusherProduksi tidak ditemukan: ${noCrusherProduksi}`);
+    }
 
     await tx.commit();
     return { success: true };
@@ -749,7 +797,6 @@ async function deleteCrusherProduksi(noCrusherProduksi) {
     throw e;
   }
 }
-
 
 
 

@@ -1,71 +1,31 @@
 // services/inject-production-service.js
-const { sql, poolPromise } = require('../../../core/config/db');
+const { sql, poolPromise } = require("../../../core/config/db");
 
 const {
   resolveEffectiveDateForCreate,
+  toDateOnly,
   assertNotLocked,
+  formatYMD,
   loadDocDateOnlyFromConfig,
-} = require('../../../core/shared/tutup-transaksi-guard');
-
-const sharedInputService = require('../../../core/shared/produksi-input.service');
-const { badReq, conflict } = require('../../../core/utils/http-error');
-
-// If you already have these in another shared module, keep using them.
-// If not, keep these minimal local helpers.
-function padLeft(n, width) {
-  const s = String(n);
-  return s.length >= width ? s : '0'.repeat(width - s.length) + s;
-}
-
-// helper normalisasi jam 'HH:mm' -> 'HH:mm:ss' (untuk HourStart/HourEnd yang tipe TIME)
-function normalizeTimeStr(t) {
-  if (t == null) return null;
-  const s = String(t).trim();
-  if (!s) return null;
-  if (/^\d{1,2}:\d{2}$/.test(s)) return `${s}:00`;
-  if (/^\d{1,2}:\d{2}:\d{2}$/.test(s)) return s;
-  return s; // biar SQL yang reject kalau format aneh
-}
-
-/**
- * Generate next NoProduksi Inject
- * Contoh: S.0000000006  (10 digit angka)
- */
-async function generateNextNoProduksiInject(tx, { prefix = 'S.', width = 10 } = {}) {
-  const rq = new sql.Request(tx);
-  const q = `
-    SELECT TOP 1 h.NoProduksi
-    FROM dbo.InjectProduksi_h AS h WITH (UPDLOCK, HOLDLOCK)
-    WHERE h.NoProduksi LIKE @prefix + '%'
-    ORDER BY
-      TRY_CONVERT(BIGINT, SUBSTRING(h.NoProduksi, LEN(@prefix) + 1, 50)) DESC,
-      h.NoProduksi DESC;
-  `;
-  const r = await rq.input('prefix', sql.VarChar, prefix).query(q);
-
-  let lastNum = 0;
-  if (r.recordset.length > 0) {
-    const last = r.recordset[0].NoProduksi;
-    const numericPart = last.substring(prefix.length);
-    lastNum = parseInt(numericPart, 10) || 0;
-  }
-
-  const next = lastNum + 1;
-  return prefix + padLeft(next, width);
-}
-
+} = require("../../../core/shared/tutup-transaksi-guard");
+const sharedInputService = require("../../../core/shared/produksi-input.service");
+const { badReq, conflict } = require("../../../core/utils/http-error");
+const { applyAuditContext } = require("../../../core/utils/db-audit-context");
+const {
+  generateNextCode,
+} = require("../../../core/utils/sequence-code-helper");
 
 // ============================================================
 // ✅ GET ALL (paged + search + lastClosed + isLocked)
 // ============================================================
-async function getAllProduksi(page = 1, pageSize = 20, search = '') {
+async function getAllProduksi(page = 1, pageSize = 20, search = "") {
   const pool = await poolPromise;
 
   const p = Math.max(1, Number(page) || 1);
   const ps = Math.max(1, Math.min(200, Number(pageSize) || 20));
   const offset = (p - 1) * ps;
 
-  const searchTerm = (search || '').trim();
+  const searchTerm = (search || "").trim();
 
   const whereClause = `
     WHERE (@search = '' OR h.NoProduksi LIKE '%' + @search + '%')
@@ -79,7 +39,7 @@ async function getAllProduksi(page = 1, pageSize = 20, search = '') {
   `;
 
   const countReq = pool.request();
-  countReq.input('search', sql.VarChar(100), searchTerm);
+  countReq.input("search", sql.VarChar(100), searchTerm);
 
   const countRes = await countReq.query(countQry);
   const total = countRes.recordset?.[0]?.total || 0;
@@ -151,9 +111,9 @@ async function getAllProduksi(page = 1, pageSize = 20, search = '') {
   `;
 
   const dataReq = pool.request();
-  dataReq.input('search', sql.VarChar(100), searchTerm);
-  dataReq.input('offset', sql.Int, offset);
-  dataReq.input('limit', sql.Int, ps);
+  dataReq.input("search", sql.VarChar(100), searchTerm);
+  dataReq.input("offset", sql.Int, offset);
+  dataReq.input("limit", sql.Int, ps);
 
   const dataRes = await dataReq.query(dataQry);
   return { data: dataRes.recordset || [], total };
@@ -197,7 +157,7 @@ async function getProduksiByDate(date) {
     ORDER BY h.Jam ASC;
   `;
 
-  request.input('date', sql.Date, date);
+  request.input("date", sql.Date, date);
   const result = await request.query(query);
   return result.recordset;
 }
@@ -209,7 +169,7 @@ async function getFurnitureWipListByNoProduksi(noProduksi) {
   const pool = await poolPromise;
   const request = pool.request();
 
-  request.input('noProduksi', sql.VarChar(50), noProduksi);
+  request.input("noProduksi", sql.VarChar(50), noProduksi);
 
   const query = `
     SELECT
@@ -243,7 +203,7 @@ async function getPackingListByNoProduksi(noProduksi) {
   const pool = await poolPromise;
   const request = pool.request();
 
-  request.input('noProduksi', sql.VarChar(50), noProduksi);
+  request.input("noProduksi", sql.VarChar(50), noProduksi);
 
   const query = `
     SELECT
@@ -269,86 +229,125 @@ async function getPackingListByNoProduksi(noProduksi) {
   return result.recordset;
 }
 
-// ============================================================
-// ✅ CREATE header InjectProduksi_h
-// ============================================================
-async function createInjectProduksi(payload) {
+async function createInjectProduksi(payload, ctx) {
+  const body = payload && typeof payload === "object" ? payload : {};
+
+  // ===============================
+  // Validasi wajib
+  // ===============================
   const must = [];
-  if (!payload?.tglProduksi) must.push('tglProduksi');
-  if (payload?.idMesin == null) must.push('idMesin');
-  if (payload?.idOperator == null) must.push('idOperator');
-  if (payload?.shift == null) must.push('shift');
-  if (!payload?.hourStart) must.push('hourStart');
-  if (!payload?.hourEnd) must.push('hourEnd');
-  if (must.length) throw badReq(`Field wajib: ${must.join(', ')}`);
+  if (!body?.tglProduksi) must.push("tglProduksi");
+  if (body?.idMesin == null) must.push("idMesin");
+  if (body?.idOperator == null) must.push("idOperator");
+  if (body?.shift == null) must.push("shift");
+  if (!body?.hourStart) must.push("hourStart");
+  if (!body?.hourEnd) must.push("hourEnd");
+  if (must.length) throw badReq(`Field wajib: ${must.join(", ")}`);
+
+  const docDateOnly = toDateOnly(body.tglProduksi);
+
+  // ===============================
+  // Validasi ctx / audit
+  // ===============================
+  const actorIdNum = Number(ctx?.actorId);
+  if (!Number.isFinite(actorIdNum) || actorIdNum <= 0) {
+    throw badReq("ctx.actorId wajib. Controller harus inject dari token.");
+  }
+  const actorUsername = String(ctx?.actorUsername || "").trim() || "system";
+  const requestId = String(ctx?.requestId || "").trim();
+  const auditCtx = {
+    actorId: Math.trunc(actorIdNum),
+    actorUsername,
+    requestId,
+  };
 
   const pool = await poolPromise;
   const tx = new sql.Transaction(pool);
   await tx.begin(sql.ISOLATION_LEVEL.SERIALIZABLE);
 
   try {
-    // 0) effective date + guard tutup transaksi
-    const effectiveDate = resolveEffectiveDateForCreate(payload.tglProduksi);
+    // ===============================
+    // Set audit context
+    // ===============================
+    const auditReq = new sql.Request(tx);
+    const audit = await applyAuditContext(auditReq, auditCtx);
 
+    // ===============================
+    // Lock tanggal produksi
+    // ===============================
+    const effectiveDate = resolveEffectiveDateForCreate(body.tglProduksi);
     await assertNotLocked({
       date: effectiveDate,
       runner: tx,
-      action: 'create InjectProduksi',
+      action: "create InjectProduksi",
       useLock: true,
     });
 
-    // 1) generate NoProduksi (S.)
-    const no1 = await generateNextNoProduksiInject(tx, { prefix: 'S.', width: 10 });
+    // ===============================
+    // Generate NoProduksi unik
+    // ===============================
+    const gen = async () =>
+      generateNextCode(tx, {
+        tableName: "dbo.InjectProduksi_h",
+        columnName: "NoProduksi",
+        prefix: "S.",
+        width: 10,
+      });
+    let noProduksi = await gen();
 
-    const rqCheck = new sql.Request(tx);
-    const exist = await rqCheck
-      .input('NoProduksi', sql.VarChar(50), no1)
-      .query(`
-        SELECT 1
-        FROM dbo.InjectProduksi_h WITH (UPDLOCK, HOLDLOCK)
-        WHERE NoProduksi = @NoProduksi
-      `);
+    // double check anti-race
+    const exist = await new sql.Request(tx)
+      .input("NoProduksi", sql.VarChar(50), noProduksi)
+      .query(
+        `SELECT 1 FROM dbo.InjectProduksi_h WITH (UPDLOCK, HOLDLOCK) WHERE NoProduksi=@NoProduksi`,
+      );
+    if (exist.recordset.length > 0) {
+      noProduksi = await gen();
+    }
 
-    const noProduksi = exist.recordset.length
-      ? await generateNextNoProduksiInject(tx, { prefix: 'S.', width: 10 })
-      : no1;
-
-    // 2) insert header
+    // ===============================
+    // Insert header dengan OUTPUT INTO table variable
+    // ===============================
     const rqIns = new sql.Request(tx);
-
     rqIns
-      .input('NoProduksi', sql.VarChar(50), noProduksi)
-      .input('TglProduksi', sql.Date, effectiveDate)
-      .input('IdMesin', sql.Int, payload.idMesin)
-      .input('IdOperator', sql.Int, payload.idOperator)
-      .input('Shift', sql.Int, payload.shift)
-      // ✅ Jam adalah INT
-      .input('Jam', sql.Int, payload.jam ?? null)
-
-      .input('CreateBy', sql.VarChar(100), payload.createBy)
-      .input('CheckBy1', sql.VarChar(100), payload.checkBy1 ?? null)
-      .input('CheckBy2', sql.VarChar(100), payload.checkBy2 ?? null)
-      .input('ApproveBy', sql.VarChar(100), payload.approveBy ?? null)
-
-      .input('JmlhAnggota', sql.Int, payload.jmlhAnggota ?? null)
-      .input('Hadir', sql.Int, payload.hadir ?? null)
-
-      .input('IdCetakan', sql.Int, payload.idCetakan ?? null)
-      .input('IdWarna', sql.Int, payload.idWarna ?? null)
-
-      .input('EnableOffset', sql.Bit, payload.enableOffset ?? 0)
-      .input('OffsetCurrent', sql.Int, payload.offsetCurrent ?? null)
-      .input('OffsetNext', sql.Int, payload.offsetNext ?? null)
-
-      .input('IdFurnitureMaterial', sql.Int, payload.idFurnitureMaterial ?? null)
-
-      .input('HourMeter', sql.Decimal(18, 2), payload.hourMeter ?? null)
-      .input('BeratProdukHasilTimbang', sql.Decimal(18, 2), payload.beratProdukHasilTimbang ?? null)
-
-      .input('HourStart', sql.VarChar(20), normalizeTimeStr(payload.hourStart))
-      .input('HourEnd', sql.VarChar(20), normalizeTimeStr(payload.hourEnd));
+      .input("NoProduksi", sql.VarChar(50), noProduksi)
+      .input("TglProduksi", sql.Date, effectiveDate)
+      .input("IdMesin", sql.Int, body.idMesin)
+      .input("IdOperator", sql.Int, body.idOperator)
+      .input("Shift", sql.Int, body.shift)
+      .input("Jam", sql.Int, body.jam ?? null)
+      .input("CreateBy", sql.VarChar(100), body.createBy)
+      .input("CheckBy1", sql.VarChar(100), body.checkBy1 ?? null)
+      .input("CheckBy2", sql.VarChar(100), body.checkBy2 ?? null)
+      .input("ApproveBy", sql.VarChar(100), body.approveBy ?? null)
+      .input("JmlhAnggota", sql.Int, body.jmlhAnggota ?? null)
+      .input("Hadir", sql.Int, body.hadir ?? null)
+      .input("IdCetakan", sql.Int, body.idCetakan ?? null)
+      .input("IdWarna", sql.Int, body.idWarna ?? null)
+      .input("EnableOffset", sql.Bit, body.enableOffset ?? 0)
+      .input("OffsetCurrent", sql.Int, body.offsetCurrent ?? null)
+      .input("OffsetNext", sql.Int, body.offsetNext ?? null)
+      .input("IdFurnitureMaterial", sql.Int, body.idFurnitureMaterial ?? null)
+      .input("HourMeter", sql.Decimal(18, 2), body.hourMeter ?? null)
+      .input(
+        "BeratProdukHasilTimbang",
+        sql.Decimal(18, 2),
+        body.beratProdukHasilTimbang ?? null,
+      )
+      .input("HourStart", sql.VarChar(20), body.hourStart)
+      .input("HourEnd", sql.VarChar(20), body.hourEnd);
 
     const insertSql = `
+      DECLARE @tmp TABLE (
+        NoProduksi varchar(50), IdOperator int, IdMesin int, TglProduksi date,
+        Jam int, Shift int, CreateBy varchar(100), CheckBy1 varchar(100),
+        CheckBy2 varchar(100), ApproveBy varchar(100), JmlhAnggota int,
+        Hadir int, IdCetakan int, IdWarna int, EnableOffset bit,
+        OffsetCurrent int, OffsetNext int, IdFurnitureMaterial int,
+        HourMeter decimal(18,2), BeratProdukHasilTimbang decimal(18,2),
+        HourStart time(7), HourEnd time(7)
+      );
+
       INSERT INTO dbo.InjectProduksi_h (
         NoProduksi, IdOperator, IdMesin, TglProduksi, Jam, Shift,
         CreateBy, CheckBy1, CheckBy2, ApproveBy,
@@ -359,11 +358,10 @@ async function createInjectProduksi(payload) {
         HourMeter, BeratProdukHasilTimbang,
         HourStart, HourEnd
       )
-      OUTPUT INSERTED.*
+      OUTPUT INSERTED.* INTO @tmp
       VALUES (
         @NoProduksi, @IdOperator, @IdMesin, @TglProduksi,
-        @Jam,
-        @Shift,
+        @Jam, @Shift,
         @CreateBy, @CheckBy1, @CheckBy2, @ApproveBy,
         @JmlhAnggota, @Hadir,
         @IdCetakan, @IdWarna,
@@ -373,14 +371,19 @@ async function createInjectProduksi(payload) {
         CASE WHEN @HourStart IS NULL OR LTRIM(RTRIM(@HourStart)) = '' THEN NULL ELSE CAST(@HourStart AS time(7)) END,
         CASE WHEN @HourEnd   IS NULL OR LTRIM(RTRIM(@HourEnd))   = '' THEN NULL ELSE CAST(@HourEnd   AS time(7)) END
       );
+
+      SELECT * FROM @tmp;
     `;
 
     const insRes = await rqIns.query(insertSql);
 
     await tx.commit();
-    return { header: insRes.recordset?.[0] || null };
+
+    return { header: insRes.recordset?.[0] || null, audit };
   } catch (e) {
-    try { await tx.rollback(); } catch (_) {}
+    try {
+      await tx.rollback();
+    } catch (_) {}
     throw e;
   }
 }
@@ -388,170 +391,192 @@ async function createInjectProduksi(payload) {
 // ============================================================
 // ✅ UPDATE header InjectProduksi_h + sync DateUsage (inputs)
 // ============================================================
-async function updateInjectProduksi(noProduksi, payload) {
-  if (!noProduksi) throw badReq('noProduksi wajib');
+async function updateInjectProduksi(noProduksi, payload, ctx) {
+  if (!noProduksi) throw badReq("noProduksi wajib");
+
+  const actorIdNum = Number(ctx?.actorId);
+  if (!Number.isFinite(actorIdNum) || actorIdNum <= 0) {
+    throw badReq("ctx.actorId wajib. Controller harus inject dari token.");
+  }
+
+  const actorUsername = String(ctx?.actorUsername || "").trim() || "system";
+  const requestId = String(ctx?.requestId || "").trim();
+
+  const auditCtx = {
+    actorId: Math.trunc(actorIdNum),
+    actorUsername,
+    requestId,
+  };
 
   const pool = await poolPromise;
   const tx = new sql.Transaction(pool);
   await tx.begin(sql.ISOLATION_LEVEL.SERIALIZABLE);
 
   try {
-    // 0) lock + get old date
+    // =====================================================
+    // 0) load old doc date + lock
+    // =====================================================
     const { docDateOnly: oldDocDateOnly } = await loadDocDateOnlyFromConfig({
-      entityKey: 'injectProduksi', // samakan dengan config tutup-transaksi
+      entityKey: "injectProduksi",
       codeValue: noProduksi,
       runner: tx,
       useLock: true,
       throwIfNotFound: true,
     });
 
+    // =====================================================
     // 1) handle date change
+    // =====================================================
     const isChangingDate = payload?.tglProduksi !== undefined;
     let newDocDateOnly = null;
-
     if (isChangingDate) {
-      if (!payload.tglProduksi) throw badReq('tglProduksi tidak boleh kosong');
+      if (!payload.tglProduksi) throw badReq("tglProduksi tidak boleh kosong");
       newDocDateOnly = resolveEffectiveDateForCreate(payload.tglProduksi);
     }
 
+    // =====================================================
     // 2) guard tutup transaksi
+    // =====================================================
     await assertNotLocked({
       date: oldDocDateOnly,
       runner: tx,
-      action: 'update InjectProduksi (current date)',
+      action: "update InjectProduksi (current date)",
       useLock: true,
     });
-
     if (isChangingDate) {
       await assertNotLocked({
         date: newDocDateOnly,
         runner: tx,
-        action: 'update InjectProduksi (new date)',
+        action: "update InjectProduksi (new date)",
         useLock: true,
       });
     }
 
-    // 3) build dynamic SET
+    // =====================================================
+    // 3) SET fields dynamically
+    // =====================================================
     const sets = [];
     const rqUpd = new sql.Request(tx);
 
     if (isChangingDate) {
-      sets.push('TglProduksi = @TglProduksi');
-      rqUpd.input('TglProduksi', sql.Date, newDocDateOnly);
+      sets.push("TglProduksi = @TglProduksi");
+      rqUpd.input("TglProduksi", sql.Date, newDocDateOnly);
     }
 
     if (payload.idMesin !== undefined) {
-      sets.push('IdMesin = @IdMesin');
-      rqUpd.input('IdMesin', sql.Int, payload.idMesin);
+      sets.push("IdMesin = @IdMesin");
+      rqUpd.input("IdMesin", sql.Int, payload.idMesin);
     }
 
     if (payload.idOperator !== undefined) {
-      sets.push('IdOperator = @IdOperator');
-      rqUpd.input('IdOperator', sql.Int, payload.idOperator);
+      sets.push("IdOperator = @IdOperator");
+      rqUpd.input("IdOperator", sql.Int, payload.idOperator);
     }
 
     if (payload.shift !== undefined) {
-      sets.push('Shift = @Shift');
-      rqUpd.input('Shift', sql.Int, payload.shift);
+      sets.push("Shift = @Shift");
+      rqUpd.input("Shift", sql.Int, payload.shift);
     }
 
-    // ✅ Jam is INT (NO CAST)
     if (payload.jam !== undefined) {
-      sets.push('Jam = @Jam');
-      rqUpd.input('Jam', sql.Int, payload.jam ?? null);
+      sets.push("Jam = @Jam");
+      rqUpd.input("Jam", sql.Int, payload.jam ?? null);
     }
 
     if (payload.jmlhAnggota !== undefined) {
-      sets.push('JmlhAnggota = @JmlhAnggota');
-      rqUpd.input('JmlhAnggota', sql.Int, payload.jmlhAnggota ?? null);
+      sets.push("JmlhAnggota = @JmlhAnggota");
+      rqUpd.input("JmlhAnggota", sql.Int, payload.jmlhAnggota ?? null);
     }
 
     if (payload.hadir !== undefined) {
-      sets.push('Hadir = @Hadir');
-      rqUpd.input('Hadir', sql.Int, payload.hadir ?? null);
+      sets.push("Hadir = @Hadir");
+      rqUpd.input("Hadir", sql.Int, payload.hadir ?? null);
     }
 
     if (payload.idCetakan !== undefined) {
-      sets.push('IdCetakan = @IdCetakan');
-      rqUpd.input('IdCetakan', sql.Int, payload.idCetakan ?? null);
+      sets.push("IdCetakan = @IdCetakan");
+      rqUpd.input("IdCetakan", sql.Int, payload.idCetakan ?? null);
     }
 
     if (payload.idWarna !== undefined) {
-      sets.push('IdWarna = @IdWarna');
-      rqUpd.input('IdWarna', sql.Int, payload.idWarna ?? null);
+      sets.push("IdWarna = @IdWarna");
+      rqUpd.input("IdWarna", sql.Int, payload.idWarna ?? null);
     }
 
     if (payload.enableOffset !== undefined) {
-      sets.push('EnableOffset = @EnableOffset');
-      rqUpd.input('EnableOffset', sql.Bit, payload.enableOffset ?? null);
+      sets.push("EnableOffset = @EnableOffset");
+      rqUpd.input("EnableOffset", sql.Bit, payload.enableOffset ?? null);
     }
 
     if (payload.offsetCurrent !== undefined) {
-      sets.push('OffsetCurrent = @OffsetCurrent');
-      rqUpd.input('OffsetCurrent', sql.Int, payload.offsetCurrent ?? null);
+      sets.push("OffsetCurrent = @OffsetCurrent");
+      rqUpd.input("OffsetCurrent", sql.Int, payload.offsetCurrent ?? null);
     }
 
     if (payload.offsetNext !== undefined) {
-      sets.push('OffsetNext = @OffsetNext');
-      rqUpd.input('OffsetNext', sql.Int, payload.offsetNext ?? null);
+      sets.push("OffsetNext = @OffsetNext");
+      rqUpd.input("OffsetNext", sql.Int, payload.offsetNext ?? null);
     }
 
     if (payload.idFurnitureMaterial !== undefined) {
-      sets.push('IdFurnitureMaterial = @IdFurnitureMaterial');
-      rqUpd.input('IdFurnitureMaterial', sql.Int, payload.idFurnitureMaterial ?? null);
+      sets.push("IdFurnitureMaterial = @IdFurnitureMaterial");
+      rqUpd.input(
+        "IdFurnitureMaterial",
+        sql.Int,
+        payload.idFurnitureMaterial ?? null,
+      );
     }
 
     if (payload.hourMeter !== undefined) {
-      sets.push('HourMeter = @HourMeter');
-      rqUpd.input('HourMeter', sql.Decimal(18, 2), payload.hourMeter ?? null);
+      sets.push("HourMeter = @HourMeter");
+      rqUpd.input("HourMeter", sql.Decimal(18, 2), payload.hourMeter ?? null);
     }
 
     if (payload.beratProdukHasilTimbang !== undefined) {
-      sets.push('BeratProdukHasilTimbang = @BeratProdukHasilTimbang');
-      rqUpd.input('BeratProdukHasilTimbang', sql.Decimal(18, 2), payload.beratProdukHasilTimbang ?? null);
+      sets.push("BeratProdukHasilTimbang = @BeratProdukHasilTimbang");
+      rqUpd.input(
+        "BeratProdukHasilTimbang",
+        sql.Decimal(18, 2),
+        payload.beratProdukHasilTimbang ?? null,
+      );
     }
 
-    // TIME
     if (payload.hourStart !== undefined) {
-      sets.push(`
-        HourStart =
-          CASE WHEN @HourStart IS NULL OR LTRIM(RTRIM(@HourStart)) = '' THEN NULL
-               ELSE CAST(@HourStart AS time(7)) END
-      `);
-      rqUpd.input('HourStart', sql.VarChar(20), normalizeTimeStr(payload.hourStart));
+      sets.push(
+        `HourStart = CASE WHEN @HourStart IS NULL OR LTRIM(RTRIM(@HourStart)) = '' THEN NULL ELSE CAST(@HourStart AS time(7)) END`,
+      );
+      rqUpd.input("HourStart", sql.VarChar(20), payload.hourStart);
     }
 
     if (payload.hourEnd !== undefined) {
-      sets.push(`
-        HourEnd =
-          CASE WHEN @HourEnd IS NULL OR LTRIM(RTRIM(@HourEnd)) = '' THEN NULL
-               ELSE CAST(@HourEnd AS time(7)) END
-      `);
-      rqUpd.input('HourEnd', sql.VarChar(20), normalizeTimeStr(payload.hourEnd));
+      sets.push(
+        `HourEnd = CASE WHEN @HourEnd IS NULL OR LTRIM(RTRIM(@HourEnd)) = '' THEN NULL ELSE CAST(@HourEnd AS time(7)) END`,
+      );
+      rqUpd.input("HourEnd", sql.VarChar(20), payload.hourEnd);
     }
 
     if (payload.checkBy1 !== undefined) {
-      sets.push('CheckBy1 = @CheckBy1');
-      rqUpd.input('CheckBy1', sql.VarChar(100), payload.checkBy1 ?? null);
+      sets.push("CheckBy1 = @CheckBy1");
+      rqUpd.input("CheckBy1", sql.VarChar(100), payload.checkBy1 ?? null);
     }
 
     if (payload.checkBy2 !== undefined) {
-      sets.push('CheckBy2 = @CheckBy2');
-      rqUpd.input('CheckBy2', sql.VarChar(100), payload.checkBy2 ?? null);
+      sets.push("CheckBy2 = @CheckBy2");
+      rqUpd.input("CheckBy2", sql.VarChar(100), payload.checkBy2 ?? null);
     }
 
     if (payload.approveBy !== undefined) {
-      sets.push('ApproveBy = @ApproveBy');
-      rqUpd.input('ApproveBy', sql.VarChar(100), payload.approveBy ?? null);
+      sets.push("ApproveBy = @ApproveBy");
+      rqUpd.input("ApproveBy", sql.VarChar(100), payload.approveBy ?? null);
     }
 
-    if (sets.length === 0) throw badReq('No fields to update');
+    if (sets.length === 0) throw badReq("No fields to update");
 
-    rqUpd.input('NoProduksi', sql.VarChar(50), noProduksi);
+    rqUpd.input("NoProduksi", sql.VarChar(50), noProduksi);
 
     const updateSql = `
       UPDATE dbo.InjectProduksi_h
-      SET ${sets.join(', ')}
+      SET ${sets.join(", ")}
       WHERE NoProduksi = @NoProduksi;
 
       SELECT *
@@ -559,17 +584,28 @@ async function updateInjectProduksi(noProduksi, payload) {
       WHERE NoProduksi = @NoProduksi;
     `;
 
+    // =====================================================
+    // 4) apply audit context
+    // =====================================================
+    await applyAuditContext(rqUpd, auditCtx);
+
+    // =====================================================
+    // 5) execute update
+    // =====================================================
     const updRes = await rqUpd.query(updateSql);
     const updatedHeader = updRes.recordset?.[0] || null;
 
-    // 4) if date changed -> sync DateUsage for all referenced input labels (full+partial)
+    // =====================================================
+    // 6) jika tanggal berubah -> sync DateUsage
+    // =====================================================
     if (isChangingDate && updatedHeader) {
-      const usageDate = resolveEffectiveDateForCreate(updatedHeader.TglProduksi);
-
+      const usageDate = resolveEffectiveDateForCreate(
+        updatedHeader.TglProduksi,
+      );
       const rqUsage = new sql.Request(tx);
       rqUsage
-        .input('NoProduksi', sql.VarChar(50), noProduksi)
-        .input('Tanggal', sql.Date, usageDate);
+        .input("NoProduksi", sql.VarChar(50), noProduksi)
+        .input("Tanggal", sql.Date, usageDate);
 
       const sqlUpdateUsage = `
         -------------------------------------------------------
@@ -664,14 +700,15 @@ async function updateInjectProduksi(noProduksi, payload) {
             )
           );
       `;
-
       await rqUsage.query(sqlUpdateUsage);
     }
 
     await tx.commit();
-    return { header: updatedHeader };
+    return { header: updatedHeader, audit: auditCtx };
   } catch (e) {
-    try { await tx.rollback(); } catch (_) {}
+    try {
+      await tx.rollback();
+    } catch (_) {}
     throw e;
   }
 }
@@ -679,35 +716,57 @@ async function updateInjectProduksi(noProduksi, payload) {
 // ============================================================
 // ✅ DELETE header InjectProduksi_h + delete inputs + reset DateUsage
 // ============================================================
-async function deleteInjectProduksi(noProduksi) {
-  if (!noProduksi) throw badReq('noProduksi wajib');
+async function deleteInjectProduksi(noProduksi, ctx) {
+  if (!noProduksi) throw badReq("noProduksi wajib");
 
   const pool = await poolPromise;
   const tx = new sql.Transaction(pool);
   await tx.begin(sql.ISOLATION_LEVEL.SERIALIZABLE);
 
   try {
-    // 0) lock + get date
+    // =====================================================
+    // 0) SET SESSION_CONTEXT (untuk trigger audit)
+    // =====================================================
+    const actorIdNum = Number(ctx?.actorId);
+    if (!Number.isFinite(actorIdNum) || actorIdNum <= 0) {
+      throw badReq("ctx.actorId wajib. Controller harus inject dari token.");
+    }
+    const actorUsername = String(ctx?.actorUsername || "").trim() || "system";
+    const requestId = String(ctx?.requestId || "").trim();
+
+    const auditReq = new sql.Request(tx);
+    await applyAuditContext(auditReq, {
+      actorId: Math.trunc(actorIdNum),
+      actorUsername,
+      requestId,
+    });
+
+    // =====================================================
+    // 1) Ambil docDateOnly dari config (LOCK HEADER)
+    // =====================================================
     const { docDateOnly } = await loadDocDateOnlyFromConfig({
-      entityKey: 'injectProduksi',
+      entityKey: "injectProduksi",
       codeValue: noProduksi,
       runner: tx,
-      useLock: true,
+      useLock: true, // DELETE = write lock
       throwIfNotFound: true,
     });
 
-    // 1) guard tutup transaksi
+    // =====================================================
+    // 2) Guard tutup transaksi
+    // =====================================================
     await assertNotLocked({
       date: docDateOnly,
       runner: tx,
-      action: 'delete InjectProduksi',
+      action: "delete InjectProduksi",
       useLock: true,
     });
 
-    // 2) cek output
+    // =====================================================
+    // 3) Cek output
+    // =====================================================
     const rqOut = new sql.Request(tx);
-    const outRes = await rqOut
-      .input('NoProduksi', sql.VarChar(50), noProduksi)
+    const outRes = await rqOut.input("NoProduksi", sql.VarChar(50), noProduksi)
       .query(`
         SELECT
           SUM(CASE WHEN Src='BONGGOLAN' THEN Cnt ELSE 0 END) AS CntOutputBonggolan,
@@ -719,24 +778,20 @@ async function deleteInjectProduksi(noProduksi) {
           SELECT 'BONGGOLAN' AS Src, COUNT(1) AS Cnt
           FROM dbo.InjectProduksiOutputBonggolan WITH (NOLOCK)
           WHERE NoProduksi = @NoProduksi
-
           UNION ALL
-          SELECT 'MIXER' AS Src, COUNT(1) AS Cnt
+          SELECT 'MIXER', COUNT(1)
           FROM dbo.InjectProduksiOutputMixer WITH (NOLOCK)
           WHERE NoProduksi = @NoProduksi
-
           UNION ALL
-          SELECT 'REJECT' AS Src, COUNT(1) AS Cnt
+          SELECT 'REJECT', COUNT(1)
           FROM dbo.InjectProduksiOutputRejectV2 WITH (NOLOCK)
           WHERE NoProduksi = @NoProduksi
-
           UNION ALL
-          SELECT 'FWIP' AS Src, COUNT(1) AS Cnt
+          SELECT 'FWIP', COUNT(1)
           FROM dbo.InjectProduksiOutputFurnitureWIP WITH (NOLOCK)
           WHERE NoProduksi = @NoProduksi
-
           UNION ALL
-          SELECT 'BJ' AS Src, COUNT(1) AS Cnt
+          SELECT 'BJ', COUNT(1)
           FROM dbo.InjectProduksiOutputBarangJadi WITH (NOLOCK)
           WHERE NoProduksi = @NoProduksi
         ) X;
@@ -751,77 +806,60 @@ async function deleteInjectProduksi(noProduksi) {
       (row.CntOutputBJ || 0) > 0;
 
     if (hasOutput) {
-      throw badReq('Tidak dapat menghapus Nomor Produksi ini karena sudah memiliki data output.');
+      throw badReq(
+        "Tidak dapat menghapus Nomor Produksi ini karena sudah memiliki data output.",
+      );
     }
 
-    // 3) delete inputs + reset dateusage + delete header
+    // =====================================================
+    // 4) DELETE INPUT (FULL + PARTIAL) + RESET DATEUSAGE
+    // =====================================================
     const rq = new sql.Request(tx);
-    rq.input('NoProduksi', sql.VarChar(50), noProduksi);
+    rq.input("NoProduksi", sql.VarChar(50), noProduksi);
 
     const sqlDelete = `
-      ---------------------------------------------------------
-      -- SIMPAN KEY YANG TERDAMPAK (untuk reset DateUsage)
-      ---------------------------------------------------------
-      DECLARE @BrokerKeys TABLE (
-        NoBroker varchar(50) NOT NULL,
-        NoSak    int         NOT NULL,
-        PRIMARY KEY (NoBroker, NoSak)
-      );
-
-      DECLARE @MixerKeys TABLE (
-        NoMixer varchar(50) NOT NULL,
-        NoSak   int         NOT NULL,
-        PRIMARY KEY (NoMixer, NoSak)
-      );
-
-      DECLARE @GilinganKeys TABLE (
-        NoGilingan varchar(50) PRIMARY KEY
-      );
-
-      DECLARE @FWIPKeys TABLE (
-        NoFurnitureWIP varchar(50) PRIMARY KEY
-      );
+      SET NOCOUNT ON;
 
       ---------------------------------------------------------
-      -- A) KUMPULKAN KEY dari INPUT (FULL)
+      -- TABLE VARIABLE UNTUK KEY TERDAMPAK
+      ---------------------------------------------------------
+      DECLARE @BrokerKeys TABLE (NoBroker varchar(50), NoSak int);
+      DECLARE @MixerKeys TABLE (NoMixer varchar(50), NoSak int);
+      DECLARE @GilinganKeys TABLE (NoGilingan varchar(50));
+      DECLARE @FWIPKeys TABLE (NoFurnitureWIP varchar(50));
+
+      ---------------------------------------------------------
+      -- INPUT FULL
       ---------------------------------------------------------
       INSERT INTO @BrokerKeys (NoBroker, NoSak)
       SELECT DISTINCT NoBroker, NoSak
       FROM dbo.InjectProduksiInputBroker
-      WHERE NoProduksi = @NoProduksi
-        AND NoBroker IS NOT NULL
-        AND NoSak IS NOT NULL;
+      WHERE NoProduksi = @NoProduksi;
 
       INSERT INTO @MixerKeys (NoMixer, NoSak)
       SELECT DISTINCT NoMixer, NoSak
       FROM dbo.InjectProduksiInputMixer
-      WHERE NoProduksi = @NoProduksi
-        AND NoMixer IS NOT NULL
-        AND NoSak IS NOT NULL;
+      WHERE NoProduksi = @NoProduksi;
 
       INSERT INTO @GilinganKeys (NoGilingan)
       SELECT DISTINCT NoGilingan
       FROM dbo.InjectProduksiInputGilingan
-      WHERE NoProduksi = @NoProduksi
-        AND NoGilingan IS NOT NULL;
+      WHERE NoProduksi = @NoProduksi;
 
       INSERT INTO @FWIPKeys (NoFurnitureWIP)
       SELECT DISTINCT NoFurnitureWIP
       FROM dbo.InjectProduksiInputFurnitureWIP
-      WHERE NoProduksi = @NoProduksi
-        AND NoFurnitureWIP IS NOT NULL;
+      WHERE NoProduksi = @NoProduksi;
 
       ---------------------------------------------------------
-      -- B) KUMPULKAN KEY dari INPUT (PARTIAL -> FULL KEY)
+      -- INPUT PARTIAL
       ---------------------------------------------------------
       INSERT INTO @MixerKeys (NoMixer, NoSak)
       SELECT DISTINCT mpd.NoMixer, mpd.NoSak
-      FROM dbo.InjectProduksiInputMixerPartial AS mp
-      JOIN dbo.MixerPartial AS mpd
-        ON mpd.NoMixerPartial = mp.NoMixerPartial
+      FROM dbo.InjectProduksiInputMixerPartial mp
+      JOIN dbo.MixerPartial mpd
+        ON mp.NoMixerPartial = mpd.NoMixerPartial
       WHERE mp.NoProduksi = @NoProduksi
-        AND mpd.NoMixer IS NOT NULL
-        AND mpd.NoSak IS NOT NULL
         AND NOT EXISTS (
           SELECT 1 FROM @MixerKeys k
           WHERE k.NoMixer = mpd.NoMixer AND k.NoSak = mpd.NoSak
@@ -829,93 +867,75 @@ async function deleteInjectProduksi(noProduksi) {
 
       INSERT INTO @GilinganKeys (NoGilingan)
       SELECT DISTINCT gp.NoGilingan
-      FROM dbo.InjectProduksiInputGilinganPartial AS mp
-      JOIN dbo.GilinganPartial AS gp
+      FROM dbo.InjectProduksiInputGilinganPartial mp
+      JOIN dbo.GilinganPartial gp
         ON gp.NoGilinganPartial = mp.NoGilinganPartial
       WHERE mp.NoProduksi = @NoProduksi
-        AND gp.NoGilingan IS NOT NULL
         AND NOT EXISTS (
-          SELECT 1 FROM @GilinganKeys k WHERE k.NoGilingan = gp.NoGilingan
+          SELECT 1 FROM @GilinganKeys k
+          WHERE k.NoGilingan = gp.NoGilingan
         );
 
       INSERT INTO @FWIPKeys (NoFurnitureWIP)
       SELECT DISTINCT fwp.NoFurnitureWIP
-      FROM dbo.InjectProduksiInputFurnitureWIPPartial AS mp
-      JOIN dbo.FurnitureWIPPartial AS fwp
+      FROM dbo.InjectProduksiInputFurnitureWIPPartial mp
+      JOIN dbo.FurnitureWIPPartial fwp
         ON fwp.NoFurnitureWIPPartial = mp.NoFurnitureWIPPartial
       WHERE mp.NoProduksi = @NoProduksi
-        AND fwp.NoFurnitureWIP IS NOT NULL
         AND NOT EXISTS (
-          SELECT 1 FROM @FWIPKeys k WHERE k.NoFurnitureWIP = fwp.NoFurnitureWIP
+          SELECT 1 FROM @FWIPKeys k
+          WHERE k.NoFurnitureWIP = fwp.NoFurnitureWIP
         );
 
       ---------------------------------------------------------
-      -- C) HAPUS ROW PARTIAL yang dipakai produksi ini
+      -- HAPUS PARTIAL
       ---------------------------------------------------------
       DELETE mpd
-      FROM dbo.MixerPartial AS mpd
-      JOIN dbo.InjectProduksiInputMixerPartial AS mp
+      FROM dbo.MixerPartial mpd
+      JOIN dbo.InjectProduksiInputMixerPartial mp
         ON mp.NoMixerPartial = mpd.NoMixerPartial
       WHERE mp.NoProduksi = @NoProduksi;
 
       DELETE gp
-      FROM dbo.GilinganPartial AS gp
-      JOIN dbo.InjectProduksiInputGilinganPartial AS mp
+      FROM dbo.GilinganPartial gp
+      JOIN dbo.InjectProduksiInputGilinganPartial mp
         ON mp.NoGilinganPartial = gp.NoGilinganPartial
       WHERE mp.NoProduksi = @NoProduksi;
 
       DELETE fwp
-      FROM dbo.FurnitureWIPPartial AS fwp
-      JOIN dbo.InjectProduksiInputFurnitureWIPPartial AS mp
+      FROM dbo.FurnitureWIPPartial fwp
+      JOIN dbo.InjectProduksiInputFurnitureWIPPartial mp
         ON mp.NoFurnitureWIPPartial = fwp.NoFurnitureWIPPartial
       WHERE mp.NoProduksi = @NoProduksi;
 
       ---------------------------------------------------------
-      -- D) HAPUS INPUT MAPPING (PARTIAL & FULL)
+      -- HAPUS MAPPING INPUT FULL & PARTIAL
       ---------------------------------------------------------
-      DELETE FROM dbo.InjectProduksiInputMixerPartial
-      WHERE NoProduksi = @NoProduksi;
-
-      DELETE FROM dbo.InjectProduksiInputGilinganPartial
-      WHERE NoProduksi = @NoProduksi;
-
-      DELETE FROM dbo.InjectProduksiInputFurnitureWIPPartial
-      WHERE NoProduksi = @NoProduksi;
-
-      DELETE FROM dbo.InjectProduksiInputBroker
-      WHERE NoProduksi = @NoProduksi;
-
-      DELETE FROM dbo.InjectProduksiInputMixer
-      WHERE NoProduksi = @NoProduksi;
-
-      DELETE FROM dbo.InjectProduksiInputGilingan
-      WHERE NoProduksi = @NoProduksi;
-
-      DELETE FROM dbo.InjectProduksiInputFurnitureWIP
-      WHERE NoProduksi = @NoProduksi;
+      DELETE FROM dbo.InjectProduksiInputMixerPartial WHERE NoProduksi = @NoProduksi;
+      DELETE FROM dbo.InjectProduksiInputGilinganPartial WHERE NoProduksi = @NoProduksi;
+      DELETE FROM dbo.InjectProduksiInputFurnitureWIPPartial WHERE NoProduksi = @NoProduksi;
+      DELETE FROM dbo.InjectProduksiInputBroker WHERE NoProduksi = @NoProduksi;
+      DELETE FROM dbo.InjectProduksiInputMixer WHERE NoProduksi = @NoProduksi;
+      DELETE FROM dbo.InjectProduksiInputGilingan WHERE NoProduksi = @NoProduksi;
+      DELETE FROM dbo.InjectProduksiInputFurnitureWIP WHERE NoProduksi = @NoProduksi;
 
       ---------------------------------------------------------
-      -- E) RESET DATEUSAGE label input (FULL tables)
+      -- RESET DATEUSAGE
       ---------------------------------------------------------
-      UPDATE br
-      SET br.DateUsage = NULL
-      FROM dbo.Broker_d AS br
-      JOIN @BrokerKeys k
-        ON k.NoBroker = br.NoBroker
-       AND k.NoSak    = br.NoSak;
+      UPDATE b
+      SET b.DateUsage = NULL
+      FROM dbo.Broker_d b
+      JOIN @BrokerKeys k ON k.NoBroker = b.NoBroker AND k.NoSak = b.NoSak;
 
       UPDATE m
       SET m.DateUsage = NULL
-      FROM dbo.Mixer_d AS m
-      JOIN @MixerKeys k
-        ON k.NoMixer = m.NoMixer
-       AND k.NoSak   = m.NoSak;
+      FROM dbo.Mixer_d m
+      JOIN @MixerKeys k ON k.NoMixer = m.NoMixer AND k.NoSak = m.NoSak;
 
       UPDATE g
       SET g.DateUsage = NULL
-      FROM dbo.Gilingan AS g
-      JOIN @GilinganKeys k
-        ON k.NoGilingan = g.NoGilingan;
+      FROM dbo.Gilingan g
+      JOIN @GilinganKeys k ON k.NoGilingan = g.NoGilingan;
 
       UPDATE fw
       SET fw.DateUsage = NULL,
@@ -925,32 +945,37 @@ async function deleteInjectProduksi(noProduksi) {
               FROM dbo.FurnitureWIPPartial p
               WHERE p.NoFurnitureWIP = fw.NoFurnitureWIP
             ) THEN 1 ELSE 0 END
-      FROM dbo.FurnitureWIP AS fw
-      JOIN @FWIPKeys k
-        ON k.NoFurnitureWIP = fw.NoFurnitureWIP;
+      FROM dbo.FurnitureWIP fw
+      JOIN @FWIPKeys k ON k.NoFurnitureWIP = fw.NoFurnitureWIP;
 
       ---------------------------------------------------------
-      -- F) TERAKHIR: HAPUS HEADER
+      -- DELETE HEADER
       ---------------------------------------------------------
       DELETE FROM dbo.InjectProduksi_h
       WHERE NoProduksi = @NoProduksi;
     `;
 
-    await rq.query(sqlDelete);
+    const res = await rq.query(sqlDelete);
+
+    // throw notFound jika header tidak ada
+    if (res.rowsAffected?.[res.rowsAffected.length - 1] === 0) {
+      throw notFound(`NoProduksi tidak ditemukan: ${noProduksi}`);
+    }
 
     await tx.commit();
-    return { success: true };
+    return { success: true, noProduksi };
   } catch (e) {
-    try { await tx.rollback(); } catch (_) {}
+    try {
+      await tx.rollback();
+    } catch (_) {}
     throw e;
   }
 }
 
-
 async function fetchInputs(noProduksi) {
   const pool = await poolPromise;
   const req = pool.request();
-  req.input('no', sql.VarChar(50), noProduksi);
+  req.input("no", sql.VarChar(50), noProduksi);
 
   const q = `
     /* ===================== [1] MAIN INPUTS (UNION) ===================== */
@@ -1156,10 +1181,10 @@ async function fetchInputs(noProduksi) {
 
   const rs = await req.query(q);
 
-  const mainRows   = rs.recordsets?.[0] || [];
-  const fwipPart   = rs.recordsets?.[1] || [];
+  const mainRows = rs.recordsets?.[0] || [];
+  const fwipPart = rs.recordsets?.[1] || [];
   const brokerPart = rs.recordsets?.[2] || [];
-  const mixerPart  = rs.recordsets?.[3] || [];
+  const mixerPart = rs.recordsets?.[3] || [];
   const gilingPart = rs.recordsets?.[4] || [];
 
   const out = {
@@ -1188,7 +1213,7 @@ async function fetchInputs(noProduksi) {
     };
 
     switch (r.Src) {
-      case 'fwip':
+      case "fwip":
         out.furnitureWip.push({
           noFurnitureWip: r.Ref1,
           pcs: r.Pcs ?? null,
@@ -1196,7 +1221,7 @@ async function fetchInputs(noProduksi) {
         });
         break;
 
-      case 'broker':
+      case "broker":
         out.broker.push({
           noBroker: r.Ref1,
           noSak: r.Ref2,
@@ -1204,7 +1229,7 @@ async function fetchInputs(noProduksi) {
         });
         break;
 
-      case 'mixer':
+      case "mixer":
         out.mixer.push({
           noMixer: r.Ref1,
           noSak: r.Ref2,
@@ -1212,16 +1237,16 @@ async function fetchInputs(noProduksi) {
         });
         break;
 
-      case 'gilingan':
+      case "gilingan":
         out.gilingan.push({
           noGilingan: r.Ref1,
           ...base,
         });
         break;
 
-      case 'material':
+      case "material":
         out.cabinetMaterial.push({
-          idCabinetMaterial: r.Ref1,     // kalau mau int: Number(r.Ref1)
+          idCabinetMaterial: r.Ref1, // kalau mau int: Number(r.Ref1)
           pcs: r.Pcs ?? null,
           namaJenis: r.NamaJenis ?? null,
           namaUom: r.NamaUOM ?? null,
@@ -1302,7 +1327,7 @@ async function validateLabel(labelCode) {
 
   const camelize = (val) => {
     if (Array.isArray(val)) return val.map(camelize);
-    if (val && typeof val === 'object') {
+    if (val && typeof val === "object") {
       const o = {};
       for (const [k, v] of Object.entries(val)) o[toCamel(k)] = camelize(v);
       return o;
@@ -1311,21 +1336,22 @@ async function validateLabel(labelCode) {
   };
 
   // ---------- normalize label ----------
-  const raw = String(labelCode || '').trim();
-  if (!raw) throw new Error('Label code is required');
+  const raw = String(labelCode || "").trim();
+  if (!raw) throw new Error("Label code is required");
 
   // prefix rule: untuk BF. (3 char), lainnya 2 char (mis: D., H., V., BB.)
-  let prefix = '';
-  if (raw.substring(0, 3).toUpperCase() === 'BF.') prefix = 'BF.';
-  else if (raw.substring(0, 3).toUpperCase() === 'BB.') prefix = 'BB.'; // ✅ FWIP (umum)
+  let prefix = "";
+  if (raw.substring(0, 3).toUpperCase() === "BF.") prefix = "BF.";
+  else if (raw.substring(0, 3).toUpperCase() === "BB.")
+    prefix = "BB."; // ✅ FWIP (umum)
   else prefix = raw.substring(0, 2).toUpperCase();
 
-  let query = '';
-  let tableName = '';
+  let query = "";
+  let tableName = "";
 
   async function run(label) {
     const req = pool.request();
-    req.input('labelCode', sql.VarChar(50), label);
+    req.input("labelCode", sql.VarChar(50), label);
     const rs = await req.query(query);
     const rows = rs.recordset || [];
     return camelize({
@@ -1341,10 +1367,10 @@ async function validateLabel(labelCode) {
     // =========================================================
     // BB. = FurnitureWIP / FurnitureWIPPartial (Inject pakai ini juga)
     // =========================================================
-    case 'BB.': {
+    case "BB.": {
       // 1) coba FULL dulu: FurnitureWIP.NoFurnitureWIP (DateUsage IS NULL)
       {
-        tableName = 'FurnitureWIP';
+        tableName = "FurnitureWIP";
         query = `
         ;WITH PartialSum AS (
           SELECT
@@ -1386,7 +1412,7 @@ async function validateLabel(labelCode) {
 
       // 2) kalau tidak ketemu full, coba PARTIAL: FurnitureWIPPartial.NoFurnitureWIPPartial
       {
-        tableName = 'FurnitureWIPPartial';
+        tableName = "FurnitureWIPPartial";
         query = `
           SELECT
             fwp.NoFurnitureWIPPartial,
@@ -1422,8 +1448,8 @@ async function validateLabel(labelCode) {
     // =========================================================
     // D. = Broker_d (sisa berat = Berat - SUM(BrokerPartial))
     // =========================================================
-    case 'D.': {
-      tableName = 'Broker_d';
+    case "D.": {
+      tableName = "Broker_d";
       query = `
         ;WITH PartialSum AS (
           SELECT
@@ -1459,8 +1485,8 @@ async function validateLabel(labelCode) {
     // =========================================================
     // H. = Mixer_d (sisa berat = Berat - SUM(MixerPartial))
     // =========================================================
-    case 'H.': {
-      tableName = 'Mixer_d';
+    case "H.": {
+      tableName = "Mixer_d";
       query = `
         ;WITH PartialSum AS (
           SELECT
@@ -1497,8 +1523,8 @@ async function validateLabel(labelCode) {
     // =========================================================
     // V. = Gilingan (sisa berat = Berat - SUM(GilinganPartial))
     // =========================================================
-    case 'V.': {
-      tableName = 'Gilingan';
+    case "V.": {
+      tableName = "Gilingan";
       query = `
         ;WITH PartialAgg AS (
           SELECT gp.NoGilingan, SUM(ISNULL(gp.Berat, 0)) AS PartialBerat
@@ -1529,11 +1555,10 @@ async function validateLabel(labelCode) {
 
     default:
       throw new Error(
-        `Invalid prefix: ${prefix}. Valid prefixes (Inject): BB., D., H., V.`
+        `Invalid prefix: ${prefix}. Valid prefixes (Inject): BB., D., H., V.`,
       );
   }
 }
-
 
 /**
  * Single entry: create NEW partials + link them, and attach EXISTING inputs.
@@ -1558,51 +1583,61 @@ async function validateLabel(labelCode) {
  * Support: partials (existing + new)
  */
 async function upsertInputsAndPartials(noProduksi, payload, ctx) {
-  const no = String(noProduksi || '').trim();
-  if (!no) throw badReq('noProduksi wajib diisi');
+  const no = String(noProduksi || "").trim();
+  if (!no) throw badReq("noProduksi wajib diisi");
 
-  const body = payload && typeof payload === 'object' ? payload : {};
+  const body = payload && typeof payload === "object" ? payload : {};
 
   // ✅ ctx wajib (audit)
   const actorIdNum = Number(ctx?.actorId);
   if (!Number.isFinite(actorIdNum) || actorIdNum <= 0) {
-    throw badReq('ctx.actorId wajib. Controller harus inject dari token.');
+    throw badReq("ctx.actorId wajib. Controller harus inject dari token.");
   }
 
-  const actorUsername = String(ctx?.actorUsername || '').trim() || 'system';
+  const actorUsername = String(ctx?.actorUsername || "").trim() || "system";
 
   // requestId wajib string (kalau kosong, nanti di applyAuditContext dibuat fallback juga)
-  const requestId = String(ctx?.requestId || '').trim();
+  const requestId = String(ctx?.requestId || "").trim();
 
   // ✅ forward ctx yang sudah dinormalisasi ke shared service
-  return sharedInputService.upsertInputsAndPartials('injectProduksi', no, body, {
-    actorId: Math.trunc(actorIdNum),
-    actorUsername,
-    requestId,
-  });
+  return sharedInputService.upsertInputsAndPartials(
+    "injectProduksi",
+    no,
+    body,
+    {
+      actorId: Math.trunc(actorIdNum),
+      actorUsername,
+      requestId,
+    },
+  );
 }
 
 async function deleteInputsAndPartials(noProduksi, payload, ctx) {
-  const no = String(noProduksi || '').trim();
-  if (!no) throw badReq('noProduksi wajib diisi');
+  const no = String(noProduksi || "").trim();
+  if (!no) throw badReq("noProduksi wajib diisi");
 
-  const body = payload && typeof payload === 'object' ? payload : {};
+  const body = payload && typeof payload === "object" ? payload : {};
 
   // ✅ Validate audit context
   const actorIdNum = Number(ctx?.actorId);
   if (!Number.isFinite(actorIdNum) || actorIdNum <= 0) {
-    throw badReq('ctx.actorId wajib. Controller harus inject dari token.');
+    throw badReq("ctx.actorId wajib. Controller harus inject dari token.");
   }
 
-  const actorUsername = String(ctx?.actorUsername || '').trim() || 'system';
-  const requestId = String(ctx?.requestId || '').trim();
+  const actorUsername = String(ctx?.actorUsername || "").trim() || "system";
+  const requestId = String(ctx?.requestId || "").trim();
 
   // ✅ Forward to shared service
-  return sharedInputService.deleteInputsAndPartials('injectProduksi', no, body, {
-    actorId: Math.trunc(actorIdNum),
-    actorUsername,
-    requestId,
-  });
+  return sharedInputService.deleteInputsAndPartials(
+    "injectProduksi",
+    no,
+    body,
+    {
+      actorId: Math.trunc(actorIdNum),
+      actorUsername,
+      requestId,
+    },
+  );
 }
 
 module.exports = {
@@ -1616,5 +1651,5 @@ module.exports = {
   fetchInputs,
   validateLabel,
   upsertInputsAndPartials,
-  deleteInputsAndPartials
+  deleteInputsAndPartials,
 };

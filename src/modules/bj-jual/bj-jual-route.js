@@ -1,43 +1,32 @@
 // routes/bj-jual-route.js
-const express = require('express');
+const express = require("express");
 const router = express.Router();
 
-const verifyToken = require('../../core/middleware/verify-token');
-const bjJualController = require('./bj-jual-controller');
+const verifyToken = require("../../core/middleware/verify-token");
+const bjJualController = require("./bj-jual-controller");
 
-router.get('/', verifyToken, bjJualController.getAllBJJual);
-router.post('/', verifyToken, bjJualController.createBJJual);
-router.put(
-  '/:noBJJual',
-  verifyToken,
-  bjJualController.updateBJJual
-);
+router.get("/", verifyToken, bjJualController.getAllBJJual);
+router.post("/", verifyToken, bjJualController.createBJJual);
+router.put("/:noBJJual", verifyToken, bjJualController.updateBJJual);
 
-router.delete(
-  '/:noBJJual',
-  verifyToken,
-  bjJualController.deleteBJJual
-);
+router.delete("/:noBJJual", verifyToken, bjJualController.deleteBJJual);
 
 router.get(
-  '/:noBJJual/inputs',
+  "/:noBJJual/inputs",
   verifyToken,
-  bjJualController.getInputsByNoBJJual
+  bjJualController.getInputsByNoBJJual,
 );
 
 router.post(
-  '/:noBJJual/inputs',
+  "/:noBJJual/inputs",
   verifyToken,
-  bjJualController.upsertInputsAndPartials
+  bjJualController.upsertInputsAndPartials,
 );
-
 
 router.delete(
-  '/:noBJJual/inputs',
+  "/:noBJJual/inputs",
   verifyToken,
-  bjJualController.deleteInputsAndPartials
+  bjJualController.deleteInputsAndPartials,
 );
-
-
 
 module.exports = router;

@@ -1,5 +1,5 @@
 // core/utils/get-user-permissions.js
-const { sql, poolPromise } = require('../config/db');
+const { sql, poolPromise } = require("../config/db");
 
 /**
  * Ambil semua permission (NoPermission) berdasarkan IdUsername.
@@ -10,7 +10,7 @@ async function getUserPermissions(idUsername) {
 
   const pool = await poolPromise;
   const request = pool.request();
-  request.input('IdUsername', sql.Int, idUsername);
+  request.input("IdUsername", sql.Int, idUsername);
 
   const query = `
     SELECT DISTINCT gp.NoPermission
@@ -22,7 +22,7 @@ async function getUserPermissions(idUsername) {
   `;
 
   const result = await request.query(query);
-  return result.recordset.map(r => r.NoPermission);
+  return result.recordset.map((r) => r.NoPermission);
 }
 
 module.exports = getUserPermissions;

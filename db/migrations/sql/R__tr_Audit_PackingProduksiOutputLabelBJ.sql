@@ -1,10 +1,10 @@
-/* ===== [dbo].[tr_Audit_PackingProduksiOutputLabelBJ] ON [dbo].[PackingProduksiOutputLabelBJ] ===== */
+/* ===== [dbo].[tr_Audit_PackingProduksiOutputLabelBJ]
+         ON [dbo].[PackingProduksiOutputLabelBJ] ===== */
 -- =============================================
 -- TRIGGER: tr_Audit_PackingProduksiOutputLabelBJ
--- AFTER INSERT, UPDATE, DELETE
--- Actor: SESSION_CONTEXT('actor_id') fallback SESSION_CONTEXT('actor') fallback SUSER_SNAME()
--- RequestId: SESSION_CONTEXT('request_id')
--- ✅ PK: NoBJ (parent document)
+-- PK     : NoBJ + NoPacking
+-- MODE   : DETAIL (1 row = 1 audit)
+-- EXTRA  : Join BarangJadi untuk ambil Pcs
 -- =============================================
 CREATE OR ALTER TRIGGER [dbo].[tr_Audit_PackingProduksiOutputLabelBJ]
 ON [dbo].[PackingProduksiOutputLabelBJ]
@@ -24,103 +24,109 @@ BEGIN
     CAST(SESSION_CONTEXT(N'request_id') AS nvarchar(64));
 
   /* =========================================================
-     ✅ Helper: PK menggunakan NoBJ (parent)
-  ========================================================= */
-  DECLARE @pk nvarchar(max);
-
-  ;WITH x AS (
-    SELECT NoBJ FROM inserted
-    UNION
-    SELECT NoBJ FROM deleted
+     1) INSERT-only => PRODUCE (DETAIL)
+     ========================================================= */
+  ;WITH insOnly AS (
+    SELECT
+      i.NoPacking,
+      i.NoBJ,
+      bj.Pcs
+    FROM inserted i
+    LEFT JOIN deleted d
+      ON d.NoPacking = i.NoPacking
+     AND d.NoBJ      = i.NoBJ
+    LEFT JOIN dbo.BarangJadi bj
+      ON bj.NoBJ = i.NoBJ
+    WHERE d.NoPacking IS NULL
   )
+  INSERT dbo.AuditTrail
+    (Action, TableName, Actor, RequestId, PK, OldData, NewData)
   SELECT
-    @pk =
-      CASE
-        WHEN COUNT(DISTINCT NoBJ) = 1
-          THEN CONCAT('{"NoBJ":"', MAX(NoBJ), '"}')
-        ELSE
-          CONCAT(
-            '{"NoBJList":',
-            (SELECT DISTINCT NoBJ FROM x FOR JSON PATH),
-            '}'
-          )
-      END
-  FROM x;
+    'PRODUCE',
+    'PackingProduksiOutputLabelBJ',
+    @actor,
+    @rid,
+    (SELECT
+       i.NoBJ,
+       i.NoPacking
+     FOR JSON PATH, WITHOUT_ARRAY_WRAPPER),
+    NULL,
+    (SELECT
+       i.NoPacking,
+       i.NoBJ,
+       i.Pcs
+     FOR JSON PATH, WITHOUT_ARRAY_WRAPPER)
+  FROM insOnly i;
 
-  /* =====================
-     INSERT (1 row audit)
-  ===================== */
-  IF EXISTS (SELECT 1 FROM inserted) AND NOT EXISTS (SELECT 1 FROM deleted)
-  BEGIN
-    INSERT dbo.AuditTrail(Action, TableName, Actor, RequestId, PK, OldData, NewData)
+  /* =========================================================
+     2) DELETE-only => UNPRODUCE (DETAIL)
+     ========================================================= */
+  ;WITH delOnly AS (
     SELECT
-      'INSERT',
-      'PackingProduksiOutputLabelBJ',
-      @actor,
-      @rid,
-      @pk,
-      NULL,
-      (
-        SELECT
-          i.NoPacking,
-          i.NoBJ
-        FROM inserted i
-        ORDER BY i.NoBJ, i.NoPacking
-        FOR JSON PATH
-      );
-  END
+      d.NoPacking,
+      d.NoBJ,
+      bj.Pcs
+    FROM deleted d
+    LEFT JOIN inserted i
+      ON i.NoPacking = d.NoPacking
+     AND i.NoBJ      = d.NoBJ
+    LEFT JOIN dbo.BarangJadi bj
+      ON bj.NoBJ = d.NoBJ
+    WHERE i.NoPacking IS NULL
+  )
+  INSERT dbo.AuditTrail
+    (Action, TableName, Actor, RequestId, PK, OldData, NewData)
+  SELECT
+    'UNPRODUCE',
+    'PackingProduksiOutputLabelBJ',
+    @actor,
+    @rid,
+    (SELECT
+       d.NoBJ,
+       d.NoPacking
+     FOR JSON PATH, WITHOUT_ARRAY_WRAPPER),
+    (SELECT
+       d.NoPacking,
+       d.NoBJ,
+       d.Pcs
+     FOR JSON PATH, WITHOUT_ARRAY_WRAPPER),
+    NULL
+  FROM delOnly d;
 
-  /* =====================
-     DELETE (1 row audit)
-  ===================== */
-  IF EXISTS (SELECT 1 FROM deleted) AND NOT EXISTS (SELECT 1 FROM inserted)
-  BEGIN
-    INSERT dbo.AuditTrail(Action, TableName, Actor, RequestId, PK, OldData, NewData)
-    SELECT
-      'DELETE',
-      'PackingProduksiOutputLabelBJ',
-      @actor,
-      @rid,
-      @pk,
-      (
-        SELECT
-          d.NoPacking,
-          d.NoBJ
-        FROM deleted d
-        ORDER BY d.NoBJ, d.NoPacking
-        FOR JSON PATH
-      ),
-      NULL;
-  END
-
-  /* =====================
-     UPDATE (1 row audit)
-  ===================== */
+  /* =========================================================
+     3) UPDATE => UPDATE (DETAIL)
+     ========================================================= */
   IF EXISTS (SELECT 1 FROM inserted) AND EXISTS (SELECT 1 FROM deleted)
   BEGIN
-    INSERT dbo.AuditTrail(Action, TableName, Actor, RequestId, PK, OldData, NewData)
+    INSERT dbo.AuditTrail
+      (Action, TableName, Actor, RequestId, PK, OldData, NewData)
     SELECT
       'UPDATE',
       'PackingProduksiOutputLabelBJ',
       @actor,
       @rid,
-      @pk,
-      (
-        SELECT
-          d.NoPacking,
-          d.NoBJ
-        FROM deleted d
-        ORDER BY d.NoBJ, d.NoPacking
-        FOR JSON PATH
-      ),
-      (
-        SELECT
-          i.NoPacking,
-          i.NoBJ
-        FROM inserted i
-        ORDER BY i.NoBJ, i.NoPacking
-        FOR JSON PATH
-      );
+      (SELECT
+         i.NoBJ,
+         i.NoPacking
+       FOR JSON PATH, WITHOUT_ARRAY_WRAPPER),
+      (SELECT
+         d.NoPacking,
+         d.NoBJ,
+         bjOld.Pcs
+       FOR JSON PATH, WITHOUT_ARRAY_WRAPPER),
+      (SELECT
+         i.NoPacking,
+         i.NoBJ,
+         bjNew.Pcs
+       FOR JSON PATH, WITHOUT_ARRAY_WRAPPER)
+    FROM inserted i
+    JOIN deleted d
+      ON d.NoPacking = i.NoPacking
+     AND d.NoBJ      = i.NoBJ
+    LEFT JOIN dbo.BarangJadi bjOld
+      ON bjOld.NoBJ = d.NoBJ
+    LEFT JOIN dbo.BarangJadi bjNew
+      ON bjNew.NoBJ = i.NoBJ;
   END
 END;
 GO

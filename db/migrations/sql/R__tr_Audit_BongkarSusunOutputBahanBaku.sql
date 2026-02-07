@@ -1,13 +1,13 @@
-/* ===== [dbo].[tr_Audit_BongkarSusunOutputBroker]
-         ON [dbo].[BongkarSusunOutputBroker] ===== */
+/* ===== [dbo].[tr_Audit_BongkarSusunOutputBahanBaku]
+         ON [dbo].[BongkarSusunOutputBahanBaku] ===== */
 -- =============================================
--- TRIGGER: tr_Audit_BongkarSusunOutputBroker
--- PK     : NoBroker + NoBongkarSusun
+-- TRIGGER: tr_Audit_BongkarSusunOutputBahanBaku
+-- PK     : NoBahanBaku + NoPallet + NoBongkarSusun
 -- MODE   : AGGREGATED
--- EXTRA  : Join Broker_d untuk ambil Berat
+-- EXTRA  : Join BahanBaku_d untuk ambil Berat
 -- =============================================
-CREATE OR ALTER TRIGGER [dbo].[tr_Audit_BongkarSusunOutputBroker]
-ON [dbo].[BongkarSusunOutputBroker]
+CREATE OR ALTER TRIGGER [dbo].[tr_Audit_BongkarSusunOutputBahanBaku]
+ON [dbo].[BongkarSusunOutputBahanBaku]
 AFTER INSERT, DELETE
 AS
 BEGIN
@@ -33,30 +33,33 @@ BEGIN
             (Action, TableName, Actor, RequestId, PK, OldData, NewData)
         SELECT
             'PRODUCE',
-            'BongkarSusunOutputBroker',
+            'BongkarSusunOutputBahanBaku',
             @actor,
             @rid,
             (
                 SELECT
-                    i.NoBroker,
+                    i.NoBahanBaku,
+                    i.NoPallet,
                     i.NoBongkarSusun
                 FOR JSON PATH, WITHOUT_ARRAY_WRAPPER
             ),
             NULL,
             (
                 SELECT
-                    i.NoBroker,
+                    i.NoBahanBaku,
+                    i.NoPallet,
                     i.NoBongkarSusun,
                     i.NoSak,
-                    bd.Berat
+                    bb.Berat
                 FROM inserted i
-                LEFT JOIN dbo.Broker_d bd
-                       ON bd.NoBroker = i.NoBroker
-                      AND bd.NoSak    = i.NoSak
+                LEFT JOIN dbo.BahanBaku_d bb
+                       ON bb.NoBahanBaku = i.NoBahanBaku
+                      AND bb.NoPallet    = i.NoPallet
+                      AND bb.NoSak       = i.NoSak
                 FOR JSON PATH
             )
         FROM inserted i
-        GROUP BY i.NoBroker, i.NoBongkarSusun;
+        GROUP BY i.NoBahanBaku, i.NoPallet, i.NoBongkarSusun;
     END;
 
     /* =========================================================
@@ -69,30 +72,33 @@ BEGIN
             (Action, TableName, Actor, RequestId, PK, OldData, NewData)
         SELECT
             'UNPRODUCE',
-            'BongkarSusunOutputBroker',
+            'BongkarSusunOutputBahanBaku',
             @actor,
             @rid,
             (
                 SELECT
-                    d.NoBroker,
+                    d.NoBahanBaku,
+                    d.NoPallet,
                     d.NoBongkarSusun
                 FOR JSON PATH, WITHOUT_ARRAY_WRAPPER
             ),
             (
                 SELECT
-                    d.NoBroker,
+                    d.NoBahanBaku,
+                    d.NoPallet,
                     d.NoBongkarSusun,
                     d.NoSak,
-                    bd.Berat
+                    bb.Berat
                 FROM deleted d
-                LEFT JOIN dbo.Broker_d bd
-                       ON bd.NoBroker = d.NoBroker
-                      AND bd.NoSak    = d.NoSak
+                LEFT JOIN dbo.BahanBaku_d bb
+                       ON bb.NoBahanBaku = d.NoBahanBaku
+                      AND bb.NoPallet    = d.NoPallet
+                      AND bb.NoSak       = d.NoSak
                 FOR JSON PATH
             ),
             NULL
         FROM deleted d
-        GROUP BY d.NoBroker, d.NoBongkarSusun;
+        GROUP BY d.NoBahanBaku, d.NoPallet, d.NoBongkarSusun;
     END;
 END;
 GO

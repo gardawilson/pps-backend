@@ -1,131 +1,147 @@
-SET ANSI_NULLS ON;
-GO
-SET QUOTED_IDENTIFIER ON;
-GO
-
-/* ===== [dbo].[tr_Audit_BongkarSusunOutputCrusher] ON [dbo].[BongkarSusunOutputCrusher] ===== */
+/* ===== [dbo].[tr_Audit_BongkarSusunOutputCrusher]
+         ON [dbo].[BongkarSusunOutputCrusher] ===== */
 -- =============================================
 -- TRIGGER: tr_Audit_BongkarSusunOutputCrusher
--- AFTER INSERT, UPDATE, DELETE
--- Actor: SESSION_CONTEXT('actor_id') fallback SESSION_CONTEXT('actor') fallback SUSER_SNAME()
--- RequestId: SESSION_CONTEXT('request_id')
--- ✅ PK: NoCrusher (parent document)
+-- PK     : NoCrusher + NoBongkarSusun
+-- MODE   : DETAIL (1 row = 1 audit)
+-- EXTRA  : Join Crusher untuk ambil Berat
 -- =============================================
 CREATE OR ALTER TRIGGER [dbo].[tr_Audit_BongkarSusunOutputCrusher]
 ON [dbo].[BongkarSusunOutputCrusher]
 AFTER INSERT, UPDATE, DELETE
 AS
 BEGIN
-  SET NOCOUNT ON;
+    SET NOCOUNT ON;
 
-  DECLARE @actor nvarchar(128) =
-    COALESCE(
-      CONVERT(nvarchar(128), TRY_CONVERT(int, SESSION_CONTEXT(N'actor_id'))),
-      CAST(SESSION_CONTEXT(N'actor') AS nvarchar(128)),
-      SUSER_SNAME()
-    );
+    DECLARE @actor NVARCHAR(128) =
+        COALESCE(
+            CONVERT(NVARCHAR(128), TRY_CONVERT(INT, SESSION_CONTEXT(N'actor_id'))),
+            CAST(SESSION_CONTEXT(N'actor') AS NVARCHAR(128)),
+            SUSER_SNAME()
+        );
 
-  DECLARE @rid nvarchar(64) =
-    CAST(SESSION_CONTEXT(N'request_id') AS nvarchar(64));
+    DECLARE @rid NVARCHAR(64) =
+        CAST(SESSION_CONTEXT(N'request_id') AS NVARCHAR(64));
 
-  /* =========================================================
-     ✅ Helper: PK ringkas (NoCrusher tunggal / list)
-  ========================================================= */
-  DECLARE @pk nvarchar(max);
-
-  ;WITH x AS (
-    SELECT NoCrusher FROM inserted
-    UNION
-    SELECT NoCrusher FROM deleted
-  )
-  SELECT
-    @pk =
-      CASE
-        WHEN COUNT(DISTINCT NoCrusher) = 1
-          THEN CONCAT('{"NoCrusher":"', MAX(NoCrusher), '"}')
-        ELSE
-          CONCAT(
-            '{"NoCrusherList":',
-            (SELECT DISTINCT NoCrusher FROM x FOR JSON PATH),
-            '}'
-          )
-      END
-  FROM x;
-
-  /* =====================
-     INSERT (1 row audit)
-  ===================== */
-  IF EXISTS (SELECT 1 FROM inserted) AND NOT EXISTS (SELECT 1 FROM deleted)
-  BEGIN
-    INSERT dbo.AuditTrail(Action, TableName, Actor, RequestId, PK, OldData, NewData)
-    SELECT
-      'INSERT',
-      'BongkarSusunOutputCrusher',
-      @actor,
-      @rid,
-      @pk,
-      NULL,
-      (
+    /* =========================================================
+       1) INSERT-only => PRODUCE (DETAIL)
+       ========================================================= */
+    ;WITH insOnly AS (
         SELECT
-          i.NoBongkarSusun,
-          i.NoCrusher
+            i.NoCrusher,
+            i.NoBongkarSusun,
+            c.Berat
         FROM inserted i
-        ORDER BY i.NoCrusher, i.NoBongkarSusun
-        FOR JSON PATH
-      );
-  END
-
-  /* =====================
-     DELETE (1 row audit)
-  ===================== */
-  IF EXISTS (SELECT 1 FROM deleted) AND NOT EXISTS (SELECT 1 FROM inserted)
-  BEGIN
-    INSERT dbo.AuditTrail(Action, TableName, Actor, RequestId, PK, OldData, NewData)
+        LEFT JOIN deleted d
+               ON d.NoCrusher        = i.NoCrusher
+              AND d.NoBongkarSusun  = i.NoBongkarSusun
+        LEFT JOIN dbo.Crusher c
+               ON c.NoCrusher = i.NoCrusher
+        WHERE d.NoCrusher IS NULL
+    )
+    INSERT dbo.AuditTrail
+        (Action, TableName, Actor, RequestId, PK, OldData, NewData)
     SELECT
-      'DELETE',
-      'BongkarSusunOutputCrusher',
-      @actor,
-      @rid,
-      @pk,
-      (
-        SELECT
-          d.NoBongkarSusun,
-          d.NoCrusher
-        FROM deleted d
-        ORDER BY d.NoCrusher, d.NoBongkarSusun
-        FOR JSON PATH
-      ),
-      NULL;
-  END
+        'PRODUCE',
+        'BongkarSusunOutputCrusher',
+        @actor,
+        @rid,
+        (
+            SELECT
+                i.NoCrusher,
+                i.NoBongkarSusun
+            FOR JSON PATH, WITHOUT_ARRAY_WRAPPER
+        ),
+        NULL,
+        (
+            SELECT
+                i.NoCrusher,
+                i.NoBongkarSusun,
+                i.Berat
+            FOR JSON PATH, WITHOUT_ARRAY_WRAPPER
+        )
+    FROM insOnly i;
 
-  /* =====================
-     UPDATE (1 row audit)
-  ===================== */
-  IF EXISTS (SELECT 1 FROM inserted) AND EXISTS (SELECT 1 FROM deleted)
-  BEGIN
-    INSERT dbo.AuditTrail(Action, TableName, Actor, RequestId, PK, OldData, NewData)
-    SELECT
-      'UPDATE',
-      'BongkarSusunOutputCrusher',
-      @actor,
-      @rid,
-      @pk,
-      (
+    /* =========================================================
+       2) DELETE-only => UNPRODUCE (DETAIL)
+       ========================================================= */
+    ;WITH delOnly AS (
         SELECT
-          d.NoBongkarSusun,
-          d.NoCrusher
+            d.NoCrusher,
+            d.NoBongkarSusun,
+            c.Berat
         FROM deleted d
-        ORDER BY d.NoCrusher, d.NoBongkarSusun
-        FOR JSON PATH
-      ),
-      (
+        LEFT JOIN inserted i
+               ON i.NoCrusher        = d.NoCrusher
+              AND i.NoBongkarSusun  = d.NoBongkarSusun
+        LEFT JOIN dbo.Crusher c
+               ON c.NoCrusher = d.NoCrusher
+        WHERE i.NoCrusher IS NULL
+    )
+    INSERT dbo.AuditTrail
+        (Action, TableName, Actor, RequestId, PK, OldData, NewData)
+    SELECT
+        'UNPRODUCE',
+        'BongkarSusunOutputCrusher',
+        @actor,
+        @rid,
+        (
+            SELECT
+                d.NoCrusher,
+                d.NoBongkarSusun
+            FOR JSON PATH, WITHOUT_ARRAY_WRAPPER
+        ),
+        (
+            SELECT
+                d.NoCrusher,
+                d.NoBongkarSusun,
+                d.Berat
+            FOR JSON PATH, WITHOUT_ARRAY_WRAPPER
+        ),
+        NULL
+    FROM delOnly d;
+
+    /* =========================================================
+       3) UPDATE => UPDATE (DETAIL)
+       ========================================================= */
+    IF EXISTS (SELECT 1 FROM inserted)
+       AND EXISTS (SELECT 1 FROM deleted)
+    BEGIN
+        INSERT dbo.AuditTrail
+            (Action, TableName, Actor, RequestId, PK, OldData, NewData)
         SELECT
-          i.NoBongkarSusun,
-          i.NoCrusher
+            'UPDATE',
+            'BongkarSusunOutputCrusher',
+            @actor,
+            @rid,
+            (
+                SELECT
+                    i.NoCrusher,
+                    i.NoBongkarSusun
+                FOR JSON PATH, WITHOUT_ARRAY_WRAPPER
+            ),
+            (
+                SELECT
+                    d.NoCrusher,
+                    d.NoBongkarSusun,
+                    cOld.Berat
+                FOR JSON PATH, WITHOUT_ARRAY_WRAPPER
+            ),
+            (
+                SELECT
+                    i.NoCrusher,
+                    i.NoBongkarSusun,
+                    cNew.Berat
+                FOR JSON PATH, WITHOUT_ARRAY_WRAPPER
+            )
         FROM inserted i
-        ORDER BY i.NoCrusher, i.NoBongkarSusun
-        FOR JSON PATH
-      );
-  END
+        JOIN deleted d
+             ON d.NoCrusher        = i.NoCrusher
+            AND d.NoBongkarSusun  = i.NoBongkarSusun
+        LEFT JOIN dbo.Crusher cOld
+             ON cOld.NoCrusher = d.NoCrusher
+        LEFT JOIN dbo.Crusher cNew
+             ON cNew.NoCrusher = i.NoCrusher;
+    END
 END;
 GO

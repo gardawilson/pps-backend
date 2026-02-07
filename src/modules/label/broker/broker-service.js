@@ -1,21 +1,20 @@
 // services/broker-service.js
-const { sql, poolPromise } = require('../../../core/config/db');
+const { sql, poolPromise } = require("../../../core/config/db");
 const {
   getBlokLokasiFromKodeProduksi,
-} = require('../../../core/shared/mesin-location-helper'); 
+} = require("../../../core/shared/mesin-location-helper");
 
 const {
   resolveEffectiveDateForCreate,
   toDateOnly,
-  assertNotLocked,     
+  assertNotLocked,
   formatYMD,
-} = require('../../../core/shared/tutup-transaksi-guard');
+} = require("../../../core/shared/tutup-transaksi-guard");
 
-
-const { generateNextCode } = require('../../../core/utils/sequence-code-helper'); 
-const { badReq, conflict } = require('../../../core/utils/http-error'); 
-
-
+const {
+  generateNextCode,
+} = require("../../../core/utils/sequence-code-helper");
+const { badReq, conflict } = require("../../../core/utils/http-error");
 
 // GET all header Broker with pagination & search (mirror of Washing.getAll)
 exports.getAll = async ({ page, limit, search }) => {
@@ -85,7 +84,7 @@ exports.getAll = async ({ page, limit, search }) => {
                OR m.NamaMesin LIKE @search
                OR bsob.NoBongkarSusun LIKE @search
              )`
-          : ''
+          : ""
       }
       AND EXISTS (
         SELECT 1 
@@ -127,7 +126,7 @@ exports.getAll = async ({ page, limit, search }) => {
                OR m.NamaMesin LIKE @search
                OR bsob.NoBongkarSusun LIKE @search
              )`
-          : ''
+          : ""
       }
       AND EXISTS (
         SELECT 1 
@@ -137,27 +136,25 @@ exports.getAll = async ({ page, limit, search }) => {
       )
   `;
 
-  request.input('offset', sql.Int, offset).input('limit', sql.Int, limit);
-  if (search) request.input('search', sql.VarChar, `%${search}%`);
+  request.input("offset", sql.Int, offset).input("limit", sql.Int, limit);
+  if (search) request.input("search", sql.VarChar, `%${search}%`);
 
   const [dataResult, countResult] = await Promise.all([
     request.query(baseQuery),
     request.query(countQuery),
   ]);
 
-  const data = dataResult.recordset.map(item => ({ ...item }));
+  const data = dataResult.recordset.map((item) => ({ ...item }));
   const total = countResult.recordset[0]?.total ?? 0;
 
   return { data, total };
 };
 
-
 // GET details by NoBroker (mirror Washing.getWashingDetailByNoWashing)
 exports.getBrokerDetailByNoBroker = async (nobroker) => {
   const pool = await poolPromise;
 
-  const result = await pool.request()
-    .input('NoBroker', sql.VarChar, nobroker)
+  const result = await pool.request().input("NoBroker", sql.VarChar, nobroker)
     .query(`
       SELECT
         d.NoBroker,
@@ -185,16 +182,15 @@ exports.getBrokerDetailByNoBroker = async (nobroker) => {
   const formatDate = (date) => {
     if (!date) return null;
     const d = new Date(date);
-    const pad = (n) => (n < 10 ? '0' + n : n);
+    const pad = (n) => (n < 10 ? "0" + n : n);
     return `${d.getFullYear()}-${pad(d.getMonth() + 1)}-${pad(d.getDate())} ${pad(d.getHours())}:${pad(d.getMinutes())}:${pad(d.getSeconds())}`;
   };
 
-  return result.recordset.map(item => ({
+  return result.recordset.map((item) => ({
     ...item,
     ...(item.DateUsage && { DateUsage: formatDate(item.DateUsage) }),
   }));
 };
-
 
 exports.createBrokerCascade = async (payload) => {
   const pool = await poolPromise;
@@ -207,25 +203,34 @@ exports.createBrokerCascade = async (payload) => {
   const NoBongkarSusun = payload?.NoBongkarSusun?.toString().trim() || null;
 
   // ---- Validasi dasar
-  if (!header.IdJenisPlastik) throw badReq('IdJenisPlastik wajib diisi');
-  if (!header.IdWarehouse) throw badReq('IdWarehouse wajib diisi');
-  if (!header.CreateBy) throw badReq('CreateBy wajib diisi'); // business field, controller harus overwrite dari token
-  if (!Array.isArray(details) || details.length === 0) throw badReq('Details wajib berisi minimal 1 item');
+  if (!header.IdJenisPlastik) throw badReq("IdJenisPlastik wajib diisi");
+  if (!header.IdWarehouse) throw badReq("IdWarehouse wajib diisi");
+  if (!header.CreateBy) throw badReq("CreateBy wajib diisi"); // business field, controller harus overwrite dari token
+  if (!Array.isArray(details) || details.length === 0)
+    throw badReq("Details wajib berisi minimal 1 item");
 
   // Mutually exclusive check
   const hasProduksi = !!NoProduksi;
   const hasBongkar = !!NoBongkarSusun;
-  if (hasProduksi && hasBongkar) throw badReq('NoProduksi dan NoBongkarSusun tidak boleh diisi bersamaan');
+  if (hasProduksi && hasBongkar)
+    throw badReq("NoProduksi dan NoBongkarSusun tidak boleh diisi bersamaan");
 
   // =====================================================
   // [AUDIT] Pakai actorId dari controller (token)
   // =====================================================
   const actorIdNum = Number(payload?.actorId);
-  const actorId = Number.isFinite(actorIdNum) && actorIdNum > 0 ? actorIdNum : null;
+  const actorId =
+    Number.isFinite(actorIdNum) && actorIdNum > 0 ? actorIdNum : null;
 
-  const requestId = String(payload?.requestId || `${Date.now()}-${Math.random().toString(16).slice(2)}`);
+  const requestId = String(
+    payload?.requestId ||
+      `${Date.now()}-${Math.random().toString(16).slice(2)}`,
+  );
 
-  if (!actorId) throw badReq('actorId kosong. Controller harus inject payload.actorId dari token.');
+  if (!actorId)
+    throw badReq(
+      "actorId kosong. Controller harus inject payload.actorId dari token.",
+    );
 
   // =====================================================
   // [DETAILS] normalize + validate sekali (NO INSERT LOOP)
@@ -246,7 +251,9 @@ exports.createBrokerCascade = async (payload) => {
     // IsPartial default 0/false
     const isPartialRaw = d?.IsPartial;
     const isPartial =
-      isPartialRaw === true || isPartialRaw === 1 || String(isPartialRaw).trim() === '1'
+      isPartialRaw === true ||
+      isPartialRaw === 1 ||
+      String(isPartialRaw).trim() === "1"
         ? 1
         : 0;
 
@@ -258,12 +265,14 @@ exports.createBrokerCascade = async (payload) => {
       idLokasi = header.IdLokasi ?? null;
     } else {
       const s = String(rawLok).trim();
-      if (s === '' || s === '-') {
+      if (s === "" || s === "-") {
         idLokasi = header.IdLokasi ?? null;
       } else {
         const n = Number(s);
         if (!Number.isFinite(n)) {
-          throw badReq(`IdLokasi tidak valid pada NoSak ${Math.trunc(noSak)}: ${rawLok}`);
+          throw badReq(
+            `IdLokasi tidak valid pada NoSak ${Math.trunc(noSak)}: ${rawLok}`,
+          );
         }
         idLokasi = Math.trunc(n);
       }
@@ -296,9 +305,8 @@ exports.createBrokerCascade = async (payload) => {
     // [AUDIT CTX] Set actor_id + request_id untuk trigger audit
     // =====================================================
     await new sql.Request(tx)
-      .input('actorId', sql.Int, actorId)
-      .input('rid', sql.NVarChar(64), requestId)
-      .query(`
+      .input("actorId", sql.Int, actorId)
+      .input("rid", sql.NVarChar(64), requestId).query(`
         EXEC sys.sp_set_session_context @key=N'actor_id', @value=@actorId;
         EXEC sys.sp_set_session_context @key=N'request_id', @value=@rid;
       `);
@@ -306,26 +314,35 @@ exports.createBrokerCascade = async (payload) => {
     // ===============================
     // [A] TUTUP TRANSAKSI CHECK (CREATE)
     // ===============================
-    const effectiveDateCreate = resolveEffectiveDateForCreate(header.DateCreate); // date-only
+    const effectiveDateCreate = resolveEffectiveDateForCreate(
+      header.DateCreate,
+    ); // date-only
     await assertNotLocked({
       date: effectiveDateCreate,
       runner: tx,
-      action: 'create broker',
+      action: "create broker",
       useLock: true,
     });
 
     // ===============================
     // 0) Auto-isi Blok & IdLokasi dari sumber kode (produksi / bongkar susun)
     // ===============================
-    const needBlok = header.Blok == null || String(header.Blok).trim() === '';
+    const needBlok = header.Blok == null || String(header.Blok).trim() === "";
     const needLokasi = header.IdLokasi == null;
 
     if (needBlok || needLokasi) {
-      const kodeRef = hasProduksi ? NoProduksi : (hasBongkar ? NoBongkarSusun : null);
+      const kodeRef = hasProduksi
+        ? NoProduksi
+        : hasBongkar
+          ? NoBongkarSusun
+          : null;
 
       let lokasi = null;
       if (kodeRef) {
-        lokasi = await getBlokLokasiFromKodeProduksi({ kode: kodeRef, runner: tx });
+        lokasi = await getBlokLokasiFromKodeProduksi({
+          kode: kodeRef,
+          runner: tx,
+        });
       }
 
       if (lokasi) {
@@ -339,9 +356,9 @@ exports.createBrokerCascade = async (payload) => {
     // ===============================
     const gen = async () =>
       generateNextCode(tx, {
-        tableName: 'Broker_h',
-        columnName: 'NoBroker',
-        prefix: 'D.',
+        tableName: "Broker_h",
+        columnName: "NoBroker",
+        prefix: "D.",
         width: 10,
       });
 
@@ -349,17 +366,21 @@ exports.createBrokerCascade = async (payload) => {
 
     // 2) Double-check belum dipakai (lock supaya konsisten)
     const exist = await new sql.Request(tx)
-      .input('NoBroker', sql.VarChar(50), generatedNo)
-      .query(`SELECT 1 FROM dbo.Broker_h WITH (UPDLOCK, HOLDLOCK) WHERE NoBroker = @NoBroker`);
+      .input("NoBroker", sql.VarChar(50), generatedNo)
+      .query(
+        `SELECT 1 FROM dbo.Broker_h WITH (UPDLOCK, HOLDLOCK) WHERE NoBroker = @NoBroker`,
+      );
 
     if (exist.recordset.length > 0) {
       const retryNo = await gen();
       const exist2 = await new sql.Request(tx)
-        .input('NoBroker', sql.VarChar(50), retryNo)
-        .query(`SELECT 1 FROM dbo.Broker_h WITH (UPDLOCK, HOLDLOCK) WHERE NoBroker = @NoBroker`);
+        .input("NoBroker", sql.VarChar(50), retryNo)
+        .query(
+          `SELECT 1 FROM dbo.Broker_h WITH (UPDLOCK, HOLDLOCK) WHERE NoBroker = @NoBroker`,
+        );
 
       if (exist2.recordset.length > 0) {
-        throw conflict('Gagal generate NoBroker unik, coba lagi.');
+        throw conflict("Gagal generate NoBroker unik, coba lagi.");
       }
       header.NoBroker = retryNo;
     } else {
@@ -387,25 +408,25 @@ exports.createBrokerCascade = async (payload) => {
     `;
 
     await new sql.Request(tx)
-      .input('NoBroker', sql.VarChar(50), header.NoBroker)
-      .input('IdJenisPlastik', sql.Int, header.IdJenisPlastik)
-      .input('IdWarehouse', sql.Int, header.IdWarehouse)
-      .input('DateCreate', sql.Date, effectiveDateCreate)
-      .input('IdStatus', sql.Int, header.IdStatus ?? 1)
-      .input('CreateBy', sql.VarChar(50), header.CreateBy) // overwritten by controller
-      .input('DateTimeCreate', sql.DateTime, nowDateTime)
-      .input('Density', sql.Decimal(10, 3), header.Density ?? null)
-      .input('Moisture', sql.Decimal(10, 3), header.Moisture ?? null)
-      .input('MaxMeltTemp', sql.Decimal(10, 3), header.MaxMeltTemp ?? null)
-      .input('MinMeltTemp', sql.Decimal(10, 3), header.MinMeltTemp ?? null)
-      .input('MFI', sql.Decimal(10, 3), header.MFI ?? null)
-      .input('VisualNote', sql.VarChar(sql.MAX), header.VisualNote ?? null)
-      .input('Density2', sql.Decimal(10, 3), header.Density2 ?? null)
-      .input('Density3', sql.Decimal(10, 3), header.Density3 ?? null)
-      .input('Moisture2', sql.Decimal(10, 3), header.Moisture2 ?? null)
-      .input('Moisture3', sql.Decimal(10, 3), header.Moisture3 ?? null)
-      .input('Blok', sql.VarChar(50), header.Blok ?? null)
-      .input('IdLokasi', sql.Int, header.IdLokasi ?? null)
+      .input("NoBroker", sql.VarChar(50), header.NoBroker)
+      .input("IdJenisPlastik", sql.Int, header.IdJenisPlastik)
+      .input("IdWarehouse", sql.Int, header.IdWarehouse)
+      .input("DateCreate", sql.Date, effectiveDateCreate)
+      .input("IdStatus", sql.Int, header.IdStatus ?? 1)
+      .input("CreateBy", sql.VarChar(50), header.CreateBy) // overwritten by controller
+      .input("DateTimeCreate", sql.DateTime, nowDateTime)
+      .input("Density", sql.Decimal(10, 3), header.Density ?? null)
+      .input("Moisture", sql.Decimal(10, 3), header.Moisture ?? null)
+      .input("MaxMeltTemp", sql.Decimal(10, 3), header.MaxMeltTemp ?? null)
+      .input("MinMeltTemp", sql.Decimal(10, 3), header.MinMeltTemp ?? null)
+      .input("MFI", sql.Decimal(10, 3), header.MFI ?? null)
+      .input("VisualNote", sql.VarChar(sql.MAX), header.VisualNote ?? null)
+      .input("Density2", sql.Decimal(10, 3), header.Density2 ?? null)
+      .input("Density3", sql.Decimal(10, 3), header.Density3 ?? null)
+      .input("Moisture2", sql.Decimal(10, 3), header.Moisture2 ?? null)
+      .input("Moisture3", sql.Decimal(10, 3), header.Moisture3 ?? null)
+      .input("Blok", sql.VarChar(50), header.Blok ?? null)
+      .input("IdLokasi", sql.Int, header.IdLokasi ?? null)
       .query(insertHeaderSql);
 
     // ===============================
@@ -430,8 +451,8 @@ exports.createBrokerCascade = async (payload) => {
     `;
 
     await new sql.Request(tx)
-      .input('NoBroker', sql.VarChar(50), header.NoBroker)
-      .input('DetailsJson', sql.NVarChar(sql.MAX), detailsJson)
+      .input("NoBroker", sql.VarChar(50), header.NoBroker)
+      .input("DetailsJson", sql.NVarChar(sql.MAX), detailsJson)
       .query(insertDetailsBulkSql);
 
     const detailCount = normalizedDetails.length;
@@ -454,13 +475,13 @@ exports.createBrokerCascade = async (payload) => {
       `;
 
       await new sql.Request(tx)
-        .input('NoProduksi', sql.VarChar(50), NoProduksi)
-        .input('NoBroker', sql.VarChar(50), header.NoBroker)
-        .input('DetailsJson', sql.NVarChar(sql.MAX), detailsJson)
+        .input("NoProduksi", sql.VarChar(50), NoProduksi)
+        .input("NoBroker", sql.VarChar(50), header.NoBroker)
+        .input("DetailsJson", sql.NVarChar(sql.MAX), detailsJson)
         .query(insertBpoBulkSql);
 
       outputCount = detailCount;
-      outputTarget = 'BrokerProduksiOutput';
+      outputTarget = "BrokerProduksiOutput";
     } else if (hasBongkar) {
       const insertBsoBulkSql = `
         INSERT INTO dbo.BongkarSusunOutputBroker (NoBongkarSusun, NoBroker, NoSak)
@@ -473,13 +494,13 @@ exports.createBrokerCascade = async (payload) => {
       `;
 
       await new sql.Request(tx)
-        .input('NoBongkarSusun', sql.VarChar(50), NoBongkarSusun)
-        .input('NoBroker', sql.VarChar(50), header.NoBroker)
-        .input('DetailsJson', sql.NVarChar(sql.MAX), detailsJson)
+        .input("NoBongkarSusun", sql.VarChar(50), NoBongkarSusun)
+        .input("NoBroker", sql.VarChar(50), header.NoBroker)
+        .input("DetailsJson", sql.NVarChar(sql.MAX), detailsJson)
         .query(insertBsoBulkSql);
 
       outputCount = detailCount;
-      outputTarget = 'BongkarSusunOutputBroker';
+      outputTarget = "BongkarSusunOutputBroker";
     }
 
     await tx.commit();
@@ -514,18 +535,19 @@ exports.createBrokerCascade = async (payload) => {
       audit: { actorId, requestId }, // ✅ id
     };
   } catch (e) {
-    try { await tx.rollback(); } catch (_) {}
+    try {
+      await tx.rollback();
+    } catch (_) {}
     throw e;
   }
 };
-
 
 exports.updateBrokerCascade = async (payload) => {
   const pool = await poolPromise;
   const tx = new sql.Transaction(pool);
 
   const NoBroker = payload?.NoBroker?.toString().trim();
-  if (!NoBroker) throw badReq('NoBroker (path) wajib diisi');
+  if (!NoBroker) throw badReq("NoBroker (path) wajib diisi");
 
   const header = payload?.header || {};
   const details = Array.isArray(payload?.details) ? payload.details : null; // null => tidak sentuh details
@@ -536,20 +558,25 @@ exports.updateBrokerCascade = async (payload) => {
   const hasProduksi = !!NoProduksi;
   const hasBongkar = !!NoBongkarSusun;
   if (hasProduksi && hasBongkar) {
-    throw badReq('NoProduksi dan NoBongkarSusun tidak boleh diisi bersamaan');
+    throw badReq("NoProduksi dan NoBongkarSusun tidak boleh diisi bersamaan");
   }
 
   // =====================================================
   // [AUDIT] actorId + requestId (ID only)
   // =====================================================
   const actorIdNum = Number(payload?.actorId);
-  const actorId = Number.isFinite(actorIdNum) && actorIdNum > 0 ? actorIdNum : null;
+  const actorId =
+    Number.isFinite(actorIdNum) && actorIdNum > 0 ? actorIdNum : null;
 
   const requestId = String(
-    payload?.requestId || `${Date.now()}-${Math.random().toString(16).slice(2)}`
+    payload?.requestId ||
+      `${Date.now()}-${Math.random().toString(16).slice(2)}`,
   );
 
-  if (!actorId) throw badReq('actorId kosong. Controller harus inject payload.actorId dari token.');
+  if (!actorId)
+    throw badReq(
+      "actorId kosong. Controller harus inject payload.actorId dari token.",
+    );
 
   // =====================================================
   // [DETAILS] normalize + validate untuk bulk insert (kalau details dikirim)
@@ -573,7 +600,9 @@ exports.updateBrokerCascade = async (payload) => {
 
       const isPartialRaw = d?.IsPartial;
       const isPartial =
-        isPartialRaw === true || isPartialRaw === 1 || String(isPartialRaw).trim() === '1'
+        isPartialRaw === true ||
+        isPartialRaw === 1 ||
+        String(isPartialRaw).trim() === "1"
           ? 1
           : 0;
 
@@ -584,12 +613,14 @@ exports.updateBrokerCascade = async (payload) => {
         idLokasi = header.IdLokasi ?? null;
       } else {
         const s = String(rawLok).trim();
-        if (s === '' || s === '-') {
+        if (s === "" || s === "-") {
           idLokasi = header.IdLokasi ?? null;
         } else {
           const n = Number(s);
           if (!Number.isFinite(n)) {
-            throw badReq(`IdLokasi tidak valid pada NoSak ${Math.trunc(noSak)}: ${rawLok}`);
+            throw badReq(
+              `IdLokasi tidak valid pada NoSak ${Math.trunc(noSak)}: ${rawLok}`,
+            );
           }
           idLokasi = Math.trunc(n);
         }
@@ -621,17 +652,18 @@ exports.updateBrokerCascade = async (payload) => {
     // [AUDIT CTX] Set actor_id + request_id untuk trigger audit
     // =====================================================
     await new sql.Request(tx)
-      .input('actorId', sql.Int, actorId)
-      .input('rid', sql.NVarChar(64), requestId)
-      .query(`
+      .input("actorId", sql.Int, actorId)
+      .input("rid", sql.NVarChar(64), requestId).query(`
         EXEC sys.sp_set_session_context @key=N'actor_id', @value=@actorId;
         EXEC sys.sp_set_session_context @key=N'request_id', @value=@rid;
       `);
 
     // 0) Pastikan header exist + ambil DateCreate existing (LOCK)
-    const exist = await new sql.Request(tx)
-      .input('NoBroker', sql.VarChar(50), NoBroker)
-      .query(`
+    const exist = await new sql.Request(tx).input(
+      "NoBroker",
+      sql.VarChar(50),
+      NoBroker,
+    ).query(`
         SELECT TOP 1 NoBroker, DateCreate
         FROM dbo.Broker_h WITH (UPDLOCK, HOLDLOCK)
         WHERE NoBroker = @NoBroker
@@ -659,9 +691,10 @@ exports.updateBrokerCascade = async (payload) => {
     // Jika client kirim DateCreate baru, cek juga
     let newDateOnly = null;
     if (header.DateCreate !== undefined) {
-      if (header.DateCreate === null) throw badReq('DateCreate tidak boleh null pada UPDATE.');
+      if (header.DateCreate === null)
+        throw badReq("DateCreate tidak boleh null pada UPDATE.");
       newDateOnly = toDateOnly(header.DateCreate);
-      if (!newDateOnly) throw badReq('DateCreate tidak valid.');
+      if (!newDateOnly) throw badReq("DateCreate tidak valid.");
 
       await assertNotLocked({
         date: newDateOnly,
@@ -673,7 +706,11 @@ exports.updateBrokerCascade = async (payload) => {
 
     // 1) Update header (partial/dynamic)
     const setParts = [];
-    const reqHeader = new sql.Request(tx).input('NoBroker', sql.VarChar(50), NoBroker);
+    const reqHeader = new sql.Request(tx).input(
+      "NoBroker",
+      sql.VarChar(50),
+      NoBroker,
+    );
 
     const setIf = (col, param, type, val) => {
       if (val !== undefined) {
@@ -682,24 +719,49 @@ exports.updateBrokerCascade = async (payload) => {
       }
     };
 
-    setIf('IdJenisPlastik', 'IdJenisPlastik', sql.Int, header.IdJenisPlastik);
-    setIf('IdWarehouse', 'IdWarehouse', sql.Int, header.IdWarehouse);
+    setIf("IdJenisPlastik", "IdJenisPlastik", sql.Int, header.IdJenisPlastik);
+    setIf("IdWarehouse", "IdWarehouse", sql.Int, header.IdWarehouse);
 
     if (header.DateCreate !== undefined) {
-      setIf('DateCreate', 'DateCreate', sql.Date, newDateOnly);
+      setIf("DateCreate", "DateCreate", sql.Date, newDateOnly);
     }
 
-    setIf('IdStatus', 'IdStatus', sql.Int, header.IdStatus);
-    setIf('Density', 'Density', sql.Decimal(10, 3), header.Density ?? null);
-    setIf('Moisture', 'Moisture', sql.Decimal(10, 3), header.Moisture ?? null);
-    setIf('MaxMeltTemp', 'MaxMeltTemp', sql.Decimal(10, 3), header.MaxMeltTemp ?? null);
-    setIf('MinMeltTemp', 'MinMeltTemp', sql.Decimal(10, 3), header.MinMeltTemp ?? null);
-    setIf('MFI', 'MFI', sql.Decimal(10, 3), header.MFI ?? null);
-    setIf('VisualNote', 'VisualNote', sql.VarChar(sql.MAX), header.VisualNote ?? null);
-    setIf('Density2', 'Density2', sql.Decimal(10, 3), header.Density2 ?? null);
-    setIf('Density3', 'Density3', sql.Decimal(10, 3), header.Density3 ?? null);
-    setIf('Moisture2', 'Moisture2', sql.Decimal(10, 3), header.Moisture2 ?? null);
-    setIf('Moisture3', 'Moisture3', sql.Decimal(10, 3), header.Moisture3 ?? null);
+    setIf("IdStatus", "IdStatus", sql.Int, header.IdStatus);
+    setIf("Density", "Density", sql.Decimal(10, 3), header.Density ?? null);
+    setIf("Moisture", "Moisture", sql.Decimal(10, 3), header.Moisture ?? null);
+    setIf(
+      "MaxMeltTemp",
+      "MaxMeltTemp",
+      sql.Decimal(10, 3),
+      header.MaxMeltTemp ?? null,
+    );
+    setIf(
+      "MinMeltTemp",
+      "MinMeltTemp",
+      sql.Decimal(10, 3),
+      header.MinMeltTemp ?? null,
+    );
+    setIf("MFI", "MFI", sql.Decimal(10, 3), header.MFI ?? null);
+    setIf(
+      "VisualNote",
+      "VisualNote",
+      sql.VarChar(sql.MAX),
+      header.VisualNote ?? null,
+    );
+    setIf("Density2", "Density2", sql.Decimal(10, 3), header.Density2 ?? null);
+    setIf("Density3", "Density3", sql.Decimal(10, 3), header.Density3 ?? null);
+    setIf(
+      "Moisture2",
+      "Moisture2",
+      sql.Decimal(10, 3),
+      header.Moisture2 ?? null,
+    );
+    setIf(
+      "Moisture3",
+      "Moisture3",
+      sql.Decimal(10, 3),
+      header.Moisture3 ?? null,
+    );
     // kalau mau bisa diedit, buka 2 baris ini:
     // setIf('Blok', 'Blok', sql.VarChar(50), header.Blok ?? null);
     // setIf('IdLokasi', 'IdLokasi', sql.Int, header.IdLokasi ?? null);
@@ -707,7 +769,7 @@ exports.updateBrokerCascade = async (payload) => {
     if (setParts.length > 0) {
       await reqHeader.query(`
         UPDATE dbo.Broker_h
-        SET ${setParts.join(', ')}
+        SET ${setParts.join(", ")}
         WHERE NoBroker = @NoBroker
       `);
     }
@@ -717,20 +779,23 @@ exports.updateBrokerCascade = async (payload) => {
     // =====================================================
     if (details) {
       await new sql.Request(tx)
-        .input('NoBroker', sql.VarChar(50), NoBroker)
-        .query(`DELETE FROM dbo.BrokerProduksiOutput WHERE NoBroker = @NoBroker`);
+        .input("NoBroker", sql.VarChar(50), NoBroker)
+        .query(
+          `DELETE FROM dbo.BrokerProduksiOutput WHERE NoBroker = @NoBroker`,
+        );
 
       await new sql.Request(tx)
-        .input('NoBroker', sql.VarChar(50), NoBroker)
-        .query(`DELETE FROM dbo.BongkarSusunOutputBroker WHERE NoBroker = @NoBroker`);
+        .input("NoBroker", sql.VarChar(50), NoBroker)
+        .query(
+          `DELETE FROM dbo.BongkarSusunOutputBroker WHERE NoBroker = @NoBroker`,
+        );
     }
 
     // 2) Replace details (DateUsage IS NULL) — BULK (kalau dikirim)
     let detailAffected = 0;
 
     if (details) {
-      await new sql.Request(tx)
-        .input('NoBroker', sql.VarChar(50), NoBroker)
+      await new sql.Request(tx).input("NoBroker", sql.VarChar(50), NoBroker)
         .query(`
           DELETE FROM dbo.Broker_d
           WHERE NoBroker = @NoBroker AND DateUsage IS NULL
@@ -755,8 +820,8 @@ exports.updateBrokerCascade = async (payload) => {
       `;
 
       await new sql.Request(tx)
-        .input('NoBroker', sql.VarChar(50), NoBroker)
-        .input('DetailsJson', sql.NVarChar(sql.MAX), detailsJson)
+        .input("NoBroker", sql.VarChar(50), NoBroker)
+        .input("DetailsJson", sql.NVarChar(sql.MAX), detailsJson)
         .query(insertDetailsBulkSql);
 
       detailAffected = normalizedDetails.length;
@@ -767,35 +832,45 @@ exports.updateBrokerCascade = async (payload) => {
     let outputCount = 0;
 
     const sentAnyOutputField =
-      Object.prototype.hasOwnProperty.call(payload, 'NoProduksi') ||
-      Object.prototype.hasOwnProperty.call(payload, 'NoBongkarSusun');
+      Object.prototype.hasOwnProperty.call(payload, "NoProduksi") ||
+      Object.prototype.hasOwnProperty.call(payload, "NoBongkarSusun");
 
     if (sentAnyOutputField) {
       // reset outputs (idempotent)
       await new sql.Request(tx)
-        .input('NoBroker', sql.VarChar(50), NoBroker)
-        .query(`DELETE FROM dbo.BrokerProduksiOutput WHERE NoBroker = @NoBroker`);
+        .input("NoBroker", sql.VarChar(50), NoBroker)
+        .query(
+          `DELETE FROM dbo.BrokerProduksiOutput WHERE NoBroker = @NoBroker`,
+        );
 
       await new sql.Request(tx)
-        .input('NoBroker', sql.VarChar(50), NoBroker)
-        .query(`DELETE FROM dbo.BongkarSusunOutputBroker WHERE NoBroker = @NoBroker`);
+        .input("NoBroker", sql.VarChar(50), NoBroker)
+        .query(
+          `DELETE FROM dbo.BongkarSusunOutputBroker WHERE NoBroker = @NoBroker`,
+        );
 
       // Ambil NoSak sumber:
       let noSakJson = null;
 
       if (details) {
-        noSakJson = JSON.stringify(normalizedDetails.map((x) => ({ NoSak: x.NoSak })));
+        noSakJson = JSON.stringify(
+          normalizedDetails.map((x) => ({ NoSak: x.NoSak })),
+        );
       } else {
-        const dets = await new sql.Request(tx)
-          .input('NoBroker', sql.VarChar(50), NoBroker)
-          .query(`
+        const dets = await new sql.Request(tx).input(
+          "NoBroker",
+          sql.VarChar(50),
+          NoBroker,
+        ).query(`
             SELECT NoSak
             FROM dbo.Broker_d
             WHERE NoBroker = @NoBroker AND DateUsage IS NULL
             ORDER BY NoSak
           `);
 
-        noSakJson = JSON.stringify(dets.recordset.map((r) => ({ NoSak: r.NoSak })));
+        noSakJson = JSON.stringify(
+          dets.recordset.map((r) => ({ NoSak: r.NoSak })),
+        );
       }
 
       const parsed = JSON.parse(noSakJson);
@@ -813,13 +888,13 @@ exports.updateBrokerCascade = async (payload) => {
         `;
 
         await new sql.Request(tx)
-          .input('NoProduksi', sql.VarChar(50), NoProduksi)
-          .input('NoBroker', sql.VarChar(50), NoBroker)
-          .input('NoSakJson', sql.NVarChar(sql.MAX), noSakJson)
+          .input("NoProduksi", sql.VarChar(50), NoProduksi)
+          .input("NoBroker", sql.VarChar(50), NoBroker)
+          .input("NoSakJson", sql.NVarChar(sql.MAX), noSakJson)
           .query(insertBpoBulkSql);
 
         outputCount = noSakCount;
-        outputTarget = 'BrokerProduksiOutput';
+        outputTarget = "BrokerProduksiOutput";
       } else if (hasBongkar) {
         const insertBsoBulkSql = `
           INSERT INTO dbo.BongkarSusunOutputBroker (NoBongkarSusun, NoBroker, NoSak)
@@ -832,13 +907,13 @@ exports.updateBrokerCascade = async (payload) => {
         `;
 
         await new sql.Request(tx)
-          .input('NoBongkarSusun', sql.VarChar(50), NoBongkarSusun)
-          .input('NoBroker', sql.VarChar(50), NoBroker)
-          .input('NoSakJson', sql.NVarChar(sql.MAX), noSakJson)
+          .input("NoBongkarSusun", sql.VarChar(50), NoBongkarSusun)
+          .input("NoBroker", sql.VarChar(50), NoBroker)
+          .input("NoSakJson", sql.NVarChar(sql.MAX), noSakJson)
           .query(insertBsoBulkSql);
 
         outputCount = noSakCount;
-        outputTarget = 'BongkarSusunOutputBroker';
+        outputTarget = "BongkarSusunOutputBroker";
       }
     }
 
@@ -858,8 +933,8 @@ exports.updateBrokerCascade = async (payload) => {
       outputTarget,
       audit: { actorId, requestId }, // ✅ ID only
       note: details
-        ? 'Details (yang DateUsage IS NULL) diganti sesuai payload (bulk). Output dependent direset dulu untuk menghindari FK.'
-        : 'Details tidak diubah.',
+        ? "Details (yang DateUsage IS NULL) diganti sesuai payload (bulk). Output dependent direset dulu untuk menghindari FK."
+        : "Details tidak diubah.",
     };
   } catch (e) {
     try {
@@ -869,10 +944,6 @@ exports.updateBrokerCascade = async (payload) => {
   }
 };
 
-
-
-
-
 // Delete 1 header + outputs + details (safe)
 // Delete 1 Broker header + outputs + details + partials (safe)
 exports.deleteBrokerCascade = async (payload) => {
@@ -881,25 +952,35 @@ exports.deleteBrokerCascade = async (payload) => {
 
   // payload bisa string (legacy) atau object
   const NoBroker =
-    typeof payload === 'string'
-      ? String(payload || '').trim()
-      : String(payload?.NoBroker || payload?.nobroker || '').trim();
+    typeof payload === "string"
+      ? String(payload || "").trim()
+      : String(payload?.NoBroker || payload?.nobroker || "").trim();
 
-  if (!NoBroker) throw badReq('NoBroker wajib diisi');
+  if (!NoBroker) throw badReq("NoBroker wajib diisi");
 
   // =====================================================
   // [AUDIT] actorId + requestId (ID only) - sama seperti washing
   // =====================================================
-  const actorIdNum = typeof payload === 'object' ? Number(payload?.actorId) : NaN;
-  const actorId = Number.isFinite(actorIdNum) && actorIdNum > 0 ? Math.trunc(actorIdNum) : null;
+  const actorIdNum =
+    typeof payload === "object" ? Number(payload?.actorId) : NaN;
+  const actorId =
+    Number.isFinite(actorIdNum) && actorIdNum > 0
+      ? Math.trunc(actorIdNum)
+      : null;
 
   const requestId =
-    typeof payload === 'object'
-      ? String(payload?.requestId || `${Date.now()}-${Math.random().toString(16).slice(2)}`)
+    typeof payload === "object"
+      ? String(
+          payload?.requestId ||
+            `${Date.now()}-${Math.random().toString(16).slice(2)}`,
+        )
       : String(`${Date.now()}-${Math.random().toString(16).slice(2)}`);
 
   // delete sebaiknya wajib actorId (biar audit tidak jatuh ke SUSER_SNAME())
-  if (!actorId) throw badReq('actorId kosong. Controller harus inject payload.actorId dari token.');
+  if (!actorId)
+    throw badReq(
+      "actorId kosong. Controller harus inject payload.actorId dari token.",
+    );
 
   try {
     await tx.begin(sql.ISOLATION_LEVEL.SERIALIZABLE);
@@ -908,17 +989,18 @@ exports.deleteBrokerCascade = async (payload) => {
     // [AUDIT CTX] Set actor_id + request_id untuk trigger audit
     // =====================================================
     await new sql.Request(tx)
-      .input('actorId', sql.Int, actorId)
-      .input('rid', sql.NVarChar(64), requestId)
-      .query(`
+      .input("actorId", sql.Int, actorId)
+      .input("rid", sql.NVarChar(64), requestId).query(`
         EXEC sys.sp_set_session_context @key=N'actor_id', @value=@actorId;
         EXEC sys.sp_set_session_context @key=N'request_id', @value=@rid;
       `);
 
     // 0) pastikan header exist + lock + ambil DateCreate existing
-    const headRes = await new sql.Request(tx)
-      .input('NoBroker', sql.VarChar(50), NoBroker)
-      .query(`
+    const headRes = await new sql.Request(tx).input(
+      "NoBroker",
+      sql.VarChar(50),
+      NoBroker,
+    ).query(`
         SELECT TOP 1 NoBroker, DateCreate
         FROM dbo.Broker_h WITH (UPDLOCK, HOLDLOCK)
         WHERE NoBroker = @NoBroker
@@ -946,36 +1028,44 @@ exports.deleteBrokerCascade = async (payload) => {
     // ===============================
     // [B] Block if any detail is already used
     // ===============================
-    const used = await new sql.Request(tx)
-      .input('NoBroker', sql.VarChar(50), NoBroker)
-      .query(`
+    const used = await new sql.Request(tx).input(
+      "NoBroker",
+      sql.VarChar(50),
+      NoBroker,
+    ).query(`
         SELECT TOP 1 1
         FROM dbo.Broker_d WITH (UPDLOCK, HOLDLOCK)
         WHERE NoBroker = @NoBroker AND DateUsage IS NOT NULL
       `);
 
     if (used.recordset.length > 0) {
-      throw conflict('Tidak bisa hapus: terdapat detail yang sudah terpakai (DateUsage IS NOT NULL).');
+      throw conflict(
+        "Tidak bisa hapus: terdapat detail yang sudah terpakai (DateUsage IS NOT NULL).",
+      );
     }
 
     // ===============================
     // [C] Delete outputs first (avoid FK)
     // ===============================
     const delBpo = await new sql.Request(tx)
-      .input('NoBroker', sql.VarChar(50), NoBroker)
+      .input("NoBroker", sql.VarChar(50), NoBroker)
       .query(`DELETE FROM dbo.BrokerProduksiOutput WHERE NoBroker = @NoBroker`);
 
     const delBso = await new sql.Request(tx)
-      .input('NoBroker', sql.VarChar(50), NoBroker)
-      .query(`DELETE FROM dbo.BongkarSusunOutputBroker WHERE NoBroker = @NoBroker`);
+      .input("NoBroker", sql.VarChar(50), NoBroker)
+      .query(
+        `DELETE FROM dbo.BongkarSusunOutputBroker WHERE NoBroker = @NoBroker`,
+      );
 
     // ===============================
     // [D] Delete partial-input usages that reference BrokerPartial for this NoBroker
     // (hapus child dulu baru parent BrokerPartial)
     // ===============================
-    const delBrokerInputPartial = await new sql.Request(tx)
-      .input('NoBroker', sql.VarChar(50), NoBroker)
-      .query(`
+    const delBrokerInputPartial = await new sql.Request(tx).input(
+      "NoBroker",
+      sql.VarChar(50),
+      NoBroker,
+    ).query(`
         DELETE bip
         FROM dbo.BrokerProduksiInputBrokerPartial AS bip
         INNER JOIN dbo.BrokerPartial AS bp
@@ -983,9 +1073,11 @@ exports.deleteBrokerCascade = async (payload) => {
         WHERE bp.NoBroker = @NoBroker
       `);
 
-    const delMixerInputPartial = await new sql.Request(tx)
-      .input('NoBroker', sql.VarChar(50), NoBroker)
-      .query(`
+    const delMixerInputPartial = await new sql.Request(tx).input(
+      "NoBroker",
+      sql.VarChar(50),
+      NoBroker,
+    ).query(`
         DELETE mip
         FROM dbo.MixerProduksiInputBrokerPartial AS mip
         INNER JOIN dbo.BrokerPartial AS bp
@@ -997,21 +1089,23 @@ exports.deleteBrokerCascade = async (payload) => {
     // [E] Delete partial rows themselves
     // ===============================
     const delPartial = await new sql.Request(tx)
-      .input('NoBroker', sql.VarChar(50), NoBroker)
+      .input("NoBroker", sql.VarChar(50), NoBroker)
       .query(`DELETE FROM dbo.BrokerPartial WHERE NoBroker = @NoBroker`);
 
     // ===============================
     // [F] Delete details (only the ones not used)
     // ===============================
     const delDet = await new sql.Request(tx)
-      .input('NoBroker', sql.VarChar(50), NoBroker)
-      .query(`DELETE FROM dbo.Broker_d WHERE NoBroker = @NoBroker AND DateUsage IS NULL`);
+      .input("NoBroker", sql.VarChar(50), NoBroker)
+      .query(
+        `DELETE FROM dbo.Broker_d WHERE NoBroker = @NoBroker AND DateUsage IS NULL`,
+      );
 
     // ===============================
     // [G] Delete header
     // ===============================
     const delHead = await new sql.Request(tx)
-      .input('NoBroker', sql.VarChar(50), NoBroker)
+      .input("NoBroker", sql.VarChar(50), NoBroker)
       .query(`DELETE FROM dbo.Broker_h WHERE NoBroker = @NoBroker`);
 
     await tx.commit();
@@ -1028,33 +1122,34 @@ exports.deleteBrokerCascade = async (payload) => {
         },
         partials: {
           BrokerPartial: delPartial.rowsAffected?.[0] ?? 0,
-          BrokerProduksiInputBrokerPartial: delBrokerInputPartial.rowsAffected?.[0] ?? 0,
-          MixerProduksiInputBrokerPartial: delMixerInputPartial.rowsAffected?.[0] ?? 0,
+          BrokerProduksiInputBrokerPartial:
+            delBrokerInputPartial.rowsAffected?.[0] ?? 0,
+          MixerProduksiInputBrokerPartial:
+            delMixerInputPartial.rowsAffected?.[0] ?? 0,
         },
       },
       audit: { actorId, requestId }, // ✅ ID only
     };
   } catch (e) {
-    try { await tx.rollback(); } catch (_) {}
+    try {
+      await tx.rollback();
+    } catch (_) {}
 
     // mapping FK error jika ada constraint lain di DB
     if (e.number === 547) {
       e.statusCode = 409;
-      e.message = e.message || 'Gagal hapus karena constraint referensi (FK).';
+      e.message = e.message || "Gagal hapus karena constraint referensi (FK).";
     }
     throw e;
   }
 };
 
-
-
-
-
 exports.getPartialInfoByBrokerAndSak = async (nobroker, nosak) => {
   const pool = await poolPromise;
-  const req = pool.request()
-    .input('NoBroker', sql.VarChar, nobroker)
-    .input('NoSak', sql.Int, nosak);
+  const req = pool
+    .request()
+    .input("NoBroker", sql.VarChar, nobroker)
+    .input("NoSak", sql.Int, nosak);
 
   const query = `
     SELECT
@@ -1085,14 +1180,15 @@ exports.getPartialInfoByBrokerAndSak = async (nobroker, nosak) => {
 
   // Compute total partial weightd
   const totalPartialWeight = result.recordset.reduce((sum, row) => {
-    const w = typeof row.Berat === 'number' ? row.Berat : Number(row.Berat) || 0;
+    const w =
+      typeof row.Berat === "number" ? row.Berat : Number(row.Berat) || 0;
     return sum + w;
   }, 0);
 
   const formatDate = (date) => {
     if (!date) return null;
     const d = new Date(date);
-    const pad = (n) => (n < 10 ? '0' + n : '' + n);
+    const pad = (n) => (n < 10 ? "0" + n : "" + n);
     return `${d.getFullYear()}-${pad(d.getMonth() + 1)}-${pad(d.getDate())}`;
   };
 
@@ -1107,7 +1203,7 @@ exports.getPartialInfoByBrokerAndSak = async (nobroker, nosak) => {
     NamaMesin: r.NamaMesin || null,
     IdOperator: r.IdOperator || null,
     Jam: r.Jam || null,
-    Shift: r.Shift || null
+    Shift: r.Shift || null,
   }));
 
   return { totalPartialWeight, rows };

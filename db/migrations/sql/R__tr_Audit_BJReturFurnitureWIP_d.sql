@@ -1,10 +1,10 @@
-/* ===== [dbo].[tr_Audit_BJReturFurnitureWIP_d] ON [dbo].[BJReturFurnitureWIP_d] ===== */
+/* ===== [dbo].[tr_Audit_BJReturFurnitureWIP_d]
+         ON [dbo].[BJReturFurnitureWIP_d] ===== */
 -- =============================================
 -- TRIGGER: tr_Audit_BJReturFurnitureWIP_d
--- AFTER INSERT, UPDATE, DELETE
--- Actor: SESSION_CONTEXT('actor_id') fallback SESSION_CONTEXT('actor') fallback SUSER_SNAME()
--- RequestId: SESSION_CONTEXT('request_id')
--- ✅ PK: NoFurnitureWIP (parent document)
+-- PK     : NoFurnitureWIP + NoRetur
+-- MODE   : DETAIL (1 row = 1 audit)
+-- EXTRA  : Join FurnitureWIP untuk ambil Pcs
 -- =============================================
 CREATE OR ALTER TRIGGER [dbo].[tr_Audit_BJReturFurnitureWIP_d]
 ON [dbo].[BJReturFurnitureWIP_d]
@@ -24,103 +24,109 @@ BEGIN
     CAST(SESSION_CONTEXT(N'request_id') AS nvarchar(64));
 
   /* =========================================================
-     ✅ Helper: PK menggunakan NoFurnitureWIP (parent)
-  ========================================================= */
-  DECLARE @pk nvarchar(max);
-
-  ;WITH x AS (
-    SELECT NoFurnitureWIP FROM inserted
-    UNION
-    SELECT NoFurnitureWIP FROM deleted
+     1) INSERT-only => PRODUCE (DETAIL)
+     ========================================================= */
+  ;WITH insOnly AS (
+    SELECT
+      i.NoRetur,
+      i.NoFurnitureWIP,
+      fw.Pcs
+    FROM inserted i
+    LEFT JOIN deleted d
+      ON d.NoRetur        = i.NoRetur
+     AND d.NoFurnitureWIP = i.NoFurnitureWIP
+    LEFT JOIN dbo.FurnitureWIP fw
+      ON fw.NoFurnitureWIP = i.NoFurnitureWIP
+    WHERE d.NoRetur IS NULL
   )
+  INSERT dbo.AuditTrail
+    (Action, TableName, Actor, RequestId, PK, OldData, NewData)
   SELECT
-    @pk =
-      CASE
-        WHEN COUNT(DISTINCT NoFurnitureWIP) = 1
-          THEN CONCAT('{"NoFurnitureWIP":"', MAX(NoFurnitureWIP), '"}')
-        ELSE
-          CONCAT(
-            '{"NoFurnitureWIPList":',
-            (SELECT DISTINCT NoFurnitureWIP FROM x FOR JSON PATH),
-            '}'
-          )
-      END
-  FROM x;
+    'PRODUCE',
+    'BJReturFurnitureWIP_d',
+    @actor,
+    @rid,
+    (SELECT
+       i.NoFurnitureWIP,
+       i.NoRetur
+     FOR JSON PATH, WITHOUT_ARRAY_WRAPPER),
+    NULL,
+    (SELECT
+       i.NoRetur,
+       i.NoFurnitureWIP,
+       i.Pcs
+     FOR JSON PATH, WITHOUT_ARRAY_WRAPPER)
+  FROM insOnly i;
 
-  /* =====================
-     INSERT (1 row audit)
-  ===================== */
-  IF EXISTS (SELECT 1 FROM inserted) AND NOT EXISTS (SELECT 1 FROM deleted)
-  BEGIN
-    INSERT dbo.AuditTrail(Action, TableName, Actor, RequestId, PK, OldData, NewData)
+  /* =========================================================
+     2) DELETE-only => UNPRODUCE (DETAIL)
+     ========================================================= */
+  ;WITH delOnly AS (
     SELECT
-      'INSERT',
-      'BJReturFurnitureWIP_d',
-      @actor,
-      @rid,
-      @pk,
-      NULL,
-      (
-        SELECT
-          i.NoRetur,
-          i.NoFurnitureWIP
-        FROM inserted i
-        ORDER BY i.NoFurnitureWIP, i.NoRetur
-        FOR JSON PATH
-      );
-  END
+      d.NoRetur,
+      d.NoFurnitureWIP,
+      fw.Pcs
+    FROM deleted d
+    LEFT JOIN inserted i
+      ON i.NoRetur        = d.NoRetur
+     AND i.NoFurnitureWIP = d.NoFurnitureWIP
+    LEFT JOIN dbo.FurnitureWIP fw
+      ON fw.NoFurnitureWIP = d.NoFurnitureWIP
+    WHERE i.NoRetur IS NULL
+  )
+  INSERT dbo.AuditTrail
+    (Action, TableName, Actor, RequestId, PK, OldData, NewData)
+  SELECT
+    'UNPRODUCE',
+    'BJReturFurnitureWIP_d',
+    @actor,
+    @rid,
+    (SELECT
+       d.NoFurnitureWIP,
+       d.NoRetur
+     FOR JSON PATH, WITHOUT_ARRAY_WRAPPER),
+    (SELECT
+       d.NoRetur,
+       d.NoFurnitureWIP,
+       d.Pcs
+     FOR JSON PATH, WITHOUT_ARRAY_WRAPPER),
+    NULL
+  FROM delOnly d;
 
-  /* =====================
-     DELETE (1 row audit)
-  ===================== */
-  IF EXISTS (SELECT 1 FROM deleted) AND NOT EXISTS (SELECT 1 FROM inserted)
-  BEGIN
-    INSERT dbo.AuditTrail(Action, TableName, Actor, RequestId, PK, OldData, NewData)
-    SELECT
-      'DELETE',
-      'BJReturFurnitureWIP_d',
-      @actor,
-      @rid,
-      @pk,
-      (
-        SELECT
-          d.NoRetur,
-          d.NoFurnitureWIP
-        FROM deleted d
-        ORDER BY d.NoFurnitureWIP, d.NoRetur
-        FOR JSON PATH
-      ),
-      NULL;
-  END
-
-  /* =====================
-     UPDATE (1 row audit)
-  ===================== */
+  /* =========================================================
+     3) UPDATE => UPDATE (DETAIL)
+     ========================================================= */
   IF EXISTS (SELECT 1 FROM inserted) AND EXISTS (SELECT 1 FROM deleted)
   BEGIN
-    INSERT dbo.AuditTrail(Action, TableName, Actor, RequestId, PK, OldData, NewData)
+    INSERT dbo.AuditTrail
+      (Action, TableName, Actor, RequestId, PK, OldData, NewData)
     SELECT
       'UPDATE',
       'BJReturFurnitureWIP_d',
       @actor,
       @rid,
-      @pk,
-      (
-        SELECT
-          d.NoRetur,
-          d.NoFurnitureWIP
-        FROM deleted d
-        ORDER BY d.NoFurnitureWIP, d.NoRetur
-        FOR JSON PATH
-      ),
-      (
-        SELECT
-          i.NoRetur,
-          i.NoFurnitureWIP
-        FROM inserted i
-        ORDER BY i.NoFurnitureWIP, i.NoRetur
-        FOR JSON PATH
-      );
+      (SELECT
+         i.NoFurnitureWIP,
+         i.NoRetur
+       FOR JSON PATH, WITHOUT_ARRAY_WRAPPER),
+      (SELECT
+         d.NoRetur,
+         d.NoFurnitureWIP,
+         fwOld.Pcs
+       FOR JSON PATH, WITHOUT_ARRAY_WRAPPER),
+      (SELECT
+         i.NoRetur,
+         i.NoFurnitureWIP,
+         fwNew.Pcs
+       FOR JSON PATH, WITHOUT_ARRAY_WRAPPER)
+    FROM inserted i
+    JOIN deleted d
+      ON d.NoRetur        = i.NoRetur
+     AND d.NoFurnitureWIP = i.NoFurnitureWIP
+    LEFT JOIN dbo.FurnitureWIP fwOld
+      ON fwOld.NoFurnitureWIP = d.NoFurnitureWIP
+    LEFT JOIN dbo.FurnitureWIP fwNew
+      ON fwNew.NoFurnitureWIP = i.NoFurnitureWIP;
   END
 END;
 GO

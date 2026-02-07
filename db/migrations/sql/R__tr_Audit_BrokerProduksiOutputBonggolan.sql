@@ -1,10 +1,10 @@
-/* ===== [dbo].[tr_Audit_BrokerProduksiOutputBonggolan] ON [dbo].[BrokerProduksiOutputBonggolan] ===== */
+/* ===== [dbo].[tr_Audit_BrokerProduksiOutputBonggolan] 
+         ON [dbo].[BrokerProduksiOutputBonggolan] ===== */
 -- =============================================
 -- TRIGGER: tr_Audit_BrokerProduksiOutputBonggolan
--- AFTER INSERT, UPDATE, DELETE
--- Actor: SESSION_CONTEXT('actor_id') fallback SESSION_CONTEXT('actor') fallback SUSER_SNAME()
--- RequestId: SESSION_CONTEXT('request_id')
--- ✅ PK: NoBonggolan (parent document)
+-- PK     : NoProduksi + NoBonggolan
+-- MODE   : GROUPED / HEADER
+-- EXTRA  : Join Bonggolan untuk ambil Berat
 -- =============================================
 CREATE OR ALTER TRIGGER [dbo].[tr_Audit_BrokerProduksiOutputBonggolan]
 ON [dbo].[BrokerProduksiOutputBonggolan]
@@ -24,103 +24,135 @@ BEGIN
     CAST(SESSION_CONTEXT(N'request_id') AS nvarchar(64));
 
   /* =========================================================
-     ✅ Helper: PK menggunakan NoBonggolan (parent)
-  ========================================================= */
-  DECLARE @pk nvarchar(max);
-
-  ;WITH x AS (
-    SELECT NoBonggolan FROM inserted
-    UNION
-    SELECT NoBonggolan FROM deleted
+     1) INSERT-only => PRODUCE_FULL (GROUPED)
+     ========================================================= */
+  ;WITH insOnly AS (
+    SELECT
+      i.NoProduksi,
+      i.NoBonggolan,
+      b.Berat
+    FROM inserted i
+    LEFT JOIN deleted d
+      ON d.NoProduksi  = i.NoProduksi
+     AND d.NoBonggolan = i.NoBonggolan
+    LEFT JOIN dbo.Bonggolan b
+      ON b.NoBonggolan = i.NoBonggolan
+    WHERE d.NoProduksi IS NULL
+  ),
+  g AS (
+    SELECT DISTINCT NoProduksi, NoBonggolan
+    FROM insOnly
   )
+  INSERT dbo.AuditTrail (Action, TableName, Actor, RequestId, PK, OldData, NewData)
   SELECT
-    @pk =
-      CASE
-        WHEN COUNT(DISTINCT NoBonggolan) = 1
-          THEN CONCAT('{"NoBonggolan":"', MAX(NoBonggolan), '"}')
-        ELSE
-          CONCAT(
-            '{"NoBonggolanList":',
-            (SELECT DISTINCT NoBonggolan FROM x FOR JSON PATH),
-            '}'
-          )
-      END
-  FROM x;
+    'PRODUCE',
+    'BrokerProduksiOutputBonggolan',
+    @actor,
+    @rid,
+    (SELECT gg.NoProduksi, gg.NoBonggolan FOR JSON PATH, WITHOUT_ARRAY_WRAPPER),
+    NULL,
+    (
+      SELECT
+        x.NoProduksi,
+        x.NoBonggolan,
+        x.Berat
+      FROM insOnly x
+      WHERE x.NoProduksi  = gg.NoProduksi
+        AND x.NoBonggolan = gg.NoBonggolan
+      FOR JSON PATH
+    )
+  FROM g gg;
 
-  /* =====================
-     INSERT (1 row audit)
-  ===================== */
-  IF EXISTS (SELECT 1 FROM inserted) AND NOT EXISTS (SELECT 1 FROM deleted)
-  BEGIN
-    INSERT dbo.AuditTrail(Action, TableName, Actor, RequestId, PK, OldData, NewData)
+  /* =========================================================
+     2) DELETE-only => UNPRODUCE_FULL (GROUPED)
+     ========================================================= */
+  ;WITH delOnly AS (
     SELECT
-      'INSERT',
-      'BrokerProduksiOutputBonggolan',
-      @actor,
-      @rid,
-      @pk,
-      NULL,
-      (
-        SELECT
-          i.NoProduksi,
-          i.NoBonggolan
-        FROM inserted i
-        ORDER BY i.NoBonggolan, i.NoProduksi
-        FOR JSON PATH
-      );
-  END
+      d.NoProduksi,
+      d.NoBonggolan,
+      b.Berat
+    FROM deleted d
+    LEFT JOIN inserted i
+      ON i.NoProduksi  = d.NoProduksi
+     AND i.NoBonggolan = d.NoBonggolan
+    LEFT JOIN dbo.Bonggolan b
+      ON b.NoBonggolan = d.NoBonggolan
+    WHERE i.NoProduksi IS NULL
+  ),
+  g AS (
+    SELECT DISTINCT NoProduksi, NoBonggolan
+    FROM delOnly
+  )
+  INSERT dbo.AuditTrail (Action, TableName, Actor, RequestId, PK, OldData, NewData)
+  SELECT
+    'UNPRODUCE',
+    'BrokerProduksiOutputBonggolan',
+    @actor,
+    @rid,
+    (SELECT gg.NoProduksi, gg.NoBonggolan FOR JSON PATH, WITHOUT_ARRAY_WRAPPER),
+    (
+      SELECT
+        x.NoProduksi,
+        x.NoBonggolan,
+        x.Berat
+      FROM delOnly x
+      WHERE x.NoProduksi  = gg.NoProduksi
+        AND x.NoBonggolan = gg.NoBonggolan
+      FOR JSON PATH
+    ),
+    NULL
+  FROM g gg;
 
-  /* =====================
-     DELETE (1 row audit)
-  ===================== */
-  IF EXISTS (SELECT 1 FROM deleted) AND NOT EXISTS (SELECT 1 FROM inserted)
-  BEGIN
-    INSERT dbo.AuditTrail(Action, TableName, Actor, RequestId, PK, OldData, NewData)
-    SELECT
-      'DELETE',
-      'BrokerProduksiOutputBonggolan',
-      @actor,
-      @rid,
-      @pk,
-      (
-        SELECT
-          d.NoProduksi,
-          d.NoBonggolan
-        FROM deleted d
-        ORDER BY d.NoBonggolan, d.NoProduksi
-        FOR JSON PATH
-      ),
-      NULL;
-  END
-
-  /* =====================
-     UPDATE (1 row audit)
-  ===================== */
+  /* =========================================================
+     3) UPDATE => UPDATE (GROUPED)
+     ========================================================= */
   IF EXISTS (SELECT 1 FROM inserted) AND EXISTS (SELECT 1 FROM deleted)
   BEGIN
-    INSERT dbo.AuditTrail(Action, TableName, Actor, RequestId, PK, OldData, NewData)
+    ;WITH upd AS (
+      SELECT i.NoProduksi, i.NoBonggolan
+      FROM inserted i
+      JOIN deleted d
+        ON d.NoProduksi  = i.NoProduksi
+       AND d.NoBonggolan = i.NoBonggolan
+    ),
+    g AS (
+      SELECT DISTINCT NoProduksi, NoBonggolan
+      FROM upd
+    )
+    INSERT dbo.AuditTrail (Action, TableName, Actor, RequestId, PK, OldData, NewData)
     SELECT
       'UPDATE',
       'BrokerProduksiOutputBonggolan',
       @actor,
       @rid,
-      @pk,
+      (SELECT gg.NoProduksi, gg.NoBonggolan FOR JSON PATH, WITHOUT_ARRAY_WRAPPER),
+
       (
         SELECT
           d.NoProduksi,
-          d.NoBonggolan
+          d.NoBonggolan,
+          bOld.Berat
         FROM deleted d
-        ORDER BY d.NoBonggolan, d.NoProduksi
+        LEFT JOIN dbo.Bonggolan bOld
+          ON bOld.NoBonggolan = d.NoBonggolan
+        WHERE d.NoProduksi  = gg.NoProduksi
+          AND d.NoBonggolan = gg.NoBonggolan
         FOR JSON PATH
       ),
+
       (
         SELECT
           i.NoProduksi,
-          i.NoBonggolan
+          i.NoBonggolan,
+          bNew.Berat
         FROM inserted i
-        ORDER BY i.NoBonggolan, i.NoProduksi
+        LEFT JOIN dbo.Bonggolan bNew
+          ON bNew.NoBonggolan = i.NoBonggolan
+        WHERE i.NoProduksi  = gg.NoProduksi
+          AND i.NoBonggolan = gg.NoBonggolan
         FOR JSON PATH
-      );
+      )
+    FROM g gg;
   END
 END;
 GO

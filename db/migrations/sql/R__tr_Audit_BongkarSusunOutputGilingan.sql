@@ -1,126 +1,147 @@
-/* ===== [dbo].[tr_Audit_BongkarSusunOutputGilingan] ON [dbo].[BongkarSusunOutputGilingan] ===== */
+/* ===== [dbo].[tr_Audit_BongkarSusunOutputGilingan]
+         ON [dbo].[BongkarSusunOutputGilingan] ===== */
 -- =============================================
 -- TRIGGER: tr_Audit_BongkarSusunOutputGilingan
--- AFTER INSERT, UPDATE, DELETE
--- Actor: SESSION_CONTEXT('actor_id') fallback SESSION_CONTEXT('actor') fallback SUSER_SNAME()
--- RequestId: SESSION_CONTEXT('request_id')
--- ✅ PK: NoGilingan (parent document)
+-- PK     : NoGilingan + NoBongkarSusun
+-- MODE   : DETAIL (1 row = 1 audit)
+-- EXTRA  : Join Gilingan untuk ambil Berat
 -- =============================================
 CREATE OR ALTER TRIGGER [dbo].[tr_Audit_BongkarSusunOutputGilingan]
 ON [dbo].[BongkarSusunOutputGilingan]
 AFTER INSERT, UPDATE, DELETE
 AS
 BEGIN
-  SET NOCOUNT ON;
+    SET NOCOUNT ON;
 
-  DECLARE @actor nvarchar(128) =
-    COALESCE(
-      CONVERT(nvarchar(128), TRY_CONVERT(int, SESSION_CONTEXT(N'actor_id'))),
-      CAST(SESSION_CONTEXT(N'actor') AS nvarchar(128)),
-      SUSER_SNAME()
-    );
+    DECLARE @actor NVARCHAR(128) =
+        COALESCE(
+            CONVERT(NVARCHAR(128), TRY_CONVERT(INT, SESSION_CONTEXT(N'actor_id'))),
+            CAST(SESSION_CONTEXT(N'actor') AS NVARCHAR(128)),
+            SUSER_SNAME()
+        );
 
-  DECLARE @rid nvarchar(64) =
-    CAST(SESSION_CONTEXT(N'request_id') AS nvarchar(64));
+    DECLARE @rid NVARCHAR(64) =
+        CAST(SESSION_CONTEXT(N'request_id') AS NVARCHAR(64));
 
-  /* =========================================================
-     ✅ Helper: PK ringkas (NoGilingan tunggal / list)
-  ========================================================= */
-  DECLARE @pk nvarchar(max);
-
-  ;WITH x AS (
-    SELECT NoGilingan FROM inserted
-    UNION
-    SELECT NoGilingan FROM deleted
-  )
-  SELECT
-    @pk =
-      CASE
-        WHEN COUNT(DISTINCT NoGilingan) = 1
-          THEN CONCAT('{"NoGilingan":"', MAX(NoGilingan), '"}')
-        ELSE
-          CONCAT(
-            '{"NoGilinganList":',
-            (SELECT DISTINCT NoGilingan FROM x FOR JSON PATH),
-            '}'
-          )
-      END
-  FROM x;
-
-  /* =====================
-     INSERT (1 row audit)
-  ===================== */
-  IF EXISTS (SELECT 1 FROM inserted) AND NOT EXISTS (SELECT 1 FROM deleted)
-  BEGIN
-    INSERT dbo.AuditTrail(Action, TableName, Actor, RequestId, PK, OldData, NewData)
-    SELECT
-      'INSERT',
-      'BongkarSusunOutputGilingan',
-      @actor,
-      @rid,
-      @pk,
-      NULL,
-      (
+    /* =========================================================
+       1) INSERT-only => PRODUCE (DETAIL)
+       ========================================================= */
+    ;WITH insOnly AS (
         SELECT
-          i.NoBongkarSusun,
-          i.NoGilingan
+            i.NoGilingan,
+            i.NoBongkarSusun,
+            g.Berat
         FROM inserted i
-        ORDER BY i.NoGilingan, i.NoBongkarSusun
-        FOR JSON PATH
-      );
-  END
-
-  /* =====================
-     DELETE (1 row audit)
-  ===================== */
-  IF EXISTS (SELECT 1 FROM deleted) AND NOT EXISTS (SELECT 1 FROM inserted)
-  BEGIN
-    INSERT dbo.AuditTrail(Action, TableName, Actor, RequestId, PK, OldData, NewData)
+        LEFT JOIN deleted d
+               ON d.NoGilingan       = i.NoGilingan
+              AND d.NoBongkarSusun   = i.NoBongkarSusun
+        LEFT JOIN dbo.Gilingan g
+               ON g.NoGilingan = i.NoGilingan
+        WHERE d.NoGilingan IS NULL
+    )
+    INSERT dbo.AuditTrail
+        (Action, TableName, Actor, RequestId, PK, OldData, NewData)
     SELECT
-      'DELETE',
-      'BongkarSusunOutputGilingan',
-      @actor,
-      @rid,
-      @pk,
-      (
-        SELECT
-          d.NoBongkarSusun,
-          d.NoGilingan
-        FROM deleted d
-        ORDER BY d.NoGilingan, d.NoBongkarSusun
-        FOR JSON PATH
-      ),
-      NULL;
-  END
+        'PRODUCE',
+        'BongkarSusunOutputGilingan',
+        @actor,
+        @rid,
+        (
+            SELECT
+                i.NoGilingan,
+                i.NoBongkarSusun
+            FOR JSON PATH, WITHOUT_ARRAY_WRAPPER
+        ),
+        NULL,
+        (
+            SELECT
+                i.NoGilingan,
+                i.NoBongkarSusun,
+                i.Berat
+            FOR JSON PATH, WITHOUT_ARRAY_WRAPPER
+        )
+    FROM insOnly i;
 
-  /* =====================
-     UPDATE (1 row audit)
-  ===================== */
-  IF EXISTS (SELECT 1 FROM inserted) AND EXISTS (SELECT 1 FROM deleted)
-  BEGIN
-    INSERT dbo.AuditTrail(Action, TableName, Actor, RequestId, PK, OldData, NewData)
-    SELECT
-      'UPDATE',
-      'BongkarSusunOutputGilingan',
-      @actor,
-      @rid,
-      @pk,
-      (
+    /* =========================================================
+       2) DELETE-only => UNPRODUCE (DETAIL)
+       ========================================================= */
+    ;WITH delOnly AS (
         SELECT
-          d.NoBongkarSusun,
-          d.NoGilingan
+            d.NoGilingan,
+            d.NoBongkarSusun,
+            g.Berat
         FROM deleted d
-        ORDER BY d.NoGilingan, d.NoBongkarSusun
-        FOR JSON PATH
-      ),
-      (
+        LEFT JOIN inserted i
+               ON i.NoGilingan       = d.NoGilingan
+              AND i.NoBongkarSusun   = d.NoBongkarSusun
+        LEFT JOIN dbo.Gilingan g
+               ON g.NoGilingan = d.NoGilingan
+        WHERE i.NoGilingan IS NULL
+    )
+    INSERT dbo.AuditTrail
+        (Action, TableName, Actor, RequestId, PK, OldData, NewData)
+    SELECT
+        'UNPRODUCE',
+        'BongkarSusunOutputGilingan',
+        @actor,
+        @rid,
+        (
+            SELECT
+                d.NoGilingan,
+                d.NoBongkarSusun
+            FOR JSON PATH, WITHOUT_ARRAY_WRAPPER
+        ),
+        (
+            SELECT
+                d.NoGilingan,
+                d.NoBongkarSusun,
+                d.Berat
+            FOR JSON PATH, WITHOUT_ARRAY_WRAPPER
+        ),
+        NULL
+    FROM delOnly d;
+
+    /* =========================================================
+       3) UPDATE => UPDATE (DETAIL)
+       ========================================================= */
+    IF EXISTS (SELECT 1 FROM inserted)
+       AND EXISTS (SELECT 1 FROM deleted)
+    BEGIN
+        INSERT dbo.AuditTrail
+            (Action, TableName, Actor, RequestId, PK, OldData, NewData)
         SELECT
-          i.NoBongkarSusun,
-          i.NoGilingan
+            'UPDATE',
+            'BongkarSusunOutputGilingan',
+            @actor,
+            @rid,
+            (
+                SELECT
+                    i.NoGilingan,
+                    i.NoBongkarSusun
+                FOR JSON PATH, WITHOUT_ARRAY_WRAPPER
+            ),
+            (
+                SELECT
+                    d.NoGilingan,
+                    d.NoBongkarSusun,
+                    gOld.Berat
+                FOR JSON PATH, WITHOUT_ARRAY_WRAPPER
+            ),
+            (
+                SELECT
+                    i.NoGilingan,
+                    i.NoBongkarSusun,
+                    gNew.Berat
+                FOR JSON PATH, WITHOUT_ARRAY_WRAPPER
+            )
         FROM inserted i
-        ORDER BY i.NoGilingan, i.NoBongkarSusun
-        FOR JSON PATH
-      );
-  END
+        JOIN deleted d
+             ON d.NoGilingan       = i.NoGilingan
+            AND d.NoBongkarSusun   = i.NoBongkarSusun
+        LEFT JOIN dbo.Gilingan gOld
+             ON gOld.NoGilingan = d.NoGilingan
+        LEFT JOIN dbo.Gilingan gNew
+             ON gNew.NoGilingan = i.NoGilingan;
+    END
 END;
 GO

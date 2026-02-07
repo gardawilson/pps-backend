@@ -1,10 +1,10 @@
-/* ===== [dbo].[tr_Audit_GilinganProduksiOutput] ON [dbo].[GilinganProduksiOutput] ===== */
+/* ===== [dbo].[tr_Audit_GilinganProduksiOutput] 
+         ON [dbo].[GilinganProduksiOutput] ===== */
 -- =============================================
 -- TRIGGER: tr_Audit_GilinganProduksiOutput
--- AFTER INSERT, UPDATE, DELETE
--- Actor: SESSION_CONTEXT('actor_id') fallback SESSION_CONTEXT('actor') fallback SUSER_SNAME()
--- RequestId: SESSION_CONTEXT('request_id')
--- ✅ PK: NoGilingan (parent document)
+-- PK     : NoGilingan + NoProduksi
+-- MODE   : DETAIL (1 row = 1 audit)
+-- EXTRA  : Join Gilingan untuk ambil Berat
 -- =============================================
 CREATE OR ALTER TRIGGER [dbo].[tr_Audit_GilinganProduksiOutput]
 ON [dbo].[GilinganProduksiOutput]
@@ -24,107 +24,109 @@ BEGIN
     CAST(SESSION_CONTEXT(N'request_id') AS nvarchar(64));
 
   /* =========================================================
-     ✅ Helper: PK menggunakan NoGilingan (parent)
-  ========================================================= */
-  DECLARE @pk nvarchar(max);
-
-  ;WITH x AS (
-    SELECT NoGilingan FROM inserted
-    UNION
-    SELECT NoGilingan FROM deleted
+     1) INSERT-only => PRODUCE (DETAIL)
+     ========================================================= */
+  ;WITH insOnly AS (
+    SELECT
+      i.NoProduksi,
+      i.NoGilingan,
+      g.Berat
+    FROM inserted i
+    LEFT JOIN deleted d
+      ON d.NoProduksi = i.NoProduksi
+     AND d.NoGilingan = i.NoGilingan
+    LEFT JOIN dbo.Gilingan g
+      ON g.NoGilingan = i.NoGilingan
+    WHERE d.NoProduksi IS NULL
   )
+  INSERT dbo.AuditTrail
+    (Action, TableName, Actor, RequestId, PK, OldData, NewData)
   SELECT
-    @pk =
-      CASE
-        WHEN COUNT(DISTINCT NoGilingan) = 1
-          THEN CONCAT('{"NoGilingan":"', MAX(NoGilingan), '"}')
-        ELSE
-          CONCAT(
-            '{"NoGilinganList":',
-            (SELECT DISTINCT NoGilingan FROM x FOR JSON PATH),
-            '}'
-          )
-      END
-  FROM x;
+    'PRODUCE',
+    'GilinganProduksiOutput',
+    @actor,
+    @rid,
+    (SELECT
+       i.NoGilingan,
+       i.NoProduksi
+     FOR JSON PATH, WITHOUT_ARRAY_WRAPPER),
+    NULL,
+    (SELECT
+       i.NoProduksi,
+       i.NoGilingan,
+       CAST(i.Berat AS decimal(18,3)) AS Berat
+     FOR JSON PATH, WITHOUT_ARRAY_WRAPPER)
+  FROM insOnly i;
 
-  /* =====================
-     INSERT (1 row audit)
-  ===================== */
-  IF EXISTS (SELECT 1 FROM inserted) AND NOT EXISTS (SELECT 1 FROM deleted)
-  BEGIN
-    INSERT dbo.AuditTrail(Action, TableName, Actor, RequestId, PK, OldData, NewData)
+  /* =========================================================
+     2) DELETE-only => UNPRODUCE (DETAIL)
+     ========================================================= */
+  ;WITH delOnly AS (
     SELECT
-      'INSERT',
-      'GilinganProduksiOutput',
-      @actor,
-      @rid,
-      @pk,
-      NULL,
-      (
-        SELECT
-          i.NoProduksi,
-          i.NoGilingan,
-          CAST(i.Berat AS decimal(18,3)) AS Berat
-        FROM inserted i
-        ORDER BY i.NoGilingan, i.NoProduksi
-        FOR JSON PATH
-      );
-  END
+      d.NoProduksi,
+      d.NoGilingan,
+      g.Berat
+    FROM deleted d
+    LEFT JOIN inserted i
+      ON i.NoProduksi = d.NoProduksi
+     AND i.NoGilingan = d.NoGilingan
+    LEFT JOIN dbo.Gilingan g
+      ON g.NoGilingan = d.NoGilingan
+    WHERE i.NoProduksi IS NULL
+  )
+  INSERT dbo.AuditTrail
+    (Action, TableName, Actor, RequestId, PK, OldData, NewData)
+  SELECT
+    'UNPRODUCE',
+    'GilinganProduksiOutput',
+    @actor,
+    @rid,
+    (SELECT
+       d.NoGilingan,
+       d.NoProduksi
+     FOR JSON PATH, WITHOUT_ARRAY_WRAPPER),
+    (SELECT
+       d.NoProduksi,
+       d.NoGilingan,
+       CAST(d.Berat AS decimal(18,3)) AS Berat
+     FOR JSON PATH, WITHOUT_ARRAY_WRAPPER),
+    NULL
+  FROM delOnly d;
 
-  /* =====================
-     DELETE (1 row audit)
-  ===================== */
-  IF EXISTS (SELECT 1 FROM deleted) AND NOT EXISTS (SELECT 1 FROM inserted)
-  BEGIN
-    INSERT dbo.AuditTrail(Action, TableName, Actor, RequestId, PK, OldData, NewData)
-    SELECT
-      'DELETE',
-      'GilinganProduksiOutput',
-      @actor,
-      @rid,
-      @pk,
-      (
-        SELECT
-          d.NoProduksi,
-          d.NoGilingan,
-          CAST(d.Berat AS decimal(18,3)) AS Berat
-        FROM deleted d
-        ORDER BY d.NoGilingan, d.NoProduksi
-        FOR JSON PATH
-      ),
-      NULL;
-  END
-
-  /* =====================
-     UPDATE (1 row audit)
-  ===================== */
+  /* =========================================================
+     3) UPDATE => UPDATE (DETAIL)
+     ========================================================= */
   IF EXISTS (SELECT 1 FROM inserted) AND EXISTS (SELECT 1 FROM deleted)
   BEGIN
-    INSERT dbo.AuditTrail(Action, TableName, Actor, RequestId, PK, OldData, NewData)
+    INSERT dbo.AuditTrail
+      (Action, TableName, Actor, RequestId, PK, OldData, NewData)
     SELECT
       'UPDATE',
       'GilinganProduksiOutput',
       @actor,
       @rid,
-      @pk,
-      (
-        SELECT
-          d.NoProduksi,
-          d.NoGilingan,
-          CAST(d.Berat AS decimal(18,3)) AS Berat
-        FROM deleted d
-        ORDER BY d.NoGilingan, d.NoProduksi
-        FOR JSON PATH
-      ),
-      (
-        SELECT
-          i.NoProduksi,
-          i.NoGilingan,
-          CAST(i.Berat AS decimal(18,3)) AS Berat
-        FROM inserted i
-        ORDER BY i.NoGilingan, i.NoProduksi
-        FOR JSON PATH
-      );
+      (SELECT
+         i.NoGilingan,
+         i.NoProduksi
+       FOR JSON PATH, WITHOUT_ARRAY_WRAPPER),
+      (SELECT
+         d.NoProduksi,
+         d.NoGilingan,
+         CAST(gOld.Berat AS decimal(18,3)) AS Berat
+       FOR JSON PATH, WITHOUT_ARRAY_WRAPPER),
+      (SELECT
+         i.NoProduksi,
+         i.NoGilingan,
+         CAST(gNew.Berat AS decimal(18,3)) AS Berat
+       FOR JSON PATH, WITHOUT_ARRAY_WRAPPER)
+    FROM inserted i
+    JOIN deleted d
+      ON d.NoProduksi = i.NoProduksi
+     AND d.NoGilingan = i.NoGilingan
+    LEFT JOIN dbo.Gilingan gOld
+      ON gOld.NoGilingan = d.NoGilingan
+    LEFT JOIN dbo.Gilingan gNew
+      ON gNew.NoGilingan = i.NoGilingan;
   END
 END;
 GO

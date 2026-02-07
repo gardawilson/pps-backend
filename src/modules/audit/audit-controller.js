@@ -1,19 +1,13 @@
+// controllers/audit/audit-controller.js
+
 const auditService = require("./audit-service");
 
 /**
- * 🎯 Generic handler - module + documentNo dari params/query
- * Route: GET /api/audit/:module/:documentNo/history
+ * 🎯 Auto-detect module from document number prefix
+ * Route: GET /api/audit/:documentNo/history
  */
 exports.getDocumentHistory = async (req, res) => {
-  const module = String(req.params.module || "").trim();
   const documentNo = String(req.params.documentNo || "").trim();
-
-  if (!module) {
-    return res.status(400).json({
-      success: false,
-      message: "Module is required (washing, broker, crusher, etc)",
-    });
-  }
 
   if (!documentNo) {
     return res.status(400).json({
@@ -25,10 +19,10 @@ exports.getDocumentHistory = async (req, res) => {
   try {
     const actor = req.username || req.user?.username || "system";
 
+    // Call service WITHOUT module parameter - let it auto-detect
     const result = await auditService.getDocumentHistory({
-      module,
       documentNo,
-      actor, // optional untuk logging
+      actor,
     });
 
     return res.status(200).json({
@@ -47,23 +41,33 @@ exports.getDocumentHistory = async (req, res) => {
 };
 
 /**
- * 🔹 Get available modules (utility endpoint)
+ * 🔹 Get available modules with prefixes (utility endpoint)
  */
 exports.getAvailableModules = async (req, res) => {
   try {
     const modules = Object.keys(auditService.MODULE_CONFIG).map((key) => ({
       module: key,
+      prefix: auditService.MODULE_CONFIG[key].prefix || null,
       pkField: auditService.MODULE_CONFIG[key].pkField,
       tables: [
         auditService.MODULE_CONFIG[key].headerTable,
         auditService.MODULE_CONFIG[key].detailTable,
-        ...auditService.MODULE_CONFIG[key].outputTables,
-      ],
+        ...(auditService.MODULE_CONFIG[key].outputTables || []),
+        ...(auditService.MODULE_CONFIG[key].inputTables || []),
+      ].filter(Boolean),
     }));
 
     return res.status(200).json({
       success: true,
-      data: { modules },
+      data: {
+        modules,
+        prefixMap: modules
+          .filter((m) => m.prefix)
+          .reduce((acc, m) => {
+            acc[m.prefix] = m.module;
+            return acc;
+          }, {}),
+      },
     });
   } catch (err) {
     console.error("[audit.getAvailableModules]", err);

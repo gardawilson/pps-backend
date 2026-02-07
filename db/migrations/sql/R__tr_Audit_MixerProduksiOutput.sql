@@ -1,4 +1,11 @@
-/* ===== [dbo].[tr_Audit_MixerProduksiOutput] ON [dbo].[MixerProduksiOutput] ===== */
+/* ===== [dbo].[tr_Audit_MixerProduksiOutput] 
+         ON [dbo].[MixerProduksiOutput] ===== */
+-- =============================================
+-- TRIGGER: tr_Audit_MixerProduksiOutput
+-- PK     : NoMixer + NoProduksi
+-- MODE   : DETAIL (1 row = 1 audit)
+-- EXTRA  : Join Mixer_d untuk ambil Berat
+-- =============================================
 CREATE OR ALTER TRIGGER [dbo].[tr_Audit_MixerProduksiOutput]
 ON [dbo].[MixerProduksiOutput]
 AFTER INSERT, UPDATE, DELETE
@@ -6,11 +13,10 @@ AS
 BEGIN
   SET NOCOUNT ON;
 
-  -- ✅ actor = actor_id (ID user) dari SESSION_CONTEXT
   DECLARE @actor nvarchar(128) =
     COALESCE(
       CONVERT(nvarchar(128), TRY_CONVERT(int, SESSION_CONTEXT(N'actor_id'))),
-      CAST(SESSION_CONTEXT(N'actor') AS nvarchar(128)),  -- fallback lama
+      CAST(SESSION_CONTEXT(N'actor') AS nvarchar(128)),
       SUSER_SNAME()
     );
 
@@ -18,107 +24,122 @@ BEGIN
     CAST(SESSION_CONTEXT(N'request_id') AS nvarchar(64));
 
   /* =========================================================
-     ✅ FIXED: PK menggunakan NoMixer (parent document)
-  ========================================================= */
-  DECLARE @pk nvarchar(max);
-
-  ;WITH x AS (
-    SELECT NoMixer FROM inserted
-    UNION
-    SELECT NoMixer FROM deleted
+     1) INSERT-only => PRODUCE (DETAIL)
+     ========================================================= */
+  ;WITH insOnly AS (
+    SELECT
+      i.NoProduksi,
+      i.NoMixer,
+      i.NoSak,
+      md.Berat
+    FROM inserted i
+    LEFT JOIN deleted d
+      ON d.NoProduksi = i.NoProduksi
+     AND d.NoMixer    = i.NoMixer
+     AND d.NoSak      = i.NoSak
+    LEFT JOIN dbo.Mixer_d md
+      ON md.NoMixer = i.NoMixer
+     AND md.NoSak   = i.NoSak
+    WHERE d.NoProduksi IS NULL
   )
+  INSERT dbo.AuditTrail
+    (Action, TableName, Actor, RequestId, PK, OldData, NewData)
   SELECT
-    @pk =
-      CASE
-        WHEN COUNT(DISTINCT NoMixer) = 1
-          THEN CONCAT('{"NoMixer":"', MAX(NoMixer), '"}')
-        ELSE
-          CONCAT(
-            '{"NoMixerList":',
-            (SELECT DISTINCT NoMixer FROM x FOR JSON PATH),
-            '}'
-          )
-      END
-  FROM x;
+    'PRODUCE',
+    'MixerProduksiOutput',
+    @actor,
+    @rid,
+    (SELECT
+       i.NoMixer,
+       i.NoProduksi
+     FOR JSON PATH, WITHOUT_ARRAY_WRAPPER),
+    NULL,
+    (SELECT
+       i.NoProduksi,
+       i.NoMixer,
+       i.NoSak,
+       CAST(i.Berat AS decimal(18,3)) AS Berat
+     FOR JSON PATH, WITHOUT_ARRAY_WRAPPER)
+  FROM insOnly i;
 
-  /* =====================
-     INSERT (1 row audit)
-  ===================== */
-  IF EXISTS (SELECT 1 FROM inserted) AND NOT EXISTS (SELECT 1 FROM deleted)
-  BEGIN
-    INSERT dbo.AuditTrail(Action, TableName, Actor, RequestId, PK, OldData, NewData)
+  /* =========================================================
+     2) DELETE-only => UNPRODUCE (DETAIL)
+     ========================================================= */
+  ;WITH delOnly AS (
     SELECT
-      'INSERT',
-      'MixerProduksiOutput',
-      @actor,
-      @rid,
-      @pk,
-      NULL,
-      (
-        SELECT
-          i.NoProduksi,
-          i.NoMixer,
-          i.NoSak
-        FROM inserted i
-        ORDER BY i.NoProduksi, i.NoMixer, i.NoSak
-        FOR JSON PATH
-      );
-  END
+      d.NoProduksi,
+      d.NoMixer,
+      d.NoSak,
+      md.Berat
+    FROM deleted d
+    LEFT JOIN inserted i
+      ON i.NoProduksi = d.NoProduksi
+     AND i.NoMixer    = d.NoMixer
+     AND i.NoSak      = d.NoSak
+    LEFT JOIN dbo.Mixer_d md
+      ON md.NoMixer = d.NoMixer
+     AND md.NoSak   = d.NoSak
+    WHERE i.NoProduksi IS NULL
+  )
+  INSERT dbo.AuditTrail
+    (Action, TableName, Actor, RequestId, PK, OldData, NewData)
+  SELECT
+    'UNPRODUCE',
+    'MixerProduksiOutput',
+    @actor,
+    @rid,
+    (SELECT
+       d.NoMixer,
+       d.NoProduksi
+     FOR JSON PATH, WITHOUT_ARRAY_WRAPPER),
+    (SELECT
+       d.NoProduksi,
+       d.NoMixer,
+       d.NoSak,
+       CAST(d.Berat AS decimal(18,3)) AS Berat
+     FOR JSON PATH, WITHOUT_ARRAY_WRAPPER),
+    NULL
+  FROM delOnly d;
 
-  /* =====================
-     DELETE (1 row audit)
-  ===================== */
-  IF EXISTS (SELECT 1 FROM deleted) AND NOT EXISTS (SELECT 1 FROM inserted)
-  BEGIN
-    INSERT dbo.AuditTrail(Action, TableName, Actor, RequestId, PK, OldData, NewData)
-    SELECT
-      'DELETE',
-      'MixerProduksiOutput',
-      @actor,
-      @rid,
-      @pk,
-      (
-        SELECT
-          d.NoProduksi,
-          d.NoMixer,
-          d.NoSak
-        FROM deleted d
-        ORDER BY d.NoProduksi, d.NoMixer, d.NoSak
-        FOR JSON PATH
-      ),
-      NULL;
-  END
-
-  /* =====================
-     UPDATE (1 row audit)
-  ===================== */
+  /* =========================================================
+     3) UPDATE => UPDATE (DETAIL)
+     ========================================================= */
   IF EXISTS (SELECT 1 FROM inserted) AND EXISTS (SELECT 1 FROM deleted)
   BEGIN
-    INSERT dbo.AuditTrail(Action, TableName, Actor, RequestId, PK, OldData, NewData)
+    INSERT dbo.AuditTrail
+      (Action, TableName, Actor, RequestId, PK, OldData, NewData)
     SELECT
       'UPDATE',
       'MixerProduksiOutput',
       @actor,
       @rid,
-      @pk,
-      (
-        SELECT
-          d.NoProduksi,
-          d.NoMixer,
-          d.NoSak
-        FROM deleted d
-        ORDER BY d.NoProduksi, d.NoMixer, d.NoSak
-        FOR JSON PATH
-      ),
-      (
-        SELECT
-          i.NoProduksi,
-          i.NoMixer,
-          i.NoSak
-        FROM inserted i
-        ORDER BY i.NoProduksi, i.NoMixer, i.NoSak
-        FOR JSON PATH
-      );
+      (SELECT
+         i.NoMixer,
+         i.NoProduksi
+       FOR JSON PATH, WITHOUT_ARRAY_WRAPPER),
+      (SELECT
+         d.NoProduksi,
+         d.NoMixer,
+         d.NoSak,
+         CAST(mdOld.Berat AS decimal(18,3)) AS Berat
+       FOR JSON PATH, WITHOUT_ARRAY_WRAPPER),
+      (SELECT
+         i.NoProduksi,
+         i.NoMixer,
+         i.NoSak,
+         CAST(mdNew.Berat AS decimal(18,3)) AS Berat
+       FOR JSON PATH, WITHOUT_ARRAY_WRAPPER)
+    FROM inserted i
+    JOIN deleted d
+      ON d.NoProduksi = i.NoProduksi
+     AND d.NoMixer    = i.NoMixer
+     AND d.NoSak      = i.NoSak
+    LEFT JOIN dbo.Mixer_d mdOld
+      ON mdOld.NoMixer = d.NoMixer
+     AND mdOld.NoSak   = d.NoSak
+    LEFT JOIN dbo.Mixer_d mdNew
+      ON mdNew.NoMixer = i.NoMixer
+     AND mdNew.NoSak   = i.NoSak;
   END
 END;
 GO

@@ -2,18 +2,16 @@
 
 const MODULE_CONFIG = {
   washing: {
+    prefix: "B",
     pkField: "NoWashing",
     headerTable: "Washing_h",
     detailTable: "Washing_d",
     outputTables: ["WashingProduksiOutput", "BongkarSusunOutputWashing"],
-
     inputTables: [
       "WashingProduksiInputWashing",
       "BrokerProduksiInputWashing",
       "BongkarSusunInputWashing",
     ],
-
-    // ✅ NEW: Output display config
     outputDisplayConfig: {
       WashingProduksiOutput: {
         displayField: "NoProduksi",
@@ -24,7 +22,6 @@ const MODULE_CONFIG = {
         label: "Bongkar Susun",
       },
     },
-
     headerParseFields: [
       {
         jsonField: "IdJenisPlastik",
@@ -47,11 +44,11 @@ const MODULE_CONFIG = {
   },
 
   broker: {
+    prefix: "D",
     pkField: "NoBroker",
     headerTable: "Broker_h",
     detailTable: "Broker_d",
     outputTables: ["BrokerProduksiOutput", "BongkarSusunOutputBroker"],
-
     inputTables: [
       "BrokerProduksiInputBroker",
       "BrokerProduksiInputBrokerPartial",
@@ -63,8 +60,6 @@ const MODULE_CONFIG = {
       "InjectProduksiInputFurnitureWIPPartial",
       "BongkarSusunInputBroker",
     ],
-
-    // ✅ NEW
     outputDisplayConfig: {
       BrokerProduksiOutput: {
         displayField: "NoProduksi",
@@ -75,7 +70,6 @@ const MODULE_CONFIG = {
         label: "Bongkar Susun",
       },
     },
-
     headerParseFields: [
       {
         jsonField: "IdJenisPlastik",
@@ -98,20 +92,18 @@ const MODULE_CONFIG = {
   },
 
   crusher: {
+    prefix: "F",
     pkField: "NoCrusher",
     headerTable: "Crusher",
     detailTable: null,
     outputTables: ["CrusherProduksiOutput", "BongkarSusunOutputCrusher"],
-
     inputTables: [
       "BrokerProduksiInputCrusher",
       "GilinganProduksiInputCrusher",
       "BongkarSusunInputCrusher",
     ],
-
-    // ✅ NEW
     outputDisplayConfig: {
-      BongkarSusunOutputCrusher: {
+      CrusherProduksiOutput: {
         displayField: "NoCrusherProduksi",
         label: "Crusher Produksi",
       },
@@ -120,7 +112,6 @@ const MODULE_CONFIG = {
         label: "Bongkar Susun",
       },
     },
-
     headerParseFields: [
       {
         jsonField: "IdCrusher",
@@ -143,11 +134,11 @@ const MODULE_CONFIG = {
   },
 
   gilingan: {
+    prefix: "V",
     pkField: "NoGilingan",
     headerTable: "Gilingan",
     detailTable: null,
     outputTables: ["GilinganProduksiOutput", "BongkarSusunOutputGilingan"],
-
     inputTables: [
       "WashingProduksiInputGilingan",
       "WashingProduksiInputGilinganPartial",
@@ -159,8 +150,6 @@ const MODULE_CONFIG = {
       "InjectProduksiInputGilinganPartial",
       "BongkarSusunInputGilingan",
     ],
-
-    // ✅ NEW
     outputDisplayConfig: {
       GilinganProduksiOutput: {
         displayField: "NoProduksi",
@@ -171,7 +160,6 @@ const MODULE_CONFIG = {
         label: "Bongkar Susun",
       },
     },
-
     headerParseFields: [
       {
         jsonField: "IdGilingan",
@@ -194,6 +182,7 @@ const MODULE_CONFIG = {
   },
 
   bonggolan: {
+    prefix: "M",
     pkField: "NoBonggolan",
     headerTable: "Bonggolan",
     detailTable: null,
@@ -202,14 +191,11 @@ const MODULE_CONFIG = {
       "InjectProduksiOutputBonggolan",
       "BongkarSusunOutputBonggolan",
     ],
-
     inputTables: [
       "CrusherProduksiInputBonggolan",
       "GilinganProduksiInputBonggolan",
       "BongkarSusunInputBonggolan",
     ],
-
-    // ✅ NEW
     outputDisplayConfig: {
       BrokerProduksiOutputBonggolan: {
         displayField: "NoProduksi",
@@ -224,7 +210,6 @@ const MODULE_CONFIG = {
         label: "Bongkar Susun",
       },
     },
-
     headerParseFields: [
       {
         jsonField: "IdBonggolan",
@@ -247,6 +232,7 @@ const MODULE_CONFIG = {
   },
 
   mixer: {
+    prefix: "H",
     pkField: "NoMixer",
     headerTable: "Mixer_h",
     detailTable: "Mixer_d",
@@ -255,7 +241,6 @@ const MODULE_CONFIG = {
       "InjectProduksiOutputMixer",
       "BongkarSusunOutputMixer",
     ],
-
     inputTables: [
       "BrokerProduksiInputMixer",
       "BrokerProduksiInputMixerPartial",
@@ -265,8 +250,6 @@ const MODULE_CONFIG = {
       "InjectProduksiInputMixerPartial",
       "BongkarSusunInputMixer",
     ],
-
-    // ✅ NEW
     outputDisplayConfig: {
       MixerProduksiOutput: {
         displayField: "NoProduksi",
@@ -281,7 +264,6 @@ const MODULE_CONFIG = {
         label: "Bongkar Susun",
       },
     },
-
     headerParseFields: [
       {
         jsonField: "IdMixer",
@@ -304,6 +286,7 @@ const MODULE_CONFIG = {
   },
 
   furniturewip: {
+    prefix: "BB",
     pkField: "NoFurnitureWIP",
     headerTable: "FurnitureWIP",
     detailTable: null,
@@ -315,7 +298,6 @@ const MODULE_CONFIG = {
       "BJReturFurnitureWIP_d",
       "BongkarSusunOutputFurnitureWIP",
     ],
-
     inputTables: [
       "InjectProduksiInputFurnitureWIP",
       "InjectProduksiInputFurnitureWIPPartial",
@@ -330,8 +312,6 @@ const MODULE_CONFIG = {
       "BJSortirRejectInputLabelFurnitureWIP",
       "BongkarSusunInputFurnitureWIP",
     ],
-
-    // ✅ NEW: Multiple output tables with different display fields
     outputDisplayConfig: {
       InjectProduksiOutputFurnitureWIP: {
         displayField: "NoProduksi",
@@ -358,7 +338,6 @@ const MODULE_CONFIG = {
         label: "Bongkar Susun",
       },
     },
-
     headerParseFields: [
       {
         jsonField: "IDFurnitureWIP",
@@ -381,6 +360,7 @@ const MODULE_CONFIG = {
   },
 
   barangjadi: {
+    prefix: "BA",
     pkField: "NoBJ",
     headerTable: "BarangJadi",
     detailTable: null,
@@ -390,10 +370,7 @@ const MODULE_CONFIG = {
       "BongkarSusunOutputBarangjadi",
       "BJReturBarangJadi_d",
     ],
-
     inputTables: ["BJSortirRejectInputLabelBarangJadi"],
-
-    // ✅ NEW: Multiple output tables with different display fields
     outputDisplayConfig: {
       InjectProduksiOutputBarangJadi: {
         displayField: "NoProduksi",
@@ -412,7 +389,6 @@ const MODULE_CONFIG = {
         label: "Retur",
       },
     },
-
     headerParseFields: [
       {
         jsonField: "IdBJ",
@@ -423,11 +399,10 @@ const MODULE_CONFIG = {
       },
     ],
     scalarFields: ["Pcs", "Berat", "DateCreate", "Blok", "IdLokasi"],
-    // statusField: 'IdStatus',
-    // statusMapping: { '1': 'PASS', '0': 'HOLD' },
   },
 
   reject: {
+    prefix: "BF",
     pkField: "NoReject",
     headerTable: "RejectV2",
     detailTable: null,
@@ -438,15 +413,12 @@ const MODULE_CONFIG = {
       "SpannerOutputRejectV2",
       "BJSortirRejectOutputLabelReject",
     ],
-
     inputTables: [
       "BrokerProduksiInputReject",
       "BrokerProduksiInputRejectPartial",
       "GilinganProduksiInputRejectV2",
       "GilinganProduksiInputRejectV2Partial",
     ],
-
-    // ✅ NEW: Multiple output tables with different display fields
     outputDisplayConfig: {
       InjectProduksiOutputRejectV2: {
         displayField: "NoProduksi",
@@ -469,7 +441,6 @@ const MODULE_CONFIG = {
         label: "Sortir Reject",
       },
     },
-
     headerParseFields: [
       {
         jsonField: "IdReject",
@@ -480,16 +451,17 @@ const MODULE_CONFIG = {
       },
     ],
     scalarFields: ["Berat", "DateCreate", "Blok", "IdLokasi"],
-    // statusField: 'IdStatus',
-    // statusMapping: { '1': 'PASS', '0': 'HOLD' },
   },
 
   washing_produksi: {
+    prefix: "C",
     pkField: "NoProduksi",
     headerTable: "WashingProduksi_h",
-    detailTable: null,
 
-    outputTables: [],
+    supportsOutputMutation: true,
+
+    detailTable: null,
+    outputTables: ["WashingProduksiOutput"],
     inputTables: [
       "WashingProduksiInput",
       "WashingProduksiInputBBPartial",
@@ -497,8 +469,6 @@ const MODULE_CONFIG = {
       "WashingProduksiInputGilingan",
       "WashingProduksiInputGilinganPartial",
     ],
-
-    // ✅ scalar = pure scalar (TIDAK join, TIDAK reference)
     scalarFields: [
       "TglProduksi",
       "JamKerja",
@@ -510,8 +480,6 @@ const MODULE_CONFIG = {
       "HourStart",
       "HourEnd",
     ],
-
-    // ✅ relational / reference fields
     headerParseFields: [
       {
         jsonField: "IdOperator",
@@ -531,11 +499,12 @@ const MODULE_CONFIG = {
   },
 
   broker_produksi: {
+    prefix: "E",
     pkField: "NoProduksi",
     headerTable: "BrokerProduksi_h",
+    supportsOutputMutation: true,
     detailTable: null,
-
-    outputTables: [],
+    outputTables: ["BrokerProduksiOutput", "BrokerProduksiOutputBonggolan"],
     inputTables: [
       "BrokerProduksiInputBB",
       "BrokerProduksiInputBBPartial",
@@ -550,11 +519,10 @@ const MODULE_CONFIG = {
       "BrokerProduksiInputReject",
       "BrokerProduksiInputRejectPartial",
     ],
-
     scalarFields: [
       "TglProduksi",
       "Shift",
-      "Jam", // ✅ brokerproduksi pakai "Jam" (bukan JamKerja)
+      "Jam",
       "JmlhAnggota",
       "Hadir",
       "HourMeter",
@@ -562,7 +530,6 @@ const MODULE_CONFIG = {
       "HourEnd",
       "CreateBy",
     ],
-
     headerParseFields: [
       {
         jsonField: "IdOperator",
@@ -582,18 +549,17 @@ const MODULE_CONFIG = {
   },
 
   crusher_produksi: {
+    prefix: "G",
     pkField: "NoCrusherProduksi",
     headerTable: "CrusherProduksi_h",
     detailTable: null,
-
-    outputTables: [],
-
+    supportsOutputMutation: true,
+    outputTables: ["CrusherProduksiOutput"],
     inputTables: [
       "CrusherProduksiInputBB",
       "CrusherProduksiInputBBPartial",
       "CrusherProduksiInputBonggolan",
     ],
-
     scalarFields: [
       "Tanggal",
       "Jam",
@@ -605,7 +571,6 @@ const MODULE_CONFIG = {
       "HourStart",
       "HourEnd",
     ],
-
     headerParseFields: [
       {
         jsonField: "IdOperator",
@@ -625,12 +590,12 @@ const MODULE_CONFIG = {
   },
 
   gilingan_produksi: {
+    prefix: "W",
     pkField: "NoProduksi",
     headerTable: "GilinganProduksi_h",
     detailTable: null,
-
-    outputTables: [],
-
+    supportsOutputMutation: true,
+    outputTables: ["GilinganProduksiOutput"],
     inputTables: [
       "GilinganProduksiInputBroker",
       "GilinganProduksiInputBrokerPartial",
@@ -640,7 +605,6 @@ const MODULE_CONFIG = {
       "GilinganProduksiInputRejectV2",
       "GilinganProduksiInputRejectV2Partial",
     ],
-
     scalarFields: [
       "Tanggal",
       "Jam",
@@ -652,7 +616,6 @@ const MODULE_CONFIG = {
       "HourStart",
       "HourEnd",
     ],
-
     headerParseFields: [
       {
         jsonField: "IdOperator",
@@ -672,12 +635,11 @@ const MODULE_CONFIG = {
   },
 
   mixer_produksi: {
+    prefix: "I",
     pkField: "NoProduksi",
     headerTable: "MixerProduksi_h",
     detailTable: null,
-
-    outputTables: [],
-
+    outputTables: ["MixerProduksiOutput"],
     inputTables: [
       "MixerProduksiInputBB",
       "MixerProduksiInputBBPartial",
@@ -688,7 +650,6 @@ const MODULE_CONFIG = {
       "MixerProduksiInputMixer",
       "MixerProduksiInputMixerPartial",
     ],
-
     scalarFields: [
       "TglProduksi",
       "Jam",
@@ -700,7 +661,6 @@ const MODULE_CONFIG = {
       "HourStart",
       "HourEnd",
     ],
-
     headerParseFields: [
       {
         jsonField: "IdOperator",
@@ -720,12 +680,16 @@ const MODULE_CONFIG = {
   },
 
   inject_produksi: {
+    prefix: "S",
     pkField: "NoProduksi",
     headerTable: "InjectProduksi_h",
     detailTable: null,
-
-    outputTables: [],
-
+    supportsOutputMutation: true,
+    outputTables: [
+      "InjectProduksiOutputBonggolan",
+      "InjectProduksiOutputMixer",
+      "InjectProduksiOutputFurnitureWIP",
+    ],
     inputTables: [
       "InjectProduksiInputBroker",
       "InjectProduksiInputBrokerPartial",
@@ -736,7 +700,6 @@ const MODULE_CONFIG = {
       "InjectProduksiInputMixer",
       "InjectProduksiInputMixerPartial",
     ],
-
     scalarFields: [
       "TglProduksi",
       "Jam",
@@ -750,7 +713,6 @@ const MODULE_CONFIG = {
       "IdCetakan",
       "IdWarna",
     ],
-
     headerParseFields: [
       {
         jsonField: "IdOperator",
@@ -770,17 +732,16 @@ const MODULE_CONFIG = {
   },
 
   hot_stamping: {
+    prefix: "BH",
     pkField: "NoProduksi",
     headerTable: "HotStamping_h",
     detailTable: null,
-
-    outputTables: [],
-
+    supportsOutputMutation: true,
+    outputTables: ["HotStampingOutputLabelFWIP"],
     inputTables: [
       "HotStampingInputLabelFWIP",
       "HotStampingInputLabelFWIPPartial",
     ],
-
     scalarFields: [
       "TglProduksi",
       "Jam",
@@ -794,7 +755,6 @@ const MODULE_CONFIG = {
       "IdCetakan",
       "IdWarna",
     ],
-
     headerParseFields: [
       {
         jsonField: "IdOperator",
@@ -814,17 +774,16 @@ const MODULE_CONFIG = {
   },
 
   pasang_kunci: {
+    prefix: "BI",
     pkField: "NoProduksi",
     headerTable: "PasangKunci_h",
     detailTable: null,
-
-    outputTables: [],
-
+    supportsOutputMutation: true,
+    outputTables: ["PasangKunciOutputLabelFWIP"],
     inputTables: [
       "PasangKunciInputLabelFWIP",
       "PasangKunciInputLabelFWIPPartial",
     ],
-
     scalarFields: [
       "Tanggal",
       "Shift",
@@ -833,7 +792,6 @@ const MODULE_CONFIG = {
       "HourStart",
       "HourEnd",
     ],
-
     headerParseFields: [
       {
         jsonField: "IdOperator",
@@ -853,14 +811,13 @@ const MODULE_CONFIG = {
   },
 
   spanner: {
+    prefix: "BJ",
     pkField: "NoProduksi",
     headerTable: "Spanner_h",
     detailTable: null,
-
-    outputTables: [],
-
+    supportsOutputMutation: true,
+    outputTables: ["SpannerOutputLabelFWIP"],
     inputTables: ["SpannerInputLabelFWIP", "SpannerInputLabelFWIPPartial"],
-
     scalarFields: [
       "Tanggal",
       "Shift",
@@ -869,7 +826,6 @@ const MODULE_CONFIG = {
       "HourStart",
       "HourEnd",
     ],
-
     headerParseFields: [
       {
         jsonField: "IdOperator",
@@ -889,17 +845,16 @@ const MODULE_CONFIG = {
   },
 
   packing: {
+    prefix: "BD",
     pkField: "NoPacking",
     headerTable: "PackingProduksi_h",
     detailTable: null,
-
-    outputTables: [],
-
+    supportsOutputMutation: true,
+    outputTables: ["PackingProduksiOutputLabelBJ"],
     inputTables: [
       "PackingProduksiInputLabelFWIP",
       "PackingProduksiInputLabelFWIPPartial",
     ],
-
     scalarFields: [
       "Tanggal",
       "Shift",
@@ -908,7 +863,6 @@ const MODULE_CONFIG = {
       "HourStart",
       "HourEnd",
     ],
-
     headerParseFields: [
       {
         jsonField: "IdOperator",
@@ -928,19 +882,17 @@ const MODULE_CONFIG = {
   },
 
   sortir_reject: {
+    prefix: "J",
     pkField: "NoBJSortir",
     headerTable: "BJSortirReject_h",
     detailTable: null,
-
+    supportsOutputMutation: true,
     outputTables: [],
-
     inputTables: [
       "BJSortirRejectInputLabelBarangJadi",
       "BJSortirRejectInputLabelFurnitureWIP",
     ],
-
     scalarFields: ["TglBJSortir"],
-
     headerParseFields: [
       {
         jsonField: "IdWarehouse",
@@ -953,21 +905,39 @@ const MODULE_CONFIG = {
   },
 
   bj_jual: {
+    prefix: "K",
     pkField: "NoBJJual",
     headerTable: "BJJual_h",
     detailTable: null,
-
+    supportsOutputMutation: true,
     outputTables: [],
-
     inputTables: [
       "BJJual_dLabelBarangJadi",
       "BJJual_dLabelBarangJadiPartial",
       "BJJual_dLabelFurnitureWIP",
       "BJJual_dLabelFurnitureWIPPartial",
     ],
-
     scalarFields: ["Tanggal", "Remark"],
+    headerParseFields: [
+      {
+        jsonField: "IdPembeli",
+        joinTable: "MstPembeli",
+        joinKey: "IdPembeli",
+        displayField: "NamaPembeli",
+        alias: "NamaPembeli",
+      },
+    ],
+  },
 
+  return: {
+    prefix: "L",
+    pkField: "NoRetur",
+    headerTable: "BJRetur_h",
+    detailTable: null,
+    supportsOutputMutation: true,
+    outputTables: ["BJReturBarangJadi_d", "BJReturFurnitureWIP_d"],
+    inputTables: [],
+    scalarFields: ["Tanggal", "Invoice"],
     headerParseFields: [
       {
         jsonField: "IdPembeli",
@@ -980,11 +950,22 @@ const MODULE_CONFIG = {
   },
 
   bongkar_susun: {
+    prefix: "BG",
     pkField: "NoBongkarSusun",
     headerTable: "BongkarSusun_h",
     detailTable: null,
-
-    outputTables: [],
+    supportsOutputMutation: true,
+    outputTables: [
+      "BongkarSusunOutputBahanBaku",
+      "BongkarSusunOutputBarangjadi",
+      "BongkarSusunOutputBonggolan",
+      "BongkarSusunOutputGilingan",
+      "BongkarSusunOutputWashing",
+      "BongkarSusunOutputCrusher",
+      "BongkarSusunOutputBroker",
+      "BongkarSusunOutputMixer",
+      "BongkarSusunOutputFurnitureWIP",
+    ],
 
     inputTables: [
       "BongkarSusunInputBahanBaku",
@@ -999,9 +980,68 @@ const MODULE_CONFIG = {
     ],
 
     scalarFields: ["Tanggal", "Note"],
-
     headerParseFields: [],
   },
 };
 
-module.exports = { MODULE_CONFIG };
+/**
+ * 🎯 Helper function to detect module from document number prefix
+ * @param {string} documentNo - Document number (e.g., "S.0000029967", "B.0000013196")
+ * @returns {string|null} - Module key or null if not found
+ */
+function detectModuleFromPrefix(documentNo) {
+  if (!documentNo || typeof documentNo !== "string") {
+    return null;
+  }
+
+  // Extract prefix before the dot
+  const match = documentNo.match(/^([A-Z]+)\./i);
+  if (!match) {
+    return null;
+  }
+
+  const prefix = match[1].toUpperCase();
+
+  // Find module with matching prefix
+  for (const [moduleKey, config] of Object.entries(MODULE_CONFIG)) {
+    if (config.prefix && config.prefix.toUpperCase() === prefix) {
+      return moduleKey;
+    }
+  }
+
+  return null;
+}
+
+/**
+ * 🎯 Get module config by prefix or module key
+ * @param {string} identifier - Either prefix (e.g., "S") or module key (e.g., "inject_produksi")
+ * @returns {object|null} - Module config or null if not found
+ */
+function getModuleConfig(identifier) {
+  if (!identifier || typeof identifier !== "string") {
+    return null;
+  }
+
+  const normalized = identifier.toLowerCase().trim();
+
+  // First try direct module key lookup
+  if (MODULE_CONFIG[normalized]) {
+    return { key: normalized, config: MODULE_CONFIG[normalized] };
+  }
+
+  // Then try prefix lookup
+  const upperIdentifier = identifier.toUpperCase();
+  for (const [moduleKey, config] of Object.entries(MODULE_CONFIG)) {
+    if (config.prefix && config.prefix.toUpperCase() === upperIdentifier) {
+      return { key: moduleKey, config };
+    }
+  }
+
+  return null;
+}
+
+module.exports = {
+  MODULE_CONFIG,
+  detectModuleFromPrefix,
+  getModuleConfig,
+};

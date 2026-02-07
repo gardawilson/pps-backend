@@ -1,114 +1,94 @@
-/* ===== [dbo].[tr_Audit_BongkarSusunOutputBonggolan] ON [dbo].[BongkarSusunOutputBonggolan] ===== */
+/* ===== [dbo].[tr_Audit_BongkarSusunOutputBonggolan]
+         ON [dbo].[BongkarSusunOutputBonggolan] ===== */
 -- =============================================
 -- TRIGGER: tr_Audit_BongkarSusunOutputBonggolan
--- AFTER INSERT, UPDATE, DELETE
--- ✅ UPDATED: Always returns JSON array for consistency
--- Actor: SESSION_CONTEXT('actor_id') fallback SESSION_CONTEXT('actor') fallback SUSER_SNAME()
--- RequestId: SESSION_CONTEXT('request_id')
--- PK: NoBonggolan (aggregated by NoBonggolan for audit grouping)
+-- PK     : NoBonggolan + NoBongkarSusun
+-- MODE   : AGGREGATED
+-- EXTRA  : Join Bonggolan untuk ambil Berat
 -- =============================================
 CREATE OR ALTER TRIGGER [dbo].[tr_Audit_BongkarSusunOutputBonggolan]
 ON [dbo].[BongkarSusunOutputBonggolan]
-AFTER INSERT, UPDATE, DELETE
+AFTER INSERT, DELETE
 AS
 BEGIN
-  SET NOCOUNT ON;
+    SET NOCOUNT ON;
 
-  DECLARE @actor nvarchar(128) =
-    COALESCE(
-      CONVERT(nvarchar(128), TRY_CONVERT(int, SESSION_CONTEXT(N'actor_id'))),
-      CAST(SESSION_CONTEXT(N'actor') AS nvarchar(128)),
-      SUSER_SNAME()
-    );
+    DECLARE @actor NVARCHAR(128) =
+        COALESCE(
+            CONVERT(NVARCHAR(128), TRY_CONVERT(INT, SESSION_CONTEXT(N'actor_id'))),
+            CAST(SESSION_CONTEXT(N'actor') AS NVARCHAR(128)),
+            SUSER_SNAME()
+        );
 
-  DECLARE @rid nvarchar(64) =
-    CAST(SESSION_CONTEXT(N'request_id') AS nvarchar(64));
+    DECLARE @rid NVARCHAR(64) =
+        CAST(SESSION_CONTEXT(N'request_id') AS NVARCHAR(64));
 
-  /* =====================
-     ✅ INSERT - Group by NoBonggolan
-  ===================== */
-  INSERT dbo.AuditTrail(Action, TableName, Actor, RequestId, PK, OldData, NewData)
-  SELECT
-    'INSERT',
-    'BongkarSusunOutputBonggolan',
-    @actor,
-    @rid,
-    CONCAT('{"NoBonggolan":"', i.NoBonggolan, '"}'),
-    NULL,
-    (
-      SELECT
-        ins.NoBongkarSusun,
-        ins.NoBonggolan
-      FROM inserted ins
-      WHERE ins.NoBonggolan = i.NoBonggolan
-      FOR JSON PATH  -- ✅ Returns array (remove WITHOUT_ARRAY_WRAPPER)
-    )
-  FROM inserted i
-  LEFT JOIN deleted d
-    ON d.NoBongkarSusun = i.NoBongkarSusun
-   AND d.NoBonggolan    = i.NoBonggolan
-  WHERE d.NoBongkarSusun IS NULL
-    AND d.NoBonggolan IS NULL
-  GROUP BY i.NoBonggolan;  -- ✅ Group by document number
+    /* =========================================================
+       PRODUCE (INSERT ONLY, AGGREGATED)
+       ========================================================= */
+    IF EXISTS (SELECT 1 FROM inserted)
+       AND NOT EXISTS (SELECT 1 FROM deleted)
+    BEGIN
+        INSERT dbo.AuditTrail
+            (Action, TableName, Actor, RequestId, PK, OldData, NewData)
+        SELECT
+            'PRODUCE',
+            'BongkarSusunOutputBonggolan',
+            @actor,
+            @rid,
+            (
+                SELECT
+                    i.NoBonggolan,
+                    i.NoBongkarSusun
+                FOR JSON PATH, WITHOUT_ARRAY_WRAPPER
+            ),
+            NULL,
+            (
+                SELECT
+                    i.NoBonggolan,
+                    i.NoBongkarSusun,
+                    b.Berat
+                FROM inserted i
+                LEFT JOIN dbo.Bonggolan b
+                       ON b.NoBonggolan = i.NoBonggolan
+                FOR JSON PATH
+            )
+        FROM inserted i
+        GROUP BY i.NoBonggolan, i.NoBongkarSusun;
+    END;
 
-  /* =====================
-     ✅ UPDATE - Group by NoBonggolan
-  ===================== */
-  INSERT dbo.AuditTrail(Action, TableName, Actor, RequestId, PK, OldData, NewData)
-  SELECT
-    'UPDATE',
-    'BongkarSusunOutputBonggolan',
-    @actor,
-    @rid,
-    CONCAT('{"NoBonggolan":"', i.NoBonggolan, '"}'),
-    (
-      SELECT
-        del.NoBongkarSusun,
-        del.NoBonggolan
-      FROM deleted del
-      WHERE del.NoBonggolan = i.NoBonggolan
-      FOR JSON PATH  -- ✅ Returns array
-    ),
-    (
-      SELECT
-        ins.NoBongkarSusun,
-        ins.NoBonggolan
-      FROM inserted ins
-      WHERE ins.NoBonggolan = i.NoBonggolan
-      FOR JSON PATH  -- ✅ Returns array
-    )
-  FROM inserted i
-  JOIN deleted d
-    ON d.NoBongkarSusun = i.NoBongkarSusun
-   AND d.NoBonggolan    = i.NoBonggolan
-  GROUP BY i.NoBonggolan;  -- ✅ Group by document number
-
-  /* =====================
-     ✅ DELETE - Group by NoBonggolan
-  ===================== */
-  INSERT dbo.AuditTrail(Action, TableName, Actor, RequestId, PK, OldData, NewData)
-  SELECT
-    'DELETE',
-    'BongkarSusunOutputBonggolan',
-    @actor,
-    @rid,
-    CONCAT('{"NoBonggolan":"', d.NoBonggolan, '"}'),
-    (
-      SELECT
-        del.NoBongkarSusun,
-        del.NoBonggolan
-      FROM deleted del
-      WHERE del.NoBonggolan = d.NoBonggolan
-      FOR JSON PATH  -- ✅ Returns array
-    ),
-    NULL
-  FROM deleted d
-  LEFT JOIN inserted i
-    ON i.NoBongkarSusun = d.NoBongkarSusun
-   AND i.NoBonggolan    = d.NoBonggolan
-  WHERE i.NoBongkarSusun IS NULL
-    AND i.NoBonggolan IS NULL
-  GROUP BY d.NoBonggolan;  -- ✅ Group by document number
-
+    /* =========================================================
+       UNPRODUCE (DELETE ONLY, AGGREGATED)
+       ========================================================= */
+    IF EXISTS (SELECT 1 FROM deleted)
+       AND NOT EXISTS (SELECT 1 FROM inserted)
+    BEGIN
+        INSERT dbo.AuditTrail
+            (Action, TableName, Actor, RequestId, PK, OldData, NewData)
+        SELECT
+            'UNPRODUCE',
+            'BongkarSusunOutputBonggolan',
+            @actor,
+            @rid,
+            (
+                SELECT
+                    d.NoBonggolan,
+                    d.NoBongkarSusun
+                FOR JSON PATH, WITHOUT_ARRAY_WRAPPER
+            ),
+            (
+                SELECT
+                    d.NoBonggolan,
+                    d.NoBongkarSusun,
+                    b.Berat
+                FROM deleted d
+                LEFT JOIN dbo.Bonggolan b
+                       ON b.NoBonggolan = d.NoBonggolan
+                FOR JSON PATH
+            ),
+            NULL
+        FROM deleted d
+        GROUP BY d.NoBonggolan, d.NoBongkarSusun;
+    END;
 END;
 GO

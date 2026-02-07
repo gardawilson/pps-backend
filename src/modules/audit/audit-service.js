@@ -2,44 +2,61 @@
 
 const { sql, poolPromise } = require("../../core/config/db");
 const { badReq } = require("../../core/utils/http-error");
-const { MODULE_CONFIG } = require("../../core/config/audit-module-config");
+const {
+  MODULE_CONFIG,
+  detectModuleFromPrefix,
+  getModuleConfig,
+} = require("../../core/config/audit-module-config");
 
+/**
+ * Get document history with auto-detection from prefix
+ * PRODUCE/UNPRODUCE/ADJUST only enabled for modules that explicitly opt-in via config.supportsOutputMutation === true
+ */
 async function getDocumentHistory({ module, documentNo }) {
-  const moduleKey = String(module || "")
-    .toLowerCase()
-    .trim();
   const docNo = String(documentNo || "").trim();
+
+  if (!docNo) {
+    throw badReq("Document number wajib diisi");
+  }
+
+  let moduleKey = module ? String(module).toLowerCase().trim() : null;
+
+  if (!moduleKey) {
+    moduleKey = detectModuleFromPrefix(docNo);
+    if (!moduleKey) {
+      throw badReq(
+        `Tidak dapat mendeteksi module dari prefix document number '${docNo}'. ` +
+          `Format yang didukung: PREFIX.NOMOR (contoh: S.0000029967, B.0000013196)`,
+      );
+    }
+  }
 
   const config = MODULE_CONFIG[moduleKey];
   if (!config) {
     throw badReq(
-      `Module '${module}' tidak didukung. Available: ${Object.keys(MODULE_CONFIG).join(", ")}`,
+      `Module '${moduleKey}' tidak didukung. Available: ${Object.keys(MODULE_CONFIG).join(", ")}`,
     );
   }
 
-  if (!docNo) {
-    throw badReq(`${config.pkField} wajib diisi`);
-  }
+  const supportsOutputMutation = config.supportsOutputMutation === true;
 
   const pool = await poolPromise;
   const rq = pool.request();
   rq.input("DocumentNo", sql.VarChar(30), docNo);
 
-  // =============================
-  // Build table list (include inputTables)
-  // =============================
   const allTables = [
     config.headerTable,
     ...(config.detailTable ? [config.detailTable] : []),
     ...(config.outputTables || []),
     ...(config.inputTables || []),
-  ];
+  ].filter(Boolean);
+
+  if (allTables.length === 0) {
+    throw badReq(`Module '${moduleKey}' tidak punya table config.`);
+  }
 
   const tableListSQL = allTables.map((t) => `'${t}'`).join(",");
 
-  // =============================
-  // Build Relational Fields Parsing
-  // =============================
   let cteParsing = "";
   let selectParsedFields = "";
   let joinParsedTables = "";
@@ -94,9 +111,6 @@ LEFT JOIN dbo.${f.joinTable} jpNew${f.jsonField} ON jpNew${f.jsonField}.${f.join
     });
   }
 
-  // =============================
-  // Build Scalar Fields Parsing
-  // =============================
   let selectScalarFields = "";
   if (config.scalarFields && config.scalarFields.length > 0) {
     selectScalarFields = config.scalarFields
@@ -118,12 +132,9 @@ JSON_VALUE(COALESCE(h.HeaderNew, h.HeaderInserted), '$.${field}') AS New${field}
       .join("");
   }
 
-  // =============================
-  // Build Status Parsing
-  // =============================
   let selectStatus = "";
   if (config.statusField && config.statusMapping) {
-    const mapCases = Object.entries(config.statusMapping)
+    const mapCasesOld = Object.entries(config.statusMapping)
       .map(
         ([key, val]) =>
           `WHEN JSON_VALUE(h.HeaderOld, '$.${config.statusField}') = '${key}' THEN '${val}'`,
@@ -139,18 +150,15 @@ JSON_VALUE(COALESCE(h.HeaderNew, h.HeaderInserted), '$.${field}') AS New${field}
 
     selectStatus = `,
   CASE
-    ${mapCases}
-    ELSE ''
+      ${mapCasesOld}
+      ELSE ''
   END AS OldStatusText,
   CASE
-    ${mapCasesNew}
-    ELSE ''
+      ${mapCasesNew}
+      ELSE ''
   END AS NewStatusText`;
   }
 
-  // =============================
-  // Build Detail CTE
-  // =============================
   let detailCTE = "";
   if (config.detailTable) {
     detailCTE = `
@@ -164,19 +172,15 @@ JSON_VALUE(COALESCE(h.HeaderNew, h.HeaderInserted), '$.${field}') AS New${field}
 )`;
   }
 
-  // =============================
-  // ✅ REVISED: General Consume/Unconsume CTE dengan aggregation
-  // =============================
   let consumeCTE = "";
-  if (config.inputTables && config.inputTables.length > 0) {
+  const hasInputs = config.inputTables && config.inputTables.length > 0;
+  if (hasInputs) {
     const inputTablesList = config.inputTables.map((t) => `'${t}'`).join(",");
 
     consumeCTE = `
 ,cons AS (
   SELECT
     SessionKey,
-    
-    -- ✅ Aggregate ALL consume actions (FULL + PARTIAL) into single JSON array
     CASE
       WHEN COUNT(CASE WHEN Action IN ('CONSUME_FULL','CONSUME_PARTIAL') THEN 1 END) > 0
       THEN (
@@ -190,8 +194,6 @@ JSON_VALUE(COALESCE(h.HeaderNew, h.HeaderInserted), '$.${field}') AS New${field}
       )
       ELSE NULL
     END AS ConsumeJson,
-
-    -- ✅ Aggregate ALL unconsume actions (FULL + PARTIAL) into single JSON array
     CASE
       WHEN COUNT(CASE WHEN Action IN ('UNCONSUME_FULL','UNCONSUME_PARTIAL') THEN 1 END) > 0
       THEN (
@@ -210,15 +212,54 @@ JSON_VALUE(COALESCE(h.HeaderNew, h.HeaderInserted), '$.${field}') AS New${field}
 )`;
   }
 
-  // =============================
-  // ✅ Single Aggregated Output CTE
-  // =============================
+  let produceCTE = "";
+  const hasOutputs = config.outputTables && config.outputTables.length > 0;
+
+  if (hasOutputs) {
+    const outputTablesList = config.outputTables.map((t) => `'${t}'`).join(",");
+
+    produceCTE = `
+,prod AS (
+  SELECT
+    SessionKey,
+    CASE
+      WHEN COUNT(CASE WHEN Action = 'PRODUCE' THEN 1 END) > 0
+      THEN (
+        SELECT d.TableName, d.Action, d.NewData
+        FROM doc d
+        WHERE d.SessionKey = doc.SessionKey
+          AND d.TableName IN (${outputTablesList})
+          AND d.Action = 'PRODUCE'
+        ORDER BY d.EventTime
+        FOR JSON PATH
+      )
+      ELSE NULL
+    END AS ProduceJson,
+    CASE
+      WHEN COUNT(CASE WHEN Action = 'UNPRODUCE' THEN 1 END) > 0
+      THEN (
+        SELECT d.TableName, d.Action, d.OldData
+        FROM doc d
+        WHERE d.SessionKey = doc.SessionKey
+          AND d.TableName IN (${outputTablesList})
+          AND d.Action = 'UNPRODUCE'
+        ORDER BY d.EventTime
+        FOR JSON PATH
+      )
+      ELSE NULL
+    END AS UnproduceJson
+  FROM doc
+  GROUP BY SessionKey
+)`;
+  }
+
   let outputCTE = "";
-  if (
-    config.outputTables &&
-    config.outputTables.length > 0 &&
-    config.outputDisplayConfig
-  ) {
+  const hasOutputDisplay =
+    hasOutputs &&
+    config.outputDisplayConfig &&
+    Object.keys(config.outputDisplayConfig).length > 0;
+
+  if (hasOutputDisplay) {
     const outputTablesList = config.outputTables.map((t) => `'${t}'`).join(",");
 
     outputCTE = `
@@ -239,10 +280,10 @@ JSON_VALUE(COALESCE(h.HeaderNew, h.HeaderInserted), '$.${field}') AS New${field}
         CASE d.TableName
           ${Object.entries(config.outputDisplayConfig)
             .map(
-              ([tableName, cfg]) => `WHEN '${tableName}' THEN 
+              ([tableName, cfg]) => `WHEN '${tableName}' THEN
               COALESCE(
-                JSON_VALUE(d.NewData, '$[0].${cfg.displayField}'),
-                JSON_VALUE(d.OldData, '$[0].${cfg.displayField}')
+                JSON_VALUE(d.NewData, '$.${cfg.displayField}'),
+                JSON_VALUE(d.OldData, '$.${cfg.displayField}')
               )`,
             )
             .join("\n          ")}
@@ -261,20 +302,24 @@ JSON_VALUE(COALESCE(h.HeaderNew, h.HeaderInserted), '$.${field}') AS New${field}
 )`;
   }
 
-  const hasOutput =
-    config.outputTables &&
-    config.outputTables.length > 0 &&
-    config.outputDisplayConfig &&
-    Object.keys(config.outputDisplayConfig).length > 0;
-
-  const selectOutput = hasOutput ? "o.OutputChanges" : "NULL AS OutputChanges";
-  const joinOutput = hasOutput
+  const selectOutput = hasOutputDisplay
+    ? "o.OutputChanges"
+    : "NULL AS OutputChanges";
+  const joinOutput = hasOutputDisplay
     ? "LEFT JOIN outputs o ON o.SessionKey = s.SessionKey"
     : "";
 
-  // =============================
-  // Build Final Query
-  // =============================
+  const outputActionCase = supportsOutputMutation
+    ? `
+  WHEN s.HasProduce = 1 AND s.HasUnproduce = 1 THEN 'ADJUST'
+  WHEN s.HasProduce = 1 THEN 'PRODUCE'
+  WHEN s.HasUnproduce = 1 THEN 'UNPRODUCE'`
+    : "";
+
+  const detailTableName = config.detailTable
+    ? `'${config.detailTable}'`
+    : "NULL";
+
   const query = `
 ;WITH doc AS (
   SELECT
@@ -290,7 +335,11 @@ JSON_VALUE(COALESCE(h.HeaderNew, h.HeaderInserted), '$.${field}') AS New${field}
     a.NewData
   FROM dbo.AuditTrail a
   WHERE a.TableName IN (${tableListSQL})
-    AND JSON_VALUE(a.PK, '$.${config.pkField}') = @DocumentNo
+    AND EXISTS (
+      SELECT 1
+      FROM OPENJSON(a.PK)
+      WHERE value = @DocumentNo
+    )
 )
 ,sessionAgg AS (
   SELECT
@@ -303,10 +352,14 @@ JSON_VALUE(COALESCE(h.HeaderNew, h.HeaderInserted), '$.${field}') AS New${field}
     MAX(CASE WHEN TableName='${config.headerTable}' AND Action='INSERT' THEN 1 ELSE 0 END) AS HasCreate,
     MAX(CASE WHEN TableName='${config.headerTable}' AND Action='DELETE' THEN 1 ELSE 0 END) AS HasDelete,
 
-    -- ✅ Simplified: General consume/unconsume detection
-    MAX(CASE WHEN Action IN ('CONSUME_FULL','CONSUME_PARTIAL') THEN 1 ELSE 0 END) AS HasConsume,
-    MAX(CASE WHEN Action IN ('UNCONSUME_FULL','UNCONSUME_PARTIAL') THEN 1 ELSE 0 END) AS HasUnconsume
+    MAX(CASE WHEN TableName='${config.headerTable}' AND Action='UPDATE' THEN 1 ELSE 0 END) AS HasHeaderUpdate,
+    MAX(CASE WHEN ${detailTableName} IS NOT NULL AND TableName='${config.detailTable || ""}' AND Action IN ('INSERT','DELETE','UPDATE') THEN 1 ELSE 0 END) AS HasDetailChange,
 
+    MAX(CASE WHEN Action IN ('CONSUME_FULL','CONSUME_PARTIAL') THEN 1 ELSE 0 END) AS HasConsume,
+    MAX(CASE WHEN Action IN ('UNCONSUME_FULL','UNCONSUME_PARTIAL') THEN 1 ELSE 0 END) AS HasUnconsume,
+
+    MAX(CASE WHEN Action = 'PRODUCE' THEN 1 ELSE 0 END) AS HasProduce,
+    MAX(CASE WHEN Action = 'UNPRODUCE' THEN 1 ELSE 0 END) AS HasUnproduce
   FROM doc
   GROUP BY SessionKey
 )
@@ -323,6 +376,7 @@ JSON_VALUE(COALESCE(h.HeaderNew, h.HeaderInserted), '$.${field}') AS New${field}
 ${cteParsing}
 ${detailCTE}
 ${consumeCTE}
+${produceCTE}
 ${outputCTE}
 
 SELECT
@@ -333,12 +387,13 @@ SELECT
   s.SessionKey,
   @DocumentNo AS DocumentNo,
 
-  -- ✅ REVISED: General action detection
   CASE
     WHEN s.HasCreate = 1 THEN 'CREATE'
     WHEN s.HasDelete = 1 THEN 'DELETE'
-    WHEN s.HasConsume = 1 THEN 'CONSUME'      -- ✅ General consume (full + partial)
-    WHEN s.HasUnconsume = 1 THEN 'UNCONSUME'  -- ✅ General unconsume (full + partial)
+    ${outputActionCase}
+    WHEN s.HasHeaderUpdate = 1 OR s.HasDetailChange = 1 THEN 'UPDATE'
+    WHEN s.HasConsume = 1 THEN 'CONSUME'
+    WHEN s.HasUnconsume = 1 THEN 'UNCONSUME'
     ELSE 'UPDATE'
   END AS SessionAction
   ${selectParsedFields}
@@ -352,30 +407,28 @@ SELECT
 
   ${config.detailTable ? "d.DetailsOldJson, d.DetailsNewJson" : "NULL AS DetailsOldJson, NULL AS DetailsNewJson"},
 
-  ${
-    config.inputTables && config.inputTables.length > 0
-      ? "c.ConsumeJson, c.UnconsumeJson"
-      : "NULL AS ConsumeJson, NULL AS UnconsumeJson"
-  },
+  ${hasInputs ? "c.ConsumeJson, c.UnconsumeJson" : "NULL AS ConsumeJson, NULL AS UnconsumeJson"},
+
+  ${hasOutputs ? "p.ProduceJson, p.UnproduceJson" : "NULL AS ProduceJson, NULL AS UnproduceJson"},
 
   ${selectOutput}
 
-  FROM sessionAgg s
-  LEFT JOIN hdr h ON h.SessionKey = s.SessionKey
-  LEFT JOIN dbo.MstUsername u
-  ON u.IdUsername = TRY_CONVERT(int, s.Actor)
-  ${joinParsedTables}
-  ${config.detailTable ? "LEFT JOIN det d ON d.SessionKey = s.SessionKey" : ""}
-  ${config.inputTables && config.inputTables.length > 0 ? "LEFT JOIN cons c ON c.SessionKey = s.SessionKey" : ""}
-  ${joinOutput}
-  ORDER BY s.StartTime;
-  `;
+FROM sessionAgg s
+LEFT JOIN hdr h ON h.SessionKey = s.SessionKey
+LEFT JOIN dbo.MstUsername u ON u.IdUsername = TRY_CONVERT(int, s.Actor)
+${joinParsedTables}
+${config.detailTable ? "LEFT JOIN det d ON d.SessionKey = s.SessionKey" : ""}
+${hasInputs ? "LEFT JOIN cons c ON c.SessionKey = s.SessionKey" : ""}
+${hasOutputs ? "LEFT JOIN prod p ON p.SessionKey = s.SessionKey" : ""}
+${joinOutput}
+ORDER BY s.StartTime;`;
 
   const rs = await rq.query(query);
 
   return {
     module: moduleKey,
     documentNo: docNo,
+    prefix: config.prefix || null,
     pkField: config.pkField,
     sessions: rs.recordset || [],
   };
@@ -384,4 +437,6 @@ SELECT
 module.exports = {
   getDocumentHistory,
   MODULE_CONFIG,
+  detectModuleFromPrefix,
+  getModuleConfig,
 };

@@ -5,6 +5,17 @@ const {
   getActorUsername,
   makeRequestId,
 } = require("../../../core/utils/http-context");
+const {
+  toInt,
+  toFloat,
+  normalizeTime,
+  toBit,
+  toIntUndef,
+  toFloatUndef,
+  toBitUndef,
+  toStrUndef,
+  toJamInt,
+} = require("../../../core/utils/parse");
 
 // controller/washingProduksiController.js (misal)
 async function getAllProduksi(req, res) {
@@ -120,25 +131,6 @@ async function createProduksi(req, res) {
   const requestId = String(makeRequestId(req) || "").trim();
   if (requestId) res.setHeader("x-request-id", requestId);
 
-  // helper kecil buat parse number
-  const toInt = (v) => {
-    if (v === undefined || v === null || v === "") return null;
-    const n = Number(v);
-    return Number.isNaN(n) ? null : Math.trunc(n);
-  };
-  const toFloat = (v) => {
-    if (v === undefined || v === null || v === "") return null;
-    const n = Number(v);
-    return Number.isNaN(n) ? null : n;
-  };
-
-  const normalizeTime = (v) => {
-    if (v === undefined) return undefined; // penting utk update partial
-    if (v === null) return null;
-    const s = String(v).trim();
-    return s ? s : null;
-  };
-
   // ✅ payload business (tanpa audit fields)
   const payload = {
     tglProduksi: b.tglProduksi, // 'YYYY-MM-DD'
@@ -216,11 +208,11 @@ async function createProduksi(req, res) {
 }
 
 async function updateProduksi(req, res) {
-  const noCrusherProduksi = req.params.noCrusherProduksi; // dari URL
-  if (!noCrusherProduksi) {
+  const noProduksi = req.params.noProduksi; // dari URL
+  if (!noProduksi) {
     return res.status(400).json({
       success: false,
-      message: "noCrusherProduksi is required in route param",
+      message: "noProduksi is required in route param",
     });
   }
 
@@ -252,40 +244,16 @@ async function updateProduksi(req, res) {
   // ✅ request id per HTTP request
   const requestId = String(makeRequestId(req) || "").trim();
   if (requestId) res.setHeader("x-request-id", requestId);
-
-  // ===============================
-  // helper parsing (SAMA DENGAN WASHING)
-  // ===============================
-  const toInt = (v) => {
-    if (v === undefined || v === null || v === "") return null;
-    const n = Number(v);
-    return Number.isNaN(n) ? null : Math.trunc(n);
-  };
-
-  const toFloat = (v) => {
-    if (v === undefined || v === null || v === "") return null;
-    const n = Number(v);
-    return Number.isNaN(n) ? null : n;
-  };
-
-  const normalizeTime = (v) => {
-    if (v === undefined) return undefined; // biar bisa partial
-    if (v === null) return null;
-    const s = String(v).trim();
-    return s ? s : null;
-  };
-
   // ===============================
   // payload business (PARTIAL OK)
   // ===============================
   const payload = {
-    tanggal: b.tanggal, // kalau dikirim, service akan resolve date-only & guard lock
+    tglProduksi: b.tglProduksi,
 
     idMesin: b.idMesin !== undefined ? toInt(b.idMesin) : undefined,
     idOperator: b.idOperator !== undefined ? toInt(b.idOperator) : undefined,
 
-    // crusher pakai jam / jamKerja (alias support)
-    jam:
+    jamKerja:
       b.jam !== undefined
         ? b.jam
         : b.jamKerja !== undefined
@@ -321,9 +289,9 @@ async function updateProduksi(req, res) {
   try {
     const ctx = { actorId, actorUsername, requestId };
 
-    // ⚠️ signature service: (noCrusherProduksi, payload, ctx)
-    const result = await crusherProduksiService.updateCrusherProduksi(
-      noCrusherProduksi,
+    // ⚠️ signature service: (noProduksi, payload, ctx)
+    const result = await washingProduksiService.updateWashingProduksi(
+      noProduksi,
       payload,
       ctx,
     );

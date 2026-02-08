@@ -1,37 +1,36 @@
 // services/production-service.js
-const { sql, poolPromise } = require('../../../core/config/db');
+const { sql, poolPromise } = require("../../../core/config/db");
 
 const {
   resolveEffectiveDateForCreate,
   toDateOnly,
-  assertNotLocked,     
+  assertNotLocked,
   formatYMD,
-  loadDocDateOnlyFromConfig
-} = require('../../../core/shared/tutup-transaksi-guard');
+  loadDocDateOnlyFromConfig,
+} = require("../../../core/shared/tutup-transaksi-guard");
 
-const sharedInputService = require('../../../core/shared/produksi-input.service');
+const sharedInputService = require("../../../core/shared/produksi-input.service");
 
-const { badReq, conflict } = require('../../../core/utils/http-error'); 
-const { applyAuditContext } = require('../../../core/utils/db-audit-context');
+const { badReq, conflict } = require("../../../core/utils/http-error");
+const { applyAuditContext } = require("../../../core/utils/db-audit-context");
 
-const { generateNextCode } = require('../../../core/utils/sequence-code-helper'); 
+const {
+  generateNextCode,
+} = require("../../../core/utils/sequence-code-helper");
 
 const {
   parseJamToInt,
   calcJamKerjaFromStartEnd,
-} = require('../../../core/utils/jam-kerja-helper');
+} = require("../../../core/utils/jam-kerja-helper");
 
-
-
-
-async function getAllProduksi(page = 1, pageSize = 20, search = '') {
+async function getAllProduksi(page = 1, pageSize = 20, search = "") {
   const pool = await poolPromise;
 
   const p = Math.max(1, Number(page) || 1);
   const ps = Math.max(1, Math.min(200, Number(pageSize) || 20)); // batasin biar aman
   const offset = (p - 1) * ps;
 
-  const searchTerm = (search || '').trim();
+  const searchTerm = (search || "").trim();
 
   const whereClause = `
     WHERE (@search = '' OR h.NoProduksi LIKE '%' + @search + '%')
@@ -45,7 +44,7 @@ async function getAllProduksi(page = 1, pageSize = 20, search = '') {
   `;
 
   const countReq = pool.request();
-  countReq.input('search', sql.VarChar(100), searchTerm);
+  countReq.input("search", sql.VarChar(100), searchTerm);
 
   const countRes = await countReq.query(countQry);
   const total = countRes.recordset?.[0]?.total || 0;
@@ -108,9 +107,9 @@ async function getAllProduksi(page = 1, pageSize = 20, search = '') {
   `;
 
   const dataReq = pool.request();
-  dataReq.input('search', sql.VarChar(100), searchTerm);
-  dataReq.input('offset', sql.Int, offset);
-  dataReq.input('limit', sql.Int, ps);
+  dataReq.input("search", sql.VarChar(100), searchTerm);
+  dataReq.input("offset", sql.Int, offset);
+  dataReq.input("limit", sql.Int, ps);
 
   const dataRes = await dataReq.query(dataQry);
   return { data: dataRes.recordset || [], total };
@@ -130,11 +129,10 @@ async function getProduksiByDate(date) {
     WHERE CONVERT(date, h.TglProduksi) = @date
     ORDER BY h.JamKerja ASC;
   `;
-  request.input('date', sql.Date, date);
+  request.input("date", sql.Date, date);
   const result = await request.query(query);
   return result.recordset;
 }
-
 
 // =========================
 //  CREATE WashingProduksi_h
@@ -143,14 +141,14 @@ async function createWashingProduksi(payload, ctx) {
   // ===============================
   // 0) Validasi payload basic (business)
   // ===============================
-  const body = payload && typeof payload === 'object' ? payload : {};
+  const body = payload && typeof payload === "object" ? payload : {};
 
   const must = [];
-  if (!body?.tglProduksi) must.push('tglProduksi');
-  if (body?.idMesin == null) must.push('idMesin');
-  if (body?.idOperator == null) must.push('idOperator');
-  if (body?.shift == null) must.push('shift');
-  if (must.length) throw badReq(`Field wajib: ${must.join(', ')}`);
+  if (!body?.tglProduksi) must.push("tglProduksi");
+  if (body?.idMesin == null) must.push("idMesin");
+  if (body?.idOperator == null) must.push("idOperator");
+  if (body?.shift == null) must.push("shift");
+  if (must.length) throw badReq(`Field wajib: ${must.join(", ")}`);
 
   // jamKerja bisa dari body.jamKerja atau dihitung dari hourStart-hourEnd (biar konsisten dg broker)
   let jamKerja = body?.jamKerja ?? null;
@@ -158,7 +156,8 @@ async function createWashingProduksi(payload, ctx) {
     const calc = calcJamKerjaFromStartEnd(body?.hourStart, body?.hourEnd);
     if (calc != null) jamKerja = calc;
   }
-  if (jamKerja == null) throw badReq('Field wajib: jamKerja (atau isi hourStart-hourEnd)');
+  if (jamKerja == null)
+    throw badReq("Field wajib: jamKerja (atau isi hourStart-hourEnd)");
 
   const jamInt = parseJamToInt(jamKerja);
   const docDateOnly = toDateOnly(body.tglProduksi);
@@ -168,11 +167,11 @@ async function createWashingProduksi(payload, ctx) {
   // ===============================
   const actorIdNum = Number(ctx?.actorId);
   if (!Number.isFinite(actorIdNum) || actorIdNum <= 0) {
-    throw badReq('ctx.actorId wajib. Controller harus inject dari token.');
+    throw badReq("ctx.actorId wajib. Controller harus inject dari token.");
   }
 
-  const actorUsername = String(ctx?.actorUsername || '').trim() || 'system';
-  const requestId = String(ctx?.requestId || '').trim(); // boleh kosong, applyAuditContext akan fallback
+  const actorUsername = String(ctx?.actorUsername || "").trim() || "system";
+  const requestId = String(ctx?.requestId || "").trim(); // boleh kosong, applyAuditContext akan fallback
 
   const auditCtx = {
     actorId: Math.trunc(actorIdNum),
@@ -197,7 +196,7 @@ async function createWashingProduksi(payload, ctx) {
     await assertNotLocked({
       date: docDateOnly,
       runner: tx,
-      action: 'create WashingProduksi',
+      action: "create WashingProduksi",
       useLock: true,
     });
 
@@ -206,18 +205,20 @@ async function createWashingProduksi(payload, ctx) {
     // =====================================================
     const gen = async () =>
       generateNextCode(tx, {
-        tableName: 'dbo.WashingProduksi_h',
-        columnName: 'NoProduksi',
-        prefix: 'C.',
+        tableName: "dbo.WashingProduksi_h",
+        columnName: "NoProduksi",
+        prefix: "C.",
         width: 10,
       });
 
     let noProduksi = await gen();
 
     // optional double-check (lebih bagus kalau kolom ada UNIQUE)
-    const exist = await new sql.Request(tx)
-      .input('NoProduksi', sql.VarChar(50), noProduksi)
-      .query(`
+    const exist = await new sql.Request(tx).input(
+      "NoProduksi",
+      sql.VarChar(50),
+      noProduksi,
+    ).query(`
         SELECT 1
         FROM dbo.WashingProduksi_h WITH (UPDLOCK, HOLDLOCK)
         WHERE NoProduksi = @NoProduksi
@@ -225,16 +226,18 @@ async function createWashingProduksi(payload, ctx) {
 
     if (exist.recordset.length > 0) {
       const retry = await gen();
-      const exist2 = await new sql.Request(tx)
-        .input('NoProduksi', sql.VarChar(50), retry)
-        .query(`
+      const exist2 = await new sql.Request(tx).input(
+        "NoProduksi",
+        sql.VarChar(50),
+        retry,
+      ).query(`
           SELECT 1
           FROM dbo.WashingProduksi_h WITH (UPDLOCK, HOLDLOCK)
           WHERE NoProduksi = @NoProduksi
         `);
 
       if (exist2.recordset.length > 0) {
-        throw conflict('Gagal generate NoProduksi unik, coba lagi.');
+        throw conflict("Gagal generate NoProduksi unik, coba lagi.");
       }
       noProduksi = retry;
     }
@@ -244,22 +247,22 @@ async function createWashingProduksi(payload, ctx) {
     // =====================================================
     const rqIns = new sql.Request(tx);
     rqIns
-      .input('NoProduksi',  sql.VarChar(50),     noProduksi)
-      .input('TglProduksi', sql.Date,            docDateOnly)
-      .input('IdMesin',     sql.Int,             body.idMesin)
-      .input('IdOperator',  sql.Int,             body.idOperator)
-      .input('JamKerja',    sql.Int,             jamInt)
-      .input('Shift',       sql.Int,             body.shift)
-      .input('CreateBy',    sql.VarChar(100),    body.createBy) // controller overwrite dari token
-      .input('CheckBy1',    sql.VarChar(100),    body.checkBy1 ?? null)
-      .input('CheckBy2',    sql.VarChar(100),    body.checkBy2 ?? null)
-      .input('ApproveBy',   sql.VarChar(100),    body.approveBy ?? null)
-      .input('JmlhAnggota', sql.Int,             body.jmlhAnggota ?? null)
-      .input('Hadir',       sql.Int,             body.hadir ?? null)
-      .input('HourMeter',   sql.Decimal(18, 2),  body.hourMeter ?? null)
+      .input("NoProduksi", sql.VarChar(50), noProduksi)
+      .input("TglProduksi", sql.Date, docDateOnly)
+      .input("IdMesin", sql.Int, body.idMesin)
+      .input("IdOperator", sql.Int, body.idOperator)
+      .input("JamKerja", sql.Int, jamInt)
+      .input("Shift", sql.Int, body.shift)
+      .input("CreateBy", sql.VarChar(100), body.createBy) // controller overwrite dari token
+      .input("CheckBy1", sql.VarChar(100), body.checkBy1 ?? null)
+      .input("CheckBy2", sql.VarChar(100), body.checkBy2 ?? null)
+      .input("ApproveBy", sql.VarChar(100), body.approveBy ?? null)
+      .input("JmlhAnggota", sql.Int, body.jmlhAnggota ?? null)
+      .input("Hadir", sql.Int, body.hadir ?? null)
+      .input("HourMeter", sql.Decimal(18, 2), body.hourMeter ?? null)
       // kirim string, biar SQL yang CAST ke time(7)
-      .input('HourStart',   sql.VarChar(20),     body.hourStart ?? null)
-      .input('HourEnd',     sql.VarChar(20),     body.hourEnd ?? null);
+      .input("HourStart", sql.VarChar(20), body.hourStart ?? null)
+      .input("HourEnd", sql.VarChar(20), body.hourEnd ?? null);
 
     const insertSql = `
       DECLARE @out TABLE (
@@ -344,36 +347,37 @@ async function createWashingProduksi(payload, ctx) {
       audit, // optional debug / tracing
     };
   } catch (e) {
-    try { await tx.rollback(); } catch (_) {}
+    try {
+      await tx.rollback();
+    } catch (_) {}
     throw e;
   }
 }
 
-
 /**
  * Update Washing Production Header
- * 
+ *
  * Features:
  * - Dynamic SET clause (hanya update field yang dikirim)
  * - SERIALIZABLE transaction untuk data consistency
  * - Auto-sync DateUsage untuk semua input labels saat TglProduksi berubah
- * 
+ *
  * DateUsage sync untuk:
  * - Bahan Baku (Full + Partial)
  * - Washing (Full only - NO PARTIAL)
  * - Gilingan (Full + Partial)
- * 
+ *
  * PERBEDAAN dengan Broker:
  * - Field: JamKerja (bukan Jam)
  * - Tidak ada UpdateBy field (pakai CreateBy untuk tracking)
- * 
+ *
  * @param {string} noProduksi - Nomor produksi (PK)
  * @param {object} payload - Fields to update (partial)
  * @returns {object} { header: updatedRecord }
  */
 
 async function updateWashingProduksi(noProduksi, payload, ctx) {
-  if (!noProduksi) throw badReq('noProduksi wajib');
+  if (!noProduksi) throw badReq("noProduksi wajib");
 
   const pool = await poolPromise;
   const tx = new sql.Transaction(pool);
@@ -385,10 +389,10 @@ async function updateWashingProduksi(noProduksi, payload, ctx) {
     // =====================================================
     const actorIdNum = Number(ctx?.actorId);
     if (!Number.isFinite(actorIdNum) || actorIdNum <= 0) {
-      throw badReq('ctx.actorId wajib. Controller harus inject dari token.');
+      throw badReq("ctx.actorId wajib. Controller harus inject dari token.");
     }
-    const actorUsername = String(ctx?.actorUsername || '').trim() || 'system';
-    const requestId = String(ctx?.requestId || '').trim();
+    const actorUsername = String(ctx?.actorUsername || "").trim() || "system";
+    const requestId = String(ctx?.requestId || "").trim();
 
     const auditReq = new sql.Request(tx);
     await applyAuditContext(auditReq, {
@@ -401,7 +405,7 @@ async function updateWashingProduksi(noProduksi, payload, ctx) {
     // 1) AMBIL docDateOnly DARI CONFIG (LOCK HEADER ROW)
     // -------------------------------------------------------
     const { docDateOnly: oldDocDateOnly } = await loadDocDateOnlyFromConfig({
-      entityKey: 'washingProduksi', // pastikan sesuai config tutup-transaksi
+      entityKey: "washingProduksi", // pastikan sesuai config tutup-transaksi
       codeValue: noProduksi,
       runner: tx,
       useLock: true,
@@ -415,7 +419,7 @@ async function updateWashingProduksi(noProduksi, payload, ctx) {
     let newDocDateOnly = null;
 
     if (isChangingDate) {
-      if (!payload.tglProduksi) throw badReq('tglProduksi tidak boleh kosong');
+      if (!payload.tglProduksi) throw badReq("tglProduksi tidak boleh kosong");
       newDocDateOnly = resolveEffectiveDateForCreate(payload.tglProduksi);
     }
 
@@ -425,7 +429,7 @@ async function updateWashingProduksi(noProduksi, payload, ctx) {
     await assertNotLocked({
       date: oldDocDateOnly,
       runner: tx,
-      action: 'update WashingProduksi (current date)',
+      action: "update WashingProduksi (current date)",
       useLock: true,
     });
 
@@ -433,7 +437,7 @@ async function updateWashingProduksi(noProduksi, payload, ctx) {
       await assertNotLocked({
         date: newDocDateOnly,
         runner: tx,
-        action: 'update WashingProduksi (new date)',
+        action: "update WashingProduksi (new date)",
         useLock: true,
       });
     }
@@ -445,59 +449,60 @@ async function updateWashingProduksi(noProduksi, payload, ctx) {
     const rqUpd = new sql.Request(tx);
 
     if (isChangingDate) {
-      sets.push('TglProduksi = @TglProduksi');
-      rqUpd.input('TglProduksi', sql.Date, newDocDateOnly);
+      sets.push("TglProduksi = @TglProduksi");
+      rqUpd.input("TglProduksi", sql.Date, newDocDateOnly);
     }
 
     if (payload.idMesin !== undefined) {
-      sets.push('IdMesin = @IdMesin');
-      rqUpd.input('IdMesin', sql.Int, payload.idMesin);
+      sets.push("IdMesin = @IdMesin");
+      rqUpd.input("IdMesin", sql.Int, payload.idMesin);
     }
 
     if (payload.idOperator !== undefined) {
-      sets.push('IdOperator = @IdOperator');
-      rqUpd.input('IdOperator', sql.Int, payload.idOperator);
+      sets.push("IdOperator = @IdOperator");
+      rqUpd.input("IdOperator", sql.Int, payload.idOperator);
     }
 
     if (payload.shift !== undefined) {
-      sets.push('Shift = @Shift');
-      rqUpd.input('Shift', sql.Int, payload.shift);
+      sets.push("Shift = @Shift");
+      rqUpd.input("Shift", sql.Int, payload.shift);
     }
 
     if (payload.jamKerja !== undefined) {
-      const jamInt = payload.jamKerja === null ? null : parseJamToInt(payload.jamKerja);
-      sets.push('JamKerja = @JamKerja');
-      rqUpd.input('JamKerja', sql.Int, jamInt);
+      const jamInt =
+        payload.jamKerja === null ? null : parseJamToInt(payload.jamKerja);
+      sets.push("JamKerja = @JamKerja");
+      rqUpd.input("JamKerja", sql.Int, jamInt);
     }
 
     if (payload.checkBy1 !== undefined) {
-      sets.push('CheckBy1 = @CheckBy1');
-      rqUpd.input('CheckBy1', sql.VarChar(100), payload.checkBy1 ?? null);
+      sets.push("CheckBy1 = @CheckBy1");
+      rqUpd.input("CheckBy1", sql.VarChar(100), payload.checkBy1 ?? null);
     }
 
     if (payload.checkBy2 !== undefined) {
-      sets.push('CheckBy2 = @CheckBy2');
-      rqUpd.input('CheckBy2', sql.VarChar(100), payload.checkBy2 ?? null);
+      sets.push("CheckBy2 = @CheckBy2");
+      rqUpd.input("CheckBy2", sql.VarChar(100), payload.checkBy2 ?? null);
     }
 
     if (payload.approveBy !== undefined) {
-      sets.push('ApproveBy = @ApproveBy');
-      rqUpd.input('ApproveBy', sql.VarChar(100), payload.approveBy ?? null);
+      sets.push("ApproveBy = @ApproveBy");
+      rqUpd.input("ApproveBy", sql.VarChar(100), payload.approveBy ?? null);
     }
 
     if (payload.jmlhAnggota !== undefined) {
-      sets.push('JmlhAnggota = @JmlhAnggota');
-      rqUpd.input('JmlhAnggota', sql.Int, payload.jmlhAnggota ?? null);
+      sets.push("JmlhAnggota = @JmlhAnggota");
+      rqUpd.input("JmlhAnggota", sql.Int, payload.jmlhAnggota ?? null);
     }
 
     if (payload.hadir !== undefined) {
-      sets.push('Hadir = @Hadir');
-      rqUpd.input('Hadir', sql.Int, payload.hadir ?? null);
+      sets.push("Hadir = @Hadir");
+      rqUpd.input("Hadir", sql.Int, payload.hadir ?? null);
     }
 
     if (payload.hourMeter !== undefined) {
-      sets.push('HourMeter = @HourMeter');
-      rqUpd.input('HourMeter', sql.Decimal(18, 2), payload.hourMeter ?? null);
+      sets.push("HourMeter = @HourMeter");
+      rqUpd.input("HourMeter", sql.Decimal(18, 2), payload.hourMeter ?? null);
     }
 
     // hourStart / hourEnd (lebih aman kalau null / kosong)
@@ -507,7 +512,7 @@ async function updateWashingProduksi(noProduksi, payload, ctx) {
           CASE WHEN @HourStart IS NULL OR LTRIM(RTRIM(@HourStart)) = '' THEN NULL
                ELSE CAST(@HourStart AS time(7)) END
       `);
-      rqUpd.input('HourStart', sql.VarChar(20), payload.hourStart ?? null);
+      rqUpd.input("HourStart", sql.VarChar(20), payload.hourStart ?? null);
     }
 
     if (payload.hourEnd !== undefined) {
@@ -516,12 +521,12 @@ async function updateWashingProduksi(noProduksi, payload, ctx) {
           CASE WHEN @HourEnd IS NULL OR LTRIM(RTRIM(@HourEnd)) = '' THEN NULL
                ELSE CAST(@HourEnd AS time(7)) END
       `);
-      rqUpd.input('HourEnd', sql.VarChar(20), payload.hourEnd ?? null);
+      rqUpd.input("HourEnd", sql.VarChar(20), payload.hourEnd ?? null);
     }
 
-    if (sets.length === 0) throw badReq('No fields to update');
+    if (sets.length === 0) throw badReq("No fields to update");
 
-    rqUpd.input('NoProduksi', sql.VarChar(50), noProduksi);
+    rqUpd.input("NoProduksi", sql.VarChar(50), noProduksi);
 
     // -------------------------------------------------------
     // 5) UPDATE + RETURN row (FIX: OUTPUT ... INTO @out)
@@ -546,7 +551,7 @@ async function updateWashingProduksi(noProduksi, payload, ctx) {
       );
 
       UPDATE dbo.WashingProduksi_h
-      SET ${sets.join(', ')}
+      SET ${sets.join(", ")}
       OUTPUT
         INSERTED.NoProduksi,
         INSERTED.TglProduksi,
@@ -572,19 +577,22 @@ async function updateWashingProduksi(noProduksi, payload, ctx) {
     const updRes = await rqUpd.query(updateSql);
     const updatedHeader = updRes.recordset?.[0] || null;
 
-    if (!updatedHeader) throw notFound(`NoProduksi tidak ditemukan: ${noProduksi}`);
+    if (!updatedHeader)
+      throw notFound(`NoProduksi tidak ditemukan: ${noProduksi}`);
 
     // -------------------------------------------------------
     // 6) Jika TglProduksi berubah → (optional) sinkron DateUsage
     //    pakai tanggal hasil DB agar konsisten
     // -------------------------------------------------------
     if (isChangingDate) {
-      const usageDate = resolveEffectiveDateForCreate(updatedHeader.TglProduksi);
+      const usageDate = resolveEffectiveDateForCreate(
+        updatedHeader.TglProduksi,
+      );
 
       const rqUsage = new sql.Request(tx);
       rqUsage
-        .input('NoProduksi', sql.VarChar(50), noProduksi)
-        .input('TglProduksi', sql.Date, usageDate);
+        .input("NoProduksi", sql.VarChar(50), noProduksi)
+        .input("TglProduksi", sql.Date, usageDate);
 
       const sqlUpdateUsage = `
         -------------------------------------------------------
@@ -663,19 +671,19 @@ async function updateWashingProduksi(noProduksi, payload, ctx) {
     await tx.commit();
     return { header: updatedHeader };
   } catch (e) {
-    try { await tx.rollback(); } catch (_) {}
+    try {
+      await tx.rollback();
+    } catch (_) {}
     throw e;
   }
 }
-
-
 
 /**
  * Delete washing production header + inputs + reset DateUsage
  * @param {string} noProduksi
  */
 async function deleteWashingProduksi(noProduksi, ctx) {
-  if (!noProduksi) throw badReq('noProduksi wajib');
+  if (!noProduksi) throw badReq("noProduksi wajib");
 
   const pool = await poolPromise;
   const tx = new sql.Transaction(pool);
@@ -687,10 +695,10 @@ async function deleteWashingProduksi(noProduksi, ctx) {
     // =====================================================
     const actorIdNum = Number(ctx?.actorId);
     if (!Number.isFinite(actorIdNum) || actorIdNum <= 0) {
-      throw badReq('ctx.actorId wajib. Controller harus inject dari token.');
+      throw badReq("ctx.actorId wajib. Controller harus inject dari token.");
     }
-    const actorUsername = String(ctx?.actorUsername || '').trim() || 'system';
-    const requestId = String(ctx?.requestId || '').trim();
+    const actorUsername = String(ctx?.actorUsername || "").trim() || "system";
+    const requestId = String(ctx?.requestId || "").trim();
 
     const auditReq = new sql.Request(tx);
     await applyAuditContext(auditReq, {
@@ -703,10 +711,10 @@ async function deleteWashingProduksi(noProduksi, ctx) {
     // 1) AMBIL docDateOnly DARI CONFIG (LOCK HEADER ROW)
     // -------------------------------------------------------
     const { docDateOnly } = await loadDocDateOnlyFromConfig({
-      entityKey: 'washingProduksi', // pastikan sesuai config tutup-transaksi
+      entityKey: "washingProduksi", // pastikan sesuai config tutup-transaksi
       codeValue: noProduksi,
       runner: tx,
-      useLock: true,               // DELETE = write action
+      useLock: true, // DELETE = write action
       throwIfNotFound: true,
     });
 
@@ -716,7 +724,7 @@ async function deleteWashingProduksi(noProduksi, ctx) {
     await assertNotLocked({
       date: docDateOnly,
       runner: tx,
-      action: 'delete WashingProduksi',
+      action: "delete WashingProduksi",
       useLock: true,
     });
 
@@ -724,9 +732,11 @@ async function deleteWashingProduksi(noProduksi, ctx) {
     // 3) CEK DULU: SUDAH PUNYA OUTPUT ATAU BELUM
     // -------------------------------------------------------
     const rqCheck = new sql.Request(tx);
-    const outCheck = await rqCheck
-      .input('NoProduksi', sql.VarChar(50), noProduksi)
-      .query(`
+    const outCheck = await rqCheck.input(
+      "NoProduksi",
+      sql.VarChar(50),
+      noProduksi,
+    ).query(`
         SELECT COUNT(*) AS CntOutput
         FROM dbo.WashingProduksiOutput
         WHERE NoProduksi = @NoProduksi;
@@ -736,14 +746,16 @@ async function deleteWashingProduksi(noProduksi, ctx) {
     const hasOutput = (row.CntOutput || 0) > 0;
 
     if (hasOutput) {
-      throw badReq('Tidak dapat menghapus Nomor Produksi ini karena memiliki data output.');
+      throw badReq(
+        "Tidak dapat menghapus Nomor Produksi ini karena memiliki data output.",
+      );
     }
 
     // -------------------------------------------------------
     // 4) DELETE INPUT + PARTIAL + RESET DATEUSAGE + DELETE HEADER (OUTPUT INTO)
     // -------------------------------------------------------
     const req = new sql.Request(tx);
-    req.input('NoProduksi', sql.VarChar(50), noProduksi);
+    req.input("NoProduksi", sql.VarChar(50), noProduksi);
 
     const sqlDelete = `
       ---------------------------------------------------------
@@ -932,17 +944,18 @@ async function deleteWashingProduksi(noProduksi, ctx) {
     const delRes = await req.query(sqlDelete);
     const deletedHeader = delRes.recordset?.[0] || null;
 
-    if (!deletedHeader) throw notFound(`NoProduksi tidak ditemukan: ${noProduksi}`);
+    if (!deletedHeader)
+      throw notFound(`NoProduksi tidak ditemukan: ${noProduksi}`);
 
     await tx.commit();
     return { success: true, header: deletedHeader };
   } catch (e) {
-    try { await tx.rollback(); } catch (_) {}
+    try {
+      await tx.rollback();
+    } catch (_) {}
     throw e;
   }
 }
-
-
 
 /**
  * Ambil semua input untuk produksi Washing:
@@ -955,7 +968,7 @@ async function deleteWashingProduksi(noProduksi, ctx) {
 async function fetchInputs(noProduksi) {
   const pool = await poolPromise;
   const req = pool.request();
-  req.input('no', sql.VarChar(50), noProduksi);
+  req.input("no", sql.VarChar(50), noProduksi);
 
   const q = `
     /* ===================== [1] MAIN INPUTS (UNION) ===================== */
@@ -1068,8 +1081,8 @@ async function fetchInputs(noProduksi) {
   const rs = await req.query(q);
 
   const mainRows = rs.recordsets?.[0] || [];
-  const bbPart   = rs.recordsets?.[1] || [];
-  const gilPart  = rs.recordsets?.[2] || [];
+  const bbPart = rs.recordsets?.[1] || [];
+  const gilPart = rs.recordsets?.[2] || [];
 
   const out = {
     washing: [],
@@ -1081,30 +1094,30 @@ async function fetchInputs(noProduksi) {
   // ===================== MAIN ROWS =====================
   for (const r of mainRows) {
     const base = {
-      berat:     r.Berat ?? null,
-      beratAct:  r.BeratAct ?? null,
+      berat: r.Berat ?? null,
+      beratAct: r.BeratAct ?? null,
       isPartial: r.IsPartial ?? null,
-      idJenis:   r.IdJenis ?? null,
+      idJenis: r.IdJenis ?? null,
       namaJenis: r.NamaJenis ?? null,
     };
 
     switch (r.Src) {
-      case 'washing':
+      case "washing":
         out.washing.push({
           noWashing: r.Ref1,
-          noSak:     r.Ref2,
+          noSak: r.Ref2,
           ...base,
         });
         break;
-      case 'bb':
+      case "bb":
         out.bb.push({
           noBahanBaku: r.Ref1,
-          noPallet:    r.Ref2,
-          noSak:       r.Ref3,
+          noPallet: r.Ref2,
+          noSak: r.Ref3,
           ...base,
         });
         break;
-      case 'gilingan':
+      case "gilingan":
         out.gilingan.push({
           noGilingan: r.Ref1,
           ...base,
@@ -1118,11 +1131,11 @@ async function fetchInputs(noProduksi) {
     out.bb.push({
       noBBPartial: p.NoBBPartial,
       noBahanBaku: p.NoBahanBaku ?? null,
-      noPallet:    p.NoPallet ?? null,
-      noSak:       p.NoSak ?? null,
-      berat:       p.Berat ?? null,
-      idJenis:     p.IdJenis ?? null,
-      namaJenis:   p.NamaJenis ?? null,
+      noPallet: p.NoPallet ?? null,
+      noSak: p.NoSak ?? null,
+      berat: p.Berat ?? null,
+      idJenis: p.IdJenis ?? null,
+      namaJenis: p.NamaJenis ?? null,
       // isPartial sengaja tidak diisi: identifikasi dari adanya noBBPartial
     });
   }
@@ -1131,10 +1144,10 @@ async function fetchInputs(noProduksi) {
   for (const p of gilPart) {
     out.gilingan.push({
       noGilinganPartial: p.NoGilinganPartial,
-      noGilingan:        p.NoGilingan ?? null,
-      berat:             p.Berat ?? null,
-      idJenis:           p.IdJenis ?? null,
-      namaJenis:         p.NamaJenis ?? null,
+      noGilingan: p.NoGilingan ?? null,
+      berat: p.Berat ?? null,
+      idJenis: p.IdJenis ?? null,
+      namaJenis: p.NamaJenis ?? null,
       // sama: noGilinganPartial yang menandakan partial
     });
   }
@@ -1166,7 +1179,7 @@ async function validateLabel(labelCode) {
 
   const camelize = (val) => {
     if (Array.isArray(val)) return val.map(camelize);
-    if (val && typeof val === 'object') {
+    if (val && typeof val === "object") {
       const o = {};
       for (const [k, v] of Object.entries(val)) {
         o[toCamel(k)] = camelize(v);
@@ -1177,18 +1190,18 @@ async function validateLabel(labelCode) {
   };
 
   // ---------- normalize label ----------
-  const raw = String(labelCode || '').trim();
-  if (!raw) throw new Error('Label code is required');
+  const raw = String(labelCode || "").trim();
+  if (!raw) throw new Error("Label code is required");
 
   const prefix = raw.substring(0, 2).toUpperCase();
 
-  let query = '';
-  let tableName = '';
+  let query = "";
+  let tableName = "";
 
   // Helper eksekusi single-query
   async function run(label) {
     const req = pool.request();
-    req.input('labelCode', sql.VarChar(50), label);
+    req.input("labelCode", sql.VarChar(50), label);
     const rs = await req.query(query);
     const rows = rs.recordset || [];
     return camelize({
@@ -1204,12 +1217,14 @@ async function validateLabel(labelCode) {
     // =========================
     // A. BahanBaku_d (A.xxxxx-<pallet>)
     // =========================
-    case 'A.': {
-      tableName = 'BahanBaku_d';
+    case "A.": {
+      tableName = "BahanBaku_d";
       // Format: A.0000000001-1
-      const parts = raw.split('-');
+      const parts = raw.split("-");
       if (parts.length !== 2) {
-        throw new Error('Invalid format for A. prefix. Expected: A.0000000001-1');
+        throw new Error(
+          "Invalid format for A. prefix. Expected: A.0000000001-1",
+        );
       }
       const noBahanBaku = parts[0].trim();
       const noPallet = parseInt(parts[1], 10);
@@ -1255,8 +1270,8 @@ async function validateLabel(labelCode) {
       `;
 
       const reqA = pool.request();
-      reqA.input('noBahanBaku', sql.VarChar(50), noBahanBaku);
-      reqA.input('noPallet', sql.Int, noPallet);
+      reqA.input("noBahanBaku", sql.VarChar(50), noBahanBaku);
+      reqA.input("noPallet", sql.Int, noPallet);
       const rsA = await reqA.query(query);
       const rows = rsA.recordset || [];
 
@@ -1272,8 +1287,8 @@ async function validateLabel(labelCode) {
     // =========================
     // B. Washing_d
     // =========================
-    case 'B.':
-      tableName = 'Washing_d';
+    case "B.":
+      tableName = "Washing_d";
       query = `
         SELECT
           d.NoWashing,
@@ -1297,8 +1312,8 @@ async function validateLabel(labelCode) {
     // =========================
     // V. Gilingan
     // =========================
-    case 'V.':
-      tableName = 'Gilingan';
+    case "V.":
+      tableName = "Gilingan";
       query = `
         ;WITH PartialAgg AS (
           SELECT
@@ -1331,61 +1346,81 @@ async function validateLabel(labelCode) {
       return await run(raw);
 
     default:
-      throw new Error(`Invalid prefix: ${prefix}. Valid prefixes for Washing: A., B., V.`);
+      throw new Error(
+        `Invalid prefix: ${prefix}. Valid prefixes for Washing: A., B., V.`,
+      );
   }
 }
 
-
 async function upsertInputsAndPartials(noProduksi, payload, ctx) {
-  const no = String(noProduksi || '').trim();
-  if (!no) throw badReq('noProduksi wajib diisi');
+  const no = String(noProduksi || "").trim();
+  if (!no) throw badReq("noProduksi wajib diisi");
 
-  const body = payload && typeof payload === 'object' ? payload : {};
+  const body = payload && typeof payload === "object" ? payload : {};
 
   // ✅ ctx wajib (audit)
   const actorIdNum = Number(ctx?.actorId);
   if (!Number.isFinite(actorIdNum) || actorIdNum <= 0) {
-    throw badReq('ctx.actorId wajib. Controller harus inject dari token.');
+    throw badReq("ctx.actorId wajib. Controller harus inject dari token.");
   }
 
-  const actorUsername = String(ctx?.actorUsername || '').trim() || 'system';
+  const actorUsername = String(ctx?.actorUsername || "").trim() || "system";
 
   // requestId wajib string (kalau kosong, nanti di applyAuditContext dibuat fallback juga)
-  const requestId = String(ctx?.requestId || '').trim();
+  const requestId = String(ctx?.requestId || "").trim();
 
   // ✅ forward ctx yang sudah dinormalisasi
-  return sharedInputService.upsertInputsAndPartials('washingProduksi', no, body, {
-    actorId: Math.trunc(actorIdNum),
-    actorUsername,
-    requestId,
-  });
+  return sharedInputService.upsertInputsAndPartials(
+    "washingProduksi",
+    no,
+    body,
+    {
+      actorId: Math.trunc(actorIdNum),
+      actorUsername,
+      requestId,
+    },
+  );
 }
 
 /**
  * ✅ Delete inputs & partials dengan audit context
  */
 async function deleteInputsAndPartials(noProduksi, payload, ctx) {
-  const no = String(noProduksi || '').trim();
-  if (!no) throw badReq('noProduksi wajib diisi');
+  const no = String(noProduksi || "").trim();
+  if (!no) throw badReq("noProduksi wajib diisi");
 
-  const body = payload && typeof payload === 'object' ? payload : {};
+  const body = payload && typeof payload === "object" ? payload : {};
 
   // ✅ Validate audit context
   const actorIdNum = Number(ctx?.actorId);
   if (!Number.isFinite(actorIdNum) || actorIdNum <= 0) {
-    throw badReq('ctx.actorId wajib. Controller harus inject dari token.');
+    throw badReq("ctx.actorId wajib. Controller harus inject dari token.");
   }
 
-  const actorUsername = String(ctx?.actorUsername || '').trim() || 'system';
-  const requestId = String(ctx?.requestId || '').trim();
+  const actorUsername = String(ctx?.actorUsername || "").trim() || "system";
+  const requestId = String(ctx?.requestId || "").trim();
 
   // ✅ Forward to shared service
-  return sharedInputService.deleteInputsAndPartials('washingProduksi', no, body, {
-    actorId: Math.trunc(actorIdNum),
-    actorUsername,
-    requestId,
-  });
+  return sharedInputService.deleteInputsAndPartials(
+    "washingProduksi",
+    no,
+    body,
+    {
+      actorId: Math.trunc(actorIdNum),
+      actorUsername,
+      requestId,
+    },
+  );
 }
 
-
-module.exports = { getProduksiByDate, getAllProduksi, createWashingProduksi, updateWashingProduksi, deleteWashingProduksi, fetchInputs, validateLabel, upsertInputsAndPartials, deleteInputsAndPartials };   // ⬅️ pastikan ini ada
+module.exports = {
+  getProduksiByDate,
+  getAllProduksi,
+  createWashingProduksi,
+  updateWashingProduksi,
+  deleteWashingProduksi,
+  fetchInputs,
+  validateLabel,
+  upsertInputsAndPartials,
+  deleteInputsAndPartials,
+}; // ⬅️ pastikan ini ada

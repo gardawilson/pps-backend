@@ -1,10 +1,10 @@
 // src/core/shared/mesin-location.js
-const { sql, poolPromise } = require('../config/db');
-const { PRODUKSI_MESIN_SOURCES } = require('../config/produksi-mesin-config');
+const { sql, poolPromise } = require("../config/db");
+const { PRODUKSI_MESIN_SOURCES } = require("../config/produksi-mesin-config");
 
 // helper: dapatkan sql.Request dari berbagai "runner" (copy pola dari log.js)
 async function getRequest(runner) {
-  const r = (typeof runner?.then === 'function') ? await runner : runner;
+  const r = typeof runner?.then === "function" ? await runner : runner;
   if (r instanceof sql.Request) return r;
   if (r instanceof sql.Transaction) return new sql.Request(r);
   if (r?.request) return r.request();
@@ -41,7 +41,7 @@ async function getIdMesinFromKodeProduksi({ kode, runner } = {}) {
 
   const source = resolveProduksiSourceByPrefix(kode);
   if (!source) {
-    console.warn('[mesin-location] prefix tidak dikenal untuk kode:', kode);
+    console.warn("[mesin-location] prefix tidak dikenal untuk kode:", kode);
     return null;
   }
 
@@ -58,9 +58,7 @@ async function getIdMesinFromKodeProduksi({ kode, runner } = {}) {
     WHERE ${source.codeColumn} = @Kode
   `;
 
-  const res = await request
-    .input('Kode', sql.VarChar, kode)
-    .query(query);
+  const res = await request.input("Kode", sql.VarChar, kode).query(query);
 
   const row = res.recordset?.[0];
   return row?.IdMesin ?? null;
@@ -84,9 +82,7 @@ async function getBlokLokasiFromMesin({ idMesin, runner } = {}) {
     WHERE IdMesin = @IdMesin
   `;
 
-  const res = await request
-    .input('IdMesin', sql.Int, idMesin)
-    .query(query);
+  const res = await request.input("IdMesin", sql.Int, idMesin).query(query);
 
   const row = res.recordset?.[0];
   if (!row) return null;
@@ -109,7 +105,7 @@ async function getBlokLokasiFromKodeProduksi({ kode, runner } = {}) {
 
   const source = resolveProduksiSourceByPrefix(kode);
   if (!source) {
-    console.warn('[mesin-location] prefix tidak dikenal untuk kode:', kode);
+    console.warn("[mesin-location] prefix tidak dikenal untuk kode:", kode);
     return null;
   }
 

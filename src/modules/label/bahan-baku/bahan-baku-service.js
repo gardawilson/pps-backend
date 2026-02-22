@@ -1,5 +1,8 @@
 // services/bahan-baku-service.js
-const { sql, poolPromise } = require('../../../core/config/db');
+const { sql, poolPromise } = require("../../../core/config/db");
+const { badReq } = require("../../../core/utils/http-error");
+const { normalizeDecimalField } = require("../../../core/utils/number-utils");
+const { createSetIf } = require("../../../core/utils/update-diff-helper");
 
 // GET all header BahanBaku with pagination & search
 exports.getAll = async ({ page, limit, search }) => {
@@ -30,7 +33,7 @@ exports.getAll = async ({ page, limit, search }) => {
                OR CAST(h.IdSupplier AS varchar(50)) LIKE @search
                OR s.NmSupplier LIKE @search
              )`
-          : ''
+          : ""
       }
     ORDER BY h.NoBahanBaku DESC
     OFFSET @offset ROWS FETCH NEXT @limit ROWS ONLY;
@@ -51,13 +54,13 @@ exports.getAll = async ({ page, limit, search }) => {
                OR CAST(h.IdSupplier AS varchar(50)) LIKE @search
                OR s.NmSupplier LIKE @search
              )`
-          : ''
+          : ""
       }
   `;
 
-  request.input('offset', sql.Int, offset);
-  request.input('limit', sql.Int, limit);
-  if (search) request.input('search', sql.VarChar, `%${search}%`);
+  request.input("offset", sql.Int, offset);
+  request.input("limit", sql.Int, limit);
+  if (search) request.input("search", sql.VarChar, `%${search}%`);
 
   const [dataResult, countResult] = await Promise.all([
     request.query(baseQuery),
@@ -73,9 +76,9 @@ exports.getAll = async ({ page, limit, search }) => {
 exports.getPalletByNoBahanBaku = async (nobahanbaku) => {
   const pool = await poolPromise;
 
-  const result = await pool.request()
-    .input('NoBahanBaku', sql.VarChar, nobahanbaku)
-    .query(`
+  const result = await pool
+    .request()
+    .input("NoBahanBaku", sql.VarChar, nobahanbaku).query(`
       SELECT
         p.NoBahanBaku,
         p.NoPallet,
@@ -171,10 +174,11 @@ exports.getPalletByNoBahanBaku = async (nobahanbaku) => {
       ORDER BY p.NoPallet;
     `);
 
-  const toInt = (v) => (typeof v === 'number' ? v : parseInt(v ?? '0', 10) || 0);
-  const toNum = (v) => (typeof v === 'number' ? v : parseFloat(v ?? '0') || 0);
+  const toInt = (v) =>
+    typeof v === "number" ? v : parseInt(v ?? "0", 10) || 0;
+  const toNum = (v) => (typeof v === "number" ? v : parseFloat(v ?? "0") || 0);
 
-  return result.recordset.map(r => ({
+  return result.recordset.map((r) => ({
     ...r,
     IsEmpty: r.IsEmpty === true || r.IsEmpty === 1,
 
@@ -186,17 +190,16 @@ exports.getPalletByNoBahanBaku = async (nobahanbaku) => {
   }));
 };
 
-
-
-
-
-exports.getDetailByNoBahanBakuAndNoPallet = async ({ nobahanbaku, nopallet }) => {
+exports.getDetailByNoBahanBakuAndNoPallet = async ({
+  nobahanbaku,
+  nopallet,
+}) => {
   const pool = await poolPromise;
 
-  const result = await pool.request()
-    .input('NoBahanBaku', sql.VarChar, nobahanbaku)
-    .input('NoPallet', sql.VarChar, nopallet)
-    .query(`
+  const result = await pool
+    .request()
+    .input("NoBahanBaku", sql.VarChar, nobahanbaku)
+    .input("NoPallet", sql.VarChar, nopallet).query(`
       SELECT
         d.NoBahanBaku,
         d.NoPallet,
@@ -231,7 +234,7 @@ exports.getDetailByNoBahanBakuAndNoPallet = async ({ nobahanbaku, nopallet }) =>
   const formatDate = (date) => {
     if (!date) return null;
     const x = new Date(date);
-    const pad = (n) => (n < 10 ? '0' + n : n);
+    const pad = (n) => (n < 10 ? "0" + n : n);
     return `${x.getFullYear()}-${pad(x.getMonth() + 1)}-${pad(x.getDate())} ${pad(x.getHours())}:${pad(x.getMinutes())}:${pad(x.getSeconds())}`;
   };
 
@@ -239,4 +242,152 @@ exports.getDetailByNoBahanBakuAndNoPallet = async ({ nobahanbaku, nopallet }) =>
     ...item,
     ...(item.DateUsage && { DateUsage: formatDate(item.DateUsage) }),
   }));
+};
+
+exports.updateByNoBahanBakuAndNoPallet = async (payload) => {
+  const pool = await poolPromise;
+  const tx = new sql.Transaction(pool);
+
+  const NoBahanBaku = payload?.NoBahanBaku?.toString().trim();
+  const NoPallet = payload?.NoPallet?.toString().trim();
+
+  if (!NoBahanBaku) throw badReq("NoBahanBaku (path) wajib diisi");
+  if (!NoPallet) throw badReq("NoPallet (path) wajib diisi");
+
+  const header = payload?.header || {};
+
+  // =====================================================
+  // [AUDIT] actorId + requestId (ID only)
+  // =====================================================
+  const actorIdNum = Number(payload?.actorId);
+  const actorId =
+    Number.isFinite(actorIdNum) && actorIdNum > 0 ? actorIdNum : null;
+
+  const requestId = String(
+    payload?.requestId ||
+      `${Date.now()}-${Math.random().toString(16).slice(2)}`,
+  );
+
+  if (!actorId)
+    throw badReq(
+      "actorId kosong. Controller harus inject payload.actorId dari token.",
+    );
+
+  try {
+    await tx.begin(sql.ISOLATION_LEVEL.SERIALIZABLE);
+
+    // =====================================================
+    // [AUDIT CTX] Set actor_id + request_id untuk trigger audit
+    // =====================================================
+    await new sql.Request(tx)
+      .input("actorId", sql.Int, actorId)
+      .input("rid", sql.NVarChar(64), requestId).query(`
+        EXEC sys.sp_set_session_context @key=N'actor_id', @value=@actorId;
+        EXEC sys.sp_set_session_context @key=N'request_id', @value=@rid;
+      `);
+
+    // 0) Cek pallet exist & lock
+    const exist = await new sql.Request(tx)
+      .input("NoBahanBaku", sql.VarChar(50), NoBahanBaku)
+      .input("NoPallet", sql.VarChar(50), NoPallet).query(`
+        SELECT TOP 1 NoBahanBaku, NoPallet
+        FROM dbo.BahanBakuPallet_h WITH (UPDLOCK, HOLDLOCK)
+        WHERE NoBahanBaku = @NoBahanBaku AND NoPallet = @NoPallet
+      `);
+
+    if (exist.recordset.length === 0) {
+      const e = new Error(
+        `Pallet tidak ditemukan untuk NoBahanBaku ${NoBahanBaku} dan NoPallet ${NoPallet}`,
+      );
+      e.statusCode = 404;
+      throw e;
+    }
+
+    // 1) Update header (partial/dynamic)
+    const setParts = [];
+    const reqHeader = new sql.Request(tx)
+      .input("NoBahanBaku", sql.VarChar(50), NoBahanBaku)
+      .input("NoPallet", sql.VarChar(50), NoPallet);
+
+    const setIf = createSetIf(reqHeader, setParts);
+
+    // use shared normalizeDecimalField from utils
+
+    setIf("IdJenisPlastik", "IdJenisPlastik", sql.Int, header.IdJenisPlastik);
+    setIf("IdWarehouse", "IdWarehouse", sql.Int, header.IdWarehouse);
+    setIf("IdStatus", "IdStatus", sql.Int, header.IdStatus);
+    setIf("Keterangan", "Keterangan", sql.VarChar(sql.MAX), header.Keterangan);
+
+    // Field numeric dengan normalisasi (terima '', '-', null, string angka, angka)
+    setIf(
+      "Moisture",
+      "Moisture",
+      sql.Decimal(10, 3),
+      normalizeDecimalField(header.Moisture, "Moisture"),
+    );
+    setIf(
+      "MeltingIndex",
+      "MeltingIndex",
+      sql.Decimal(10, 3),
+      normalizeDecimalField(header.MeltingIndex, "MeltingIndex"),
+    );
+    setIf(
+      "Elasticity",
+      "Elasticity",
+      sql.Decimal(10, 3),
+      normalizeDecimalField(header.Elasticity, "Elasticity"),
+    );
+    setIf(
+      "Tenggelam",
+      "Tenggelam",
+      sql.Decimal(10, 3),
+      normalizeDecimalField(header.Tenggelam, "Tenggelam"),
+    );
+    setIf(
+      "Density",
+      "Density",
+      sql.Decimal(10, 3),
+      normalizeDecimalField(header.Density, "Density"),
+    );
+    setIf(
+      "Density2",
+      "Density2",
+      sql.Decimal(10, 3),
+      normalizeDecimalField(header.Density2, "Density2"),
+    );
+    setIf(
+      "Density3",
+      "Density3",
+      sql.Decimal(10, 3),
+      normalizeDecimalField(header.Density3, "Density3"),
+    );
+
+    if (setParts.length > 0) {
+      await reqHeader.query(`
+        UPDATE dbo.BahanBakuPallet_h
+        SET ${setParts.join(", ")}
+        WHERE NoBahanBaku = @NoBahanBaku AND NoPallet = @NoPallet
+      `);
+    }
+
+    await tx.commit();
+
+    return {
+      header: {
+        NoBahanBaku,
+        NoPallet,
+        ...header,
+      },
+      counts: {
+        detailsAffected: 0,
+      },
+      audit: { actorId, requestId }, // ✅ ID only
+      note: "Pallet berhasil diupdate",
+    };
+  } catch (e) {
+    try {
+      await tx.rollback();
+    } catch (_) {}
+    throw e;
+  }
 };

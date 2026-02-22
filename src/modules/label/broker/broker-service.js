@@ -15,6 +15,7 @@ const {
   generateNextCode,
 } = require("../../../core/utils/sequence-code-helper");
 const { badReq, conflict } = require("../../../core/utils/http-error");
+const { normalizeDecimalField } = require("../../../core/utils/number-utils");
 
 // GET all header Broker with pagination & search (mirror of Washing.getAll)
 exports.getAll = async ({ page, limit, search }) => {
@@ -712,12 +713,10 @@ exports.updateBrokerCascade = async (payload) => {
       NoBroker,
     );
 
-    const setIf = (col, param, type, val) => {
-      if (val !== undefined) {
-        setParts.push(`${col} = @${param}`);
-        reqHeader.input(param, type, val);
-      }
-    };
+    const { createSetIf } = require("../../../core/utils/update-diff-helper");
+    const setIf = createSetIf(reqHeader, setParts);
+
+    // use shared normalizeDecimalField from utils
 
     setIf("IdJenisPlastik", "IdJenisPlastik", sql.Int, header.IdJenisPlastik);
     setIf("IdWarehouse", "IdWarehouse", sql.Int, header.IdWarehouse);
@@ -727,40 +726,65 @@ exports.updateBrokerCascade = async (payload) => {
     }
 
     setIf("IdStatus", "IdStatus", sql.Int, header.IdStatus);
-    setIf("Density", "Density", sql.Decimal(10, 3), header.Density ?? null);
-    setIf("Moisture", "Moisture", sql.Decimal(10, 3), header.Moisture ?? null);
+    setIf(
+      "Density",
+      "Density",
+      sql.Decimal(10, 3),
+      normalizeDecimalField(header.Density, "Density"),
+    );
+    setIf(
+      "Moisture",
+      "Moisture",
+      sql.Decimal(10, 3),
+      normalizeDecimalField(header.Moisture, "Moisture"),
+    );
     setIf(
       "MaxMeltTemp",
       "MaxMeltTemp",
       sql.Decimal(10, 3),
-      header.MaxMeltTemp ?? null,
+      normalizeDecimalField(header.MaxMeltTemp, "MaxMeltTemp"),
     );
     setIf(
       "MinMeltTemp",
       "MinMeltTemp",
       sql.Decimal(10, 3),
-      header.MinMeltTemp ?? null,
+      normalizeDecimalField(header.MinMeltTemp, "MinMeltTemp"),
     );
-    setIf("MFI", "MFI", sql.Decimal(10, 3), header.MFI ?? null);
+    setIf(
+      "MFI",
+      "MFI",
+      sql.Decimal(10, 3),
+      normalizeDecimalField(header.MFI, "MFI"),
+    );
     setIf(
       "VisualNote",
       "VisualNote",
       sql.VarChar(sql.MAX),
       header.VisualNote ?? null,
     );
-    setIf("Density2", "Density2", sql.Decimal(10, 3), header.Density2 ?? null);
-    setIf("Density3", "Density3", sql.Decimal(10, 3), header.Density3 ?? null);
+    setIf(
+      "Density2",
+      "Density2",
+      sql.Decimal(10, 3),
+      normalizeDecimalField(header.Density2, "Density2"),
+    );
+    setIf(
+      "Density3",
+      "Density3",
+      sql.Decimal(10, 3),
+      normalizeDecimalField(header.Density3, "Density3"),
+    );
     setIf(
       "Moisture2",
       "Moisture2",
       sql.Decimal(10, 3),
-      header.Moisture2 ?? null,
+      normalizeDecimalField(header.Moisture2, "Moisture2"),
     );
     setIf(
       "Moisture3",
       "Moisture3",
       sql.Decimal(10, 3),
-      header.Moisture3 ?? null,
+      normalizeDecimalField(header.Moisture3, "Moisture3"),
     );
     // kalau mau bisa diedit, buka 2 baris ini:
     // setIf('Blok', 'Blok', sql.VarChar(50), header.Blok ?? null);

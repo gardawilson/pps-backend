@@ -27,4 +27,13 @@ function setIfChanged({
   }
 }
 
-module.exports = { setIfChanged };
+function createSetIf(req, sets) {
+  return (col, param, type, val) => {
+    if (val !== undefined) {
+      sets.push(`${col} = @${param}`);
+      req.input(param, type, val);
+    }
+  };
+}
+
+module.exports = { setIfChanged, createSetIf };

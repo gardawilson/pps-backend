@@ -1,13 +1,21 @@
 // controllers/mixer-production-controller.js
-const mixerProduksiService = require('./mixer-production-service');
-const { getActorId, getActorUsername, makeRequestId } = require('../../../core/utils/http-context');
-const { toInt, toFloat, normalizeTime } = require('../../../core/utils/parse');
-
+const mixerProduksiService = require("./mixer-production-service");
+const {
+  getActorId,
+  getActorUsername,
+  makeRequestId,
+} = require("../../../core/utils/http-context");
+const { toInt, toFloat, normalizeTime } = require("../../../core/utils/parse");
 
 async function getProduksiByDate(req, res) {
   const { username } = req;
   const date = req.params.date;
-  console.log("🔍 Fetching MixerProduksi_h | Username:", username, "| date:", date);
+  console.log(
+    "🔍 Fetching MixerProduksi_h | Username:",
+    username,
+    "| date:",
+    date,
+  );
 
   try {
     const data = await mixerProduksiService.getProduksiByDate(date);
@@ -30,16 +38,14 @@ async function getProduksiByDate(req, res) {
       meta: { date },
     });
   } catch (error) {
-    console.error('Error fetching MixerProduksi_h:', error);
+    console.error("Error fetching MixerProduksi_h:", error);
     return res.status(500).json({
       success: false,
-      message: 'Internal Server Error',
+      message: "Internal Server Error",
       error: error.message,
     });
   }
 }
-
-
 
 async function getAllProduksi(req, res) {
   const page = Math.max(parseInt(req.query.page, 10) || 1, 1);
@@ -48,20 +54,20 @@ async function getAllProduksi(req, res) {
 
   // support both ?noProduksi= and ?search=
   const search =
-    (typeof req.query.noProduksi === 'string' && req.query.noProduksi) ||
-    (typeof req.query.search === 'string' && req.query.search) ||
-    '';
+    (typeof req.query.noProduksi === "string" && req.query.noProduksi) ||
+    (typeof req.query.search === "string" && req.query.search) ||
+    "";
 
   try {
     const { data, total } = await mixerProduksiService.getAllProduksi(
       page,
       pageSize,
-      search
+      search,
     );
 
     return res.status(200).json({
       success: true,
-      message: 'MixerProduksi_h retrieved successfully',
+      message: "MixerProduksi_h retrieved successfully",
       totalData: total,
       data,
       meta: {
@@ -74,16 +80,14 @@ async function getAllProduksi(req, res) {
       },
     });
   } catch (error) {
-    console.error('Error fetching MixerProduksi_h:', error);
+    console.error("Error fetching MixerProduksi_h:", error);
     return res.status(500).json({
       success: false,
-      message: 'Internal Server Error',
+      message: "Internal Server Error",
       error: error.message,
     });
   }
 }
-
-
 
 async function createProduksi(req, res) {
   try {
@@ -92,27 +96,36 @@ async function createProduksi(req, res) {
     // ===============================
     const actorId = getActorId(req); // dari token / middleware
     if (!actorId) {
-      return res.status(401).json({ success: false, message: 'Unauthorized (actorId missing)' });
+      return res
+        .status(401)
+        .json({ success: false, message: "Unauthorized (actorId missing)" });
     }
 
-    const actorUsername = getActorUsername(req) || req.username || req.user?.username || 'system';
-    const requestId = String(makeRequestId(req) || '').trim();
-    if (requestId) res.setHeader('x-request-id', requestId);
+    const actorUsername =
+      getActorUsername(req) || req.username || req.user?.username || "system";
+    const requestId = String(makeRequestId(req) || "").trim();
+    if (requestId) res.setHeader("x-request-id", requestId);
 
     // ===============================
     // Body tanpa audit fields dari client
     // ===============================
-    const body = req.body && typeof req.body === 'object' ? req.body : {};
-    const { actorId: _cActorId, actorUsername: _cActorUsername, actor: _cActor, requestId: _cRequestId, ...b } = body;
+    const body = req.body && typeof req.body === "object" ? req.body : {};
+    const {
+      actorId: _cActorId,
+      actorUsername: _cActorUsername,
+      actor: _cActor,
+      requestId: _cRequestId,
+      ...b
+    } = body;
 
     // ===============================
     // Payload business
     // ===============================
     const payload = {
-      tglProduksi: b.tglProduksi,             // 'YYYY-MM-DD'
+      tglProduksi: b.tglProduksi, // 'YYYY-MM-DD'
       idMesin: toInt(b.idMesin),
       idOperator: toInt(b.idOperator),
-      jam: b.jam,                             // number or 'HH:mm-HH:mm'
+      jam: b.jam, // number or 'HH:mm-HH:mm'
       shift: toInt(b.shift),
       createBy: actorUsername,
       checkBy1: b.checkBy1 ?? null,
@@ -121,24 +134,24 @@ async function createProduksi(req, res) {
       jmlhAnggota: toInt(b.jmlhAnggota),
       hadir: toInt(b.hadir),
       hourMeter: toFloat(b.hourMeter),
-      hourStart: b.hourStart || null,         // '08:00:00'
-      hourEnd: b.hourEnd || null,             // '09:00:00'
+      hourStart: b.hourStart || null, // '08:00:00'
+      hourEnd: b.hourEnd || null, // '09:00:00'
     };
 
     // ===============================
     // Quick validation
     // ===============================
     const must = [];
-    if (!payload.tglProduksi) must.push('tglProduksi');
-    if (payload.idMesin == null) must.push('idMesin');
-    if (payload.idOperator == null) must.push('idOperator');
-    if (!payload.jam) must.push('jam');
-    if (payload.shift == null) must.push('shift');
+    if (!payload.tglProduksi) must.push("tglProduksi");
+    if (payload.idMesin == null) must.push("idMesin");
+    if (payload.idOperator == null) must.push("idOperator");
+    if (!payload.jam) must.push("jam");
+    if (payload.shift == null) must.push("shift");
 
     if (must.length) {
       return res.status(400).json({
         success: false,
-        message: `Field wajib: ${must.join(', ')}`,
+        message: `Field wajib: ${must.join(", ")}`,
         error: { fields: must },
       });
     }
@@ -156,31 +169,34 @@ async function createProduksi(req, res) {
 
     return res.status(201).json({
       success: true,
-      message: 'Created',
+      message: "Created",
       data: header,
       meta: { audit: { actorId, actorUsername, requestId } },
     });
   } catch (err) {
-    console.error('[Mixer][createProduksi]', err);
+    console.error("[Mixer][createProduksi]", err);
     const status = err.statusCode || err.status || 500;
     return res.status(status).json({
       success: false,
-      message: status === 500 ? 'Internal Server Error' : (err.message || 'Error'),
+      message:
+        status === 500 ? "Internal Server Error" : err.message || "Error",
       error: {
         message: err.message,
-        details: process.env.NODE_ENV === 'development' ? err.stack : undefined,
+        details: process.env.NODE_ENV === "development" ? err.stack : undefined,
       },
       meta: {
         audit:
           err.actorId && err.actorUsername
-            ? { actorId: err.actorId, actorUsername: err.actorUsername, requestId: err.requestId }
+            ? {
+                actorId: err.actorId,
+                actorUsername: err.actorUsername,
+                requestId: err.requestId,
+              }
             : undefined,
       },
     });
   }
 }
-
-
 
 async function updateProduksi(req, res) {
   try {
@@ -191,7 +207,7 @@ async function updateProduksi(req, res) {
     if (!noProduksi) {
       return res.status(400).json({
         success: false,
-        message: 'noProduksi is required in route param',
+        message: "noProduksi is required in route param",
       });
     }
 
@@ -202,19 +218,26 @@ async function updateProduksi(req, res) {
     if (!actorId) {
       return res.status(401).json({
         success: false,
-        message: 'Unauthorized (actorId missing)',
+        message: "Unauthorized (actorId missing)",
       });
     }
 
-    const actorUsername = getActorUsername(req) || req.username || req.user?.username || 'system';
-    const requestId = String(makeRequestId(req) || '').trim();
-    if (requestId) res.setHeader('x-request-id', requestId);
+    const actorUsername =
+      getActorUsername(req) || req.username || req.user?.username || "system";
+    const requestId = String(makeRequestId(req) || "").trim();
+    if (requestId) res.setHeader("x-request-id", requestId);
 
     // ===============================
     // Body tanpa audit fields dari client
     // ===============================
-    const body = req.body && typeof req.body === 'object' ? req.body : {};
-    const { actorId: _cActorId, actorUsername: _cActorUsername, actor: _cActor, requestId: _cRequestId, ...b } = body;
+    const body = req.body && typeof req.body === "object" ? req.body : {};
+    const {
+      actorId: _cActorId,
+      actorUsername: _cActorUsername,
+      actor: _cActor,
+      requestId: _cRequestId,
+      ...b
+    } = body;
 
     // ===============================
     // Payload business (partial update)
@@ -241,32 +264,41 @@ async function updateProduksi(req, res) {
     // Call service
     // ===============================
     const ctx = { actorId, actorUsername, requestId };
-    const result = await mixerProduksiService.updateMixerProduksi(noProduksi, payload, ctx);
+    const result = await mixerProduksiService.updateMixerProduksi(
+      noProduksi,
+      payload,
+      ctx,
+    );
     const header = result?.header ?? result;
 
     return res.status(200).json({
       success: true,
-      message: 'Updated',
+      message: "Updated",
       data: header,
       meta: { audit: { actorId, actorUsername, requestId } },
     });
   } catch (err) {
-    console.error('[Mixer][updateProduksi]', err);
+    console.error("[Mixer][updateProduksi]", err);
     const status = err.statusCode || err.status || 500;
 
     return res.status(status).json({
       success: false,
-      message: status === 500 ? 'Internal Server Error' : (err.message || 'Error'),
+      message:
+        status === 500 ? "Internal Server Error" : err.message || "Error",
       error: {
         message: err.message,
-        details: process.env.NODE_ENV === 'development' ? err.stack : undefined,
+        details: process.env.NODE_ENV === "development" ? err.stack : undefined,
       },
-      meta: { audit: { actorId: getActorId(req), actorUsername: getActorUsername(req), requestId: makeRequestId(req) } },
+      meta: {
+        audit: {
+          actorId: getActorId(req),
+          actorUsername: getActorUsername(req),
+          requestId: makeRequestId(req),
+        },
+      },
     });
   }
 }
-
-
 
 async function deleteProduksi(req, res) {
   try {
@@ -277,7 +309,7 @@ async function deleteProduksi(req, res) {
     if (!noProduksi) {
       return res.status(400).json({
         success: false,
-        message: 'noProduksi is required in route param',
+        message: "noProduksi is required in route param",
       });
     }
 
@@ -288,13 +320,14 @@ async function deleteProduksi(req, res) {
     if (!actorId) {
       return res.status(401).json({
         success: false,
-        message: 'Unauthorized (idUsername missing)',
+        message: "Unauthorized (idUsername missing)",
       });
     }
 
-    const actorUsername = getActorUsername(req) || req.username || req.user?.username || 'system';
-    const requestId = String(makeRequestId(req) || '').trim();
-    if (requestId) res.setHeader('x-request-id', requestId);
+    const actorUsername =
+      getActorUsername(req) || req.username || req.user?.username || "system";
+    const requestId = String(makeRequestId(req) || "").trim();
+    if (requestId) res.setHeader("x-request-id", requestId);
 
     const ctx = { actorId, actorUsername, requestId };
 
@@ -305,42 +338,52 @@ async function deleteProduksi(req, res) {
 
     return res.status(200).json({
       success: true,
-      message: 'Deleted',
+      message: "Deleted",
       meta: { audit: ctx },
     });
   } catch (err) {
-    console.error('[Mixer][deleteProduksi]', err);
+    console.error("[Mixer][deleteProduksi]", err);
     const status = err.statusCode || err.status || 500;
 
     return res.status(status).json({
       success: false,
-      message: status === 500 ? 'Internal Server Error' : (err.message || 'Error'),
+      message:
+        status === 500 ? "Internal Server Error" : err.message || "Error",
       error: {
         message: err.message,
-        details: process.env.NODE_ENV === 'development' ? err.stack : undefined,
+        details: process.env.NODE_ENV === "development" ? err.stack : undefined,
       },
-      meta: { audit: {
-        actorId: err.actorId || null,
-        actorUsername: err.actorUsername || null,
-        requestId: err.requestId || null,
-      }},
+      meta: {
+        audit: {
+          actorId: err.actorId || null,
+          actorUsername: err.actorUsername || null,
+          requestId: err.requestId || null,
+        },
+      },
     });
   }
 }
 
-
 async function getInputsByNoProduksi(req, res) {
-  const noProduksi = (req.params.noProduksi || '').trim();
+  const noProduksi = (req.params.noProduksi || "").trim();
   if (!noProduksi) {
-    return res.status(400).json({ success:false, message:'noProduksi is required' });
+    return res
+      .status(400)
+      .json({ success: false, message: "noProduksi is required" });
   }
 
   try {
     const data = await mixerProduksiService.fetchInputs(noProduksi);
-    return res.status(200).json({ success:true, message:'Inputs retrieved', data });
+    return res
+      .status(200)
+      .json({ success: true, message: "Inputs retrieved", data });
   } catch (e) {
-    console.error('[mixer.getInputsByNoProduksi]', e);
-    return res.status(500).json({ success:false, message:'Internal Server Error', error:e.message });
+    console.error("[mixer.getInputsByNoProduksi]", e);
+    return res.status(500).json({
+      success: false,
+      message: "Internal Server Error",
+      error: e.message,
+    });
   }
 }
 
@@ -348,10 +391,10 @@ async function validateLabel(req, res) {
   const { labelCode } = req.params;
 
   // Validate input
-  if (!labelCode || typeof labelCode !== 'string') {
+  if (!labelCode || typeof labelCode !== "string") {
     return res.status(400).json({
       success: false,
-      message: 'Label number is required and must be a string',
+      message: "Label number is required and must be a string",
     });
   }
 
@@ -369,35 +412,37 @@ async function validateLabel(req, res) {
 
     return res.status(200).json({
       success: true,
-      message: 'Label validated successfully',
+      message: "Label validated successfully",
       prefix: result.prefix,
       tableName: result.tableName,
       totalRecords: result.count,
       data: result.data, // Now returns array of all matching records
     });
   } catch (error) {
-    console.error('Error validating label:', error);
+    console.error("Error validating label:", error);
     return res.status(500).json({
       success: false,
-      message: 'Internal Server Error',
+      message: "Internal Server Error",
       error: error.message,
     });
   }
 }
 
-
 async function upsertInputsAndPartials(req, res) {
-  const noProduksi = String(req.params.noProduksi || '').trim();
+  const noProduksi = String(req.params.noProduksi || "").trim();
   if (!noProduksi) {
     return res.status(400).json({
       success: false,
-      message: 'noProduksi is required',
-      error: { field: 'noProduksi', message: 'Parameter noProduksi tidak boleh kosong' },
+      message: "noProduksi is required",
+      error: {
+        field: "noProduksi",
+        message: "Parameter noProduksi tidak boleh kosong",
+      },
     });
   }
 
   // ✅ pastikan body object
-  const body = req.body && typeof req.body === 'object' ? req.body : {};
+  const body = req.body && typeof req.body === "object" ? req.body : {};
 
   // ✅ jangan percaya audit fields dari client
   // (biar client tidak bisa spoof requestId/actorId dan biar tidak bikin null/aneh)
@@ -414,23 +459,30 @@ async function upsertInputsAndPartials(req, res) {
   if (!actorId) {
     return res.status(401).json({
       success: false,
-      message: 'Unauthorized (idUsername missing)',
+      message: "Unauthorized (idUsername missing)",
     });
   }
 
   // ✅ username untuk business fields / audit actor string
-  const actorUsername = getActorUsername(req) || req.username || req.user?.username || 'system';
+  const actorUsername =
+    getActorUsername(req) || req.username || req.user?.username || "system";
 
   // ✅ request id per HTTP request (kalau ada header ikut pakai)
-  const requestId = String(makeRequestId(req) || '').trim();
+  const requestId = String(makeRequestId(req) || "").trim();
 
   // optional: echo header for tracing
-  if (requestId) res.setHeader('x-request-id', requestId);
+  if (requestId) res.setHeader("x-request-id", requestId);
 
   // optional validate: at least one input exists
   const hasInput = [
-    'broker', 'bb', 'gilingan', 'mixer',
-    'bbPartialNew', 'brokerPartialNew', 'gilinganPartial', 'mixerPartial'
+    "broker",
+    "bb",
+    "gilingan",
+    "mixer",
+    "bbPartial",
+    "brokerPartial",
+    "gilinganPartial",
+    "mixerPartial",
   ].some((key) => Array.isArray(payload[key]) && payload[key].length > 0);
 
   // if (!hasInput) { ... } // kalau mau strict, aktifkan lagi
@@ -439,7 +491,11 @@ async function upsertInputsAndPartials(req, res) {
     // ✅ Forward audit context ke service
     const ctx = { actorId, actorUsername, requestId };
 
-    const result = await mixerProduksiService.upsertInputsAndPartials(noProduksi, payload, ctx);
+    const result = await mixerProduksiService.upsertInputsAndPartials(
+      noProduksi,
+      payload,
+      ctx,
+    );
 
     // Support beberapa bentuk return (backward compatible)
     const success = result?.success !== undefined ? !!result.success : true;
@@ -447,22 +503,24 @@ async function upsertInputsAndPartials(req, res) {
     const data = result?.data ?? result;
 
     let statusCode = 200;
-    let message = 'Inputs & partials processed successfully';
+    let message = "Inputs & partials processed successfully";
 
     if (!success) {
       const totalInvalid = Number(data?.summary?.totalInvalid ?? 0);
       const totalInserted = Number(data?.summary?.totalInserted ?? 0);
-      const totalPartialsCreated = Number(data?.summary?.totalPartialsCreated ?? 0);
+      const totalPartialsCreated = Number(
+        data?.summary?.totalPartialsCreated ?? 0,
+      );
 
       if (totalInvalid > 0) {
         statusCode = 422;
-        message = 'Beberapa data tidak valid';
+        message = "Beberapa data tidak valid";
       } else if (totalInserted === 0 && totalPartialsCreated === 0) {
         statusCode = 400;
-        message = 'Tidak ada data yang berhasil diproses';
+        message = "Tidak ada data yang berhasil diproses";
       }
     } else if (hasWarnings) {
-      message = 'Inputs & partials processed with warnings';
+      message = "Inputs & partials processed with warnings";
     }
 
     return res.status(statusCode).json({
@@ -476,30 +534,31 @@ async function upsertInputsAndPartials(req, res) {
       },
     });
   } catch (e) {
-    console.error('[upsertInputsAndPartials]', e);
+    console.error("[upsertInputsAndPartials]", e);
     const status = e.statusCode || e.status || 500;
 
     return res.status(status).json({
       success: false,
-      message: status === 500 ? 'Internal Server Error' : e.message,
+      message: status === 500 ? "Internal Server Error" : e.message,
       error: {
         message: e.message,
-        details: process.env.NODE_ENV === 'development' ? e.stack : undefined,
+        details: process.env.NODE_ENV === "development" ? e.stack : undefined,
       },
     });
   }
 }
 
-
-
 async function deleteInputsAndPartials(req, res) {
-  const noProduksi = String(req.params.noProduksi || '').trim();
-  
+  const noProduksi = String(req.params.noProduksi || "").trim();
+
   if (!noProduksi) {
-    return res.status(400).json({ 
-      success: false, 
-      message: 'noProduksi is required',
-      error: { field: 'noProduksi', message: 'Parameter noProduksi tidak boleh kosong' }
+    return res.status(400).json({
+      success: false,
+      message: "noProduksi is required",
+      error: {
+        field: "noProduksi",
+        message: "Parameter noProduksi tidak boleh kosong",
+      },
     });
   }
 
@@ -517,45 +576,56 @@ async function deleteInputsAndPartials(req, res) {
   if (!actorId) {
     return res.status(401).json({
       success: false,
-      message: 'Unauthorized (idUsername missing)',
+      message: "Unauthorized (idUsername missing)",
     });
   }
 
-  const actorUsername = getActorUsername(req) || req.username || req.user?.username || 'system';
-  const requestId = String(makeRequestId(req) || '').trim();
+  const actorUsername =
+    getActorUsername(req) || req.username || req.user?.username || "system";
+  const requestId = String(makeRequestId(req) || "").trim();
 
-  if (requestId) res.setHeader('x-request-id', requestId);
+  if (requestId) res.setHeader("x-request-id", requestId);
 
   // Validate input
   const hasInput = [
-    'broker', 'bb', 'gilingan', 'mixer',
-    'bbPartial', 'brokerPartial', 'gilinganPartial', 'mixerPartial'
+    "broker",
+    "bb",
+    "gilingan",
+    "mixer",
+    "bbPartial",
+    "brokerPartial",
+    "gilinganPartial",
+    "mixerPartial",
   ].some((key) => Array.isArray(payload[key]) && payload[key].length > 0);
 
   if (!hasInput) {
     return res.status(400).json({
       success: false,
-      message: 'Tidak ada data input yang diberikan',
-      error: { message: 'Request body harus berisi minimal satu array input' }
+      message: "Tidak ada data input yang diberikan",
+      error: { message: "Request body harus berisi minimal satu array input" },
     });
   }
 
   try {
     // ✅ Forward audit context
     const ctx = { actorId, actorUsername, requestId };
-    
-    const result = await mixerProduksiService.deleteInputsAndPartials(noProduksi, payload, ctx);
+
+    const result = await mixerProduksiService.deleteInputsAndPartials(
+      noProduksi,
+      payload,
+      ctx,
+    );
 
     const { success, hasWarnings, data } = result;
 
     let statusCode = 200;
-    let message = 'Inputs & partials deleted successfully';
+    let message = "Inputs & partials deleted successfully";
 
     if (!success) {
       statusCode = 404;
-      message = 'Tidak ada data yang berhasil dihapus';
+      message = "Tidak ada data yang berhasil dihapus";
     } else if (hasWarnings) {
-      message = 'Inputs & partials deleted with warnings';
+      message = "Inputs & partials deleted with warnings";
     }
 
     return res.status(statusCode).json({
@@ -569,19 +639,28 @@ async function deleteInputsAndPartials(req, res) {
       },
     });
   } catch (e) {
-    console.error('[deleteInputsAndPartials]', e);
+    console.error("[deleteInputsAndPartials]", e);
     const status = e.statusCode || e.status || 500;
 
     return res.status(status).json({
       success: false,
-      message: status === 500 ? 'Internal Server Error' : e.message,
+      message: status === 500 ? "Internal Server Error" : e.message,
       error: {
         message: e.message,
-        details: process.env.NODE_ENV === 'development' ? e.stack : undefined
-      }
+        details: process.env.NODE_ENV === "development" ? e.stack : undefined,
+      },
     });
   }
 }
 
-
-module.exports = { getProduksiByDate, getAllProduksi, createProduksi, updateProduksi, deleteProduksi, getInputsByNoProduksi, validateLabel, upsertInputsAndPartials, deleteInputsAndPartials };
+module.exports = {
+  getProduksiByDate,
+  getAllProduksi,
+  createProduksi,
+  updateProduksi,
+  deleteProduksi,
+  getInputsByNoProduksi,
+  validateLabel,
+  upsertInputsAndPartials,
+  deleteInputsAndPartials,
+};

@@ -312,23 +312,26 @@ async function deleteProduksi(req, res) {
     if (requestId) res.setHeader("x-request-id", requestId);
 
     // ===============================
-    // Get noPacking
+    // Get noProduksi
     // ===============================
-    const noPacking = String(req.params.noPacking || "").trim();
-    if (!noPacking) {
+    const noProduksi = String(req.params.noProduksi || "").trim();
+    if (!noProduksi) {
       return res
         .status(400)
-        .json({ success: false, message: "noPacking wajib" });
+        .json({ success: false, message: "noProduksi wajib" });
     }
 
     // ===============================
     // Call service with audit context
     // ===============================
-    const result = await packingService.deletePackingProduksi(noPacking, {
-      actorId,
-      actorUsername,
-      requestId,
-    });
+    const result = await hotStampingService.deleteHotStampingProduksi(
+      noProduksi,
+      {
+        actorId,
+        actorUsername,
+        requestId,
+      },
+    );
 
     return res.status(200).json({
       success: true,

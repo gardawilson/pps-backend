@@ -804,7 +804,7 @@ async function deleteWashingProduksi(noProduksi, ctx) {
       ---------------------------------------------------------
       -- 1. BAHAN BAKU (FULL + PARTIAL)
       --    NOTE: sesuaikan nama mapping FULL BB kamu:
-      --          (a) WashingProduksiInputBB  <-- rekomendasi
+      --          (a) WashingProduksiInput  <-- rekomendasi
       --          (b) atau WashingProduksiInput (punya kolom NoBahanBaku/NoPallet/NoSak)
       ---------------------------------------------------------
       INSERT INTO @BBKeys (NoBahanBaku, NoPallet, NoSak)
@@ -812,7 +812,7 @@ async function deleteWashingProduksi(noProduksi, ctx) {
       FROM dbo.BahanBaku_d AS bb
       WHERE EXISTS (
               SELECT 1
-              FROM dbo.WashingProduksiInputBB AS map
+              FROM dbo.WashingProduksiInput AS map
               WHERE map.NoProduksi   = @NoProduksi
                 AND map.NoBahanBaku  = bb.NoBahanBaku
                 AND ISNULL(map.NoPallet,'') = ISNULL(bb.NoPallet,'')
@@ -838,7 +838,7 @@ async function deleteWashingProduksi(noProduksi, ctx) {
       DELETE FROM dbo.WashingProduksiInputBBPartial
       WHERE NoProduksi = @NoProduksi;
 
-      DELETE FROM dbo.WashingProduksiInputBB
+      DELETE FROM dbo.WashingProduksiInput
       WHERE NoProduksi = @NoProduksi;
 
       UPDATE bb

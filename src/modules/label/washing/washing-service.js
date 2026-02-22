@@ -15,6 +15,7 @@ const {
   generateNextCode,
 } = require("../../../core/utils/sequence-code-helper");
 const { badReq, conflict } = require("../../../core/utils/http-error");
+const { normalizeDecimalField } = require("../../../core/utils/number-utils");
 
 // GET all header with pagination & search
 exports.getAll = async ({ page, limit, search }) => {
@@ -39,7 +40,12 @@ exports.getAll = async ({ page, limit, search }) => {
         ELSE '' 
       END AS StatusText,
       h.Density,
+      h.Density2,
+      h.Density3,
       h.Moisture,
+      h.Moisture2,
+      h.Moisture3,
+
       -- ambil NoProduksi & NamaMesin
       MAX(wpo.NoProduksi) AS NoProduksi,
       MAX(m.NamaMesin) AS NamaMesin,
@@ -59,7 +65,7 @@ exports.getAll = async ({ page, limit, search }) => {
     GROUP BY 
       h.NoWashing, h.DateCreate, h.IdJenisPlastik, jp.Jenis, 
       h.IdWarehouse, w.NamaWarehouse, h.IdStatus, 
-      h.Density, h.Moisture, h.Blok, h.IdLokasi
+      h.Density, h.Density2, h.Density3, h.Moisture, h.Moisture2, h.Moisture3, h.Blok, h.IdLokasi
     ORDER BY h.NoWashing DESC
     OFFSET @offset ROWS FETCH NEXT @limit ROWS ONLY;
   `;
@@ -572,12 +578,10 @@ exports.updateWashingCascade = async (payload) => {
       NoWashing,
     );
 
-    const setIf = (col, param, type, val) => {
-      if (val !== undefined) {
-        setParts.push(`${col} = @${param}`);
-        reqHeader.input(param, type, val);
-      }
-    };
+    const { createSetIf } = require("../../../core/utils/update-diff-helper");
+    const setIf = createSetIf(reqHeader, setParts);
+
+    // use shared normalizeDecimalField from utils
 
     setIf("IdJenisPlastik", "IdJenisPlastik", sql.Int, header.IdJenisPlastik);
     setIf("IdWarehouse", "IdWarehouse", sql.Int, header.IdWarehouse);
@@ -587,21 +591,41 @@ exports.updateWashingCascade = async (payload) => {
     }
 
     setIf("IdStatus", "IdStatus", sql.Int, header.IdStatus);
-    setIf("Density", "Density", sql.Decimal(10, 3), header.Density ?? null);
-    setIf("Moisture", "Moisture", sql.Decimal(10, 3), header.Moisture ?? null);
-    setIf("Density2", "Density2", sql.Decimal(10, 3), header.Density2 ?? null);
-    setIf("Density3", "Density3", sql.Decimal(10, 3), header.Density3 ?? null);
+    setIf(
+      "Density",
+      "Density",
+      sql.Decimal(10, 3),
+      normalizeDecimalField(header.Density, "Density"),
+    );
+    setIf(
+      "Moisture",
+      "Moisture",
+      sql.Decimal(10, 3),
+      normalizeDecimalField(header.Moisture, "Moisture"),
+    );
+    setIf(
+      "Density2",
+      "Density2",
+      sql.Decimal(10, 3),
+      normalizeDecimalField(header.Density2, "Density2"),
+    );
+    setIf(
+      "Density3",
+      "Density3",
+      sql.Decimal(10, 3),
+      normalizeDecimalField(header.Density3, "Density3"),
+    );
     setIf(
       "Moisture2",
       "Moisture2",
       sql.Decimal(10, 3),
-      header.Moisture2 ?? null,
+      normalizeDecimalField(header.Moisture2, "Moisture2"),
     );
     setIf(
       "Moisture3",
       "Moisture3",
       sql.Decimal(10, 3),
-      header.Moisture3 ?? null,
+      normalizeDecimalField(header.Moisture3, "Moisture3"),
     );
     // setIf('Blok', 'Blok', sql.VarChar(50), header.Blok ?? null);
     // setIf('IdLokasi', 'IdLokasi', sql.Int, header.IdLokasi ?? null);

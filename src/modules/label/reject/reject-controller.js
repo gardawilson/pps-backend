@@ -243,3 +243,38 @@ exports.getRejectPartialInfo = async (req, res) => {
     });
   }
 };
+
+exports.incrementHasBeenPrinted = async (req, res) => {
+  const { noreject, noReject } = req.params;
+
+  try {
+    const NoReject = String(noreject || noReject || '').trim();
+    if (!NoReject) {
+      return res.status(400).json({ success: false, message: 'noReject wajib diisi' });
+    }
+
+    const actorId = getActorId(req);
+    if (!actorId) {
+      return res.status(401).json({ success: false, message: 'Unauthorized (idUsername missing)' });
+    }
+
+    const result = await service.incrementHasBeenPrinted({
+      NoReject,
+      actorId,
+      requestId: makeRequestId(req),
+    });
+
+    return res.status(200).json({
+      success: true,
+      message: 'HasBeenPrinted berhasil ditambah',
+      data: result,
+    });
+  } catch (err) {
+    console.error('Increment Reject HasBeenPrinted Error:', err);
+    const status = err.statusCode || 500;
+    return res.status(status).json({
+      success: false,
+      message: err.message || 'Terjadi kesalahan server',
+    });
+  }
+};

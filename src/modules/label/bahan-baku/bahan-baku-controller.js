@@ -151,3 +151,47 @@ exports.updateByNoBahanBakuAndNoPallet = async (req, res) => {
     });
   }
 };
+
+exports.incrementHasBeenPrinted = async (req, res) => {
+  const { nobahanbaku, nopallet } = req.params;
+
+  try {
+    const NoBahanBaku = String(nobahanbaku || "").trim();
+    const NoPallet = String(nopallet || "").trim();
+
+    if (!NoBahanBaku || !NoPallet) {
+      return res.status(400).json({
+        success: false,
+        message: "NoBahanBaku dan NoPallet wajib diisi",
+      });
+    }
+
+    const actorId = getActorId(req);
+    if (!actorId) {
+      return res.status(401).json({
+        success: false,
+        message: "Unauthorized (idUsername missing)",
+      });
+    }
+
+    const result = await bahanBakuService.incrementHasBeenPrinted({
+      NoBahanBaku,
+      NoPallet,
+      actorId,
+      requestId: makeRequestId(req),
+    });
+
+    return res.status(200).json({
+      success: true,
+      message: "HasBeenPrinted berhasil ditambah",
+      data: result,
+    });
+  } catch (err) {
+    console.error("Increment HasBeenPrinted BahanBaku Error:", err);
+    const status = err.statusCode || 500;
+    return res.status(status).json({
+      success: false,
+      message: err.message || "Terjadi kesalahan server",
+    });
+  }
+};

@@ -388,6 +388,52 @@ async function getInputsByNoProduksi(req, res) {
   }
 }
 
+async function getOutputsByNoProduksi(req, res) {
+  const noProduksi = (req.params.noProduksi || "").trim();
+  if (!noProduksi) {
+    return res
+      .status(400)
+      .json({ success: false, message: "noProduksi is required" });
+  }
+
+  try {
+    const data = await keyFittingService.fetchOutputs(noProduksi);
+    return res
+      .status(200)
+      .json({ success: true, message: "Outputs retrieved", data });
+  } catch (e) {
+    console.error("[keyfitting.getOutputsByNoProduksi]", e);
+    return res.status(500).json({
+      success: false,
+      message: "Internal Server Error",
+      error: e.message,
+    });
+  }
+}
+
+async function getOutputsRejectByNoProduksi(req, res) {
+  const noProduksi = (req.params.noProduksi || "").trim();
+  if (!noProduksi) {
+    return res
+      .status(400)
+      .json({ success: false, message: "noProduksi is required" });
+  }
+
+  try {
+    const data = await keyFittingService.fetchOutputsReject(noProduksi);
+    return res
+      .status(200)
+      .json({ success: true, message: "Outputs retrieved", data });
+  } catch (e) {
+    console.error("[keyfitting.getOutputsRejectByNoProduksi]", e);
+    return res.status(500).json({
+      success: false,
+      message: "Internal Server Error",
+      error: e.message,
+    });
+  }
+}
+
 async function upsertInputsAndPartials(req, res) {
   const noProduksi = String(req.params.noProduksi || "").trim();
 
@@ -629,6 +675,8 @@ module.exports = {
   updateProduksi,
   deleteProduksi,
   getInputsByNoProduksi,
+  getOutputsByNoProduksi,
+  getOutputsRejectByNoProduksi,
   upsertInputsAndPartials,
   deleteInputsAndPartials,
 };

@@ -473,6 +473,32 @@ async function getInputsByNoCrusherProduksi(req, res) {
   }
 }
 
+async function getOutputsByNoCrusherProduksi(req, res) {
+  const noCrusherProduksi = (req.params.noCrusherProduksi || '').trim();
+  if (!noCrusherProduksi) {
+    return res.status(400).json({
+      success: false,
+      message: 'noCrusherProduksi is required'
+    });
+  }
+
+  try {
+    const data = await service.fetchOutputs(noCrusherProduksi);
+    return res.status(200).json({
+      success: true,
+      message: 'Outputs retrieved',
+      data
+    });
+  } catch (e) {
+    console.error('[getOutputsByNoCrusherProduksi]', e);
+    return res.status(500).json({
+      success: false,
+      message: 'Internal Server Error',
+      error: e.message
+    });
+  }
+}
+
 
 /**
  * GET /api/produksi/crusher/validate-label/:labelCode
@@ -713,4 +739,4 @@ async function deleteInputsAndPartials(req, res) {
 }
 
 
-module.exports = { getAllProduksi, getProduksiByDate, getCrusherMasters, createProduksi, updateProduksi, deleteProduksi, getInputsByNoCrusherProduksi, upsertInputsAndPartials, validateLabel, deleteInputsAndPartials };
+module.exports = { getAllProduksi, getProduksiByDate, getCrusherMasters, createProduksi, updateProduksi, deleteProduksi, getInputsByNoCrusherProduksi, getOutputsByNoCrusherProduksi, upsertInputsAndPartials, validateLabel, deleteInputsAndPartials };

@@ -42,6 +42,12 @@ router.get(
   gilinganProduksiController.getInputsByNoProduksi,
 );
 
+router.get(
+  "/gilingan/:noProduksi/outputs",
+  verifyToken,
+  gilinganProduksiController.getOutputsByNoProduksi,
+);
+
 // Add this route after your existing routes
 router.get(
   "/gilingan/validate-label/:labelCode",

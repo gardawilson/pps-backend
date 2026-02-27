@@ -421,6 +421,30 @@ async function getInputsByNoProduksi(req, res) {
   }
 }
 
+async function getOutputsByNoProduksi(req, res) {
+  const noProduksi = (req.params.noProduksi || "").trim();
+
+  if (!noProduksi) {
+    return res
+      .status(400)
+      .json({ success: false, message: "noProduksi is required" });
+  }
+
+  try {
+    const data = await washingProduksiService.fetchOutputs(noProduksi);
+    return res
+      .status(200)
+      .json({ success: true, message: "Outputs retrieved", data });
+  } catch (e) {
+    console.error("[washing.getOutputsByNoProduksi]", e);
+    return res.status(500).json({
+      success: false,
+      message: "Internal Server Error",
+      error: e.message,
+    });
+  }
+}
+
 async function validateLabel(req, res) {
   const { labelCode } = req.params;
 
@@ -688,6 +712,7 @@ module.exports = {
   updateProduksi,
   deleteProduksi,
   getInputsByNoProduksi,
+  getOutputsByNoProduksi,
   validateLabel,
   upsertInputsAndPartials,
   deleteInputsAndPartials,

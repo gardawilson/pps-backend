@@ -101,6 +101,7 @@ exports.getPalletByNoBahanBaku = async (nobahanbaku) => {
         p.Density,
         p.Density2,
         p.Density3,
+        ISNULL(CAST(p.HasBeenPrinted AS int), 0) AS HasBeenPrinted,
 
         p.Blok,
         p.IdLokasi,
@@ -181,6 +182,7 @@ exports.getPalletByNoBahanBaku = async (nobahanbaku) => {
   return result.recordset.map((r) => ({
     ...r,
     IsEmpty: r.IsEmpty === true || r.IsEmpty === 1,
+    HasBeenPrinted: toInt(r.HasBeenPrinted),
 
     SakActual: toInt(r.SakActual),
     SakSisa: toInt(r.SakSisa),
@@ -383,6 +385,87 @@ exports.updateByNoBahanBakuAndNoPallet = async (payload) => {
       },
       audit: { actorId, requestId }, // ✅ ID only
       note: "Pallet berhasil diupdate",
+    };
+  } catch (e) {
+    try {
+      await tx.rollback();
+    } catch (_) {}
+    throw e;
+  }
+};
+
+exports.incrementHasBeenPrinted = async (payload) => {
+  const NoBahanBaku = String(payload?.NoBahanBaku || "").trim();
+  const NoPallet = String(payload?.NoPallet || "").trim();
+
+  if (!NoBahanBaku) throw badReq("NoBahanBaku wajib diisi");
+  if (!NoPallet) throw badReq("NoPallet wajib diisi");
+
+  const actorIdNum = Number(payload?.actorId);
+  const actorId =
+    Number.isFinite(actorIdNum) && actorIdNum > 0 ? actorIdNum : null;
+  if (!actorId) {
+    throw badReq(
+      "actorId kosong. Controller harus inject payload.actorId dari token.",
+    );
+  }
+
+  const requestId = String(
+    payload?.requestId ||
+      `${Date.now()}-${Math.random().toString(16).slice(2)}`,
+  );
+
+  const pool = await poolPromise;
+  const tx = new sql.Transaction(pool);
+
+  try {
+    await tx.begin(sql.ISOLATION_LEVEL.SERIALIZABLE);
+
+    await new sql.Request(tx)
+      .input("actorId", sql.Int, actorId)
+      .input("rid", sql.NVarChar(64), requestId).query(`
+        EXEC sys.sp_set_session_context @key=N'actor_id', @value=@actorId;
+        EXEC sys.sp_set_session_context @key=N'request_id', @value=@rid;
+      `);
+
+    const rs = await new sql.Request(tx)
+      .input("NoBahanBaku", sql.VarChar(50), NoBahanBaku)
+      .input("NoPallet", sql.VarChar(50), NoPallet).query(`
+        DECLARE @out TABLE (
+          NoBahanBaku varchar(50),
+          NoPallet varchar(50),
+          HasBeenPrinted int
+        );
+
+        UPDATE dbo.BahanBakuPallet_h
+        SET HasBeenPrinted = ISNULL(HasBeenPrinted, 0) + 1
+        OUTPUT
+          INSERTED.NoBahanBaku,
+          INSERTED.NoPallet,
+          INSERTED.HasBeenPrinted
+        INTO @out
+        WHERE NoBahanBaku = @NoBahanBaku
+          AND NoPallet = @NoPallet;
+
+        SELECT NoBahanBaku, NoPallet, HasBeenPrinted
+        FROM @out;
+      `);
+
+    const row = rs.recordset?.[0] || null;
+    if (!row) {
+      const e = new Error(
+        `Pallet tidak ditemukan untuk NoBahanBaku ${NoBahanBaku} dan NoPallet ${NoPallet}`,
+      );
+      e.statusCode = 404;
+      throw e;
+    }
+
+    await tx.commit();
+
+    return {
+      NoBahanBaku: row.NoBahanBaku,
+      NoPallet: row.NoPallet,
+      HasBeenPrinted: Number(row.HasBeenPrinted) || 0,
     };
   } catch (e) {
     try {

@@ -194,5 +194,59 @@ async function deleteReturn(req, res) {
   }
 }
 
+async function getOutputsFurnitureWipByNoRetur(req, res) {
+  const noRetur = String(req.params.noRetur || "").trim();
+  if (!noRetur) {
+    return res
+      .status(400)
+      .json({ success: false, message: "noRetur is required" });
+  }
 
-module.exports = { getAllReturns, getReturnsByDate, createReturn, updateReturn, deleteReturn };
+  try {
+    const data = await returnService.fetchOutputsFurnitureWip(noRetur);
+    return res
+      .status(200)
+      .json({ success: true, message: "Outputs retrieved", data });
+  } catch (e) {
+    console.error("[return.getOutputsFurnitureWipByNoRetur]", e);
+    return res.status(500).json({
+      success: false,
+      message: "Internal Server Error",
+      error: e.message,
+    });
+  }
+}
+
+async function getOutputsBarangJadiByNoRetur(req, res) {
+  const noRetur = String(req.params.noRetur || "").trim();
+  if (!noRetur) {
+    return res
+      .status(400)
+      .json({ success: false, message: "noRetur is required" });
+  }
+
+  try {
+    const data = await returnService.fetchOutputsBarangJadi(noRetur);
+    return res
+      .status(200)
+      .json({ success: true, message: "Outputs retrieved", data });
+  } catch (e) {
+    console.error("[return.getOutputsBarangJadiByNoRetur]", e);
+    return res.status(500).json({
+      success: false,
+      message: "Internal Server Error",
+      error: e.message,
+    });
+  }
+}
+
+
+module.exports = {
+  getAllReturns,
+  getReturnsByDate,
+  createReturn,
+  updateReturn,
+  deleteReturn,
+  getOutputsFurnitureWipByNoRetur,
+  getOutputsBarangJadiByNoRetur,
+};

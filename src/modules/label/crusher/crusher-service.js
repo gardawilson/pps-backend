@@ -1,19 +1,20 @@
 // services/crusher-service.js
-const { sql, poolPromise } = require('../../../core/config/db');
+const { sql, poolPromise } = require("../../../core/config/db");
 const {
   getBlokLokasiFromKodeProduksi,
-} = require('../../../core/shared/mesin-location-helper'); 
+} = require("../../../core/shared/mesin-location-helper");
 
 const {
   resolveEffectiveDateForCreate,
   toDateOnly,
-  assertNotLocked,     
+  assertNotLocked,
   formatYMD,
-} = require('../../../core/shared/tutup-transaksi-guard');
+} = require("../../../core/shared/tutup-transaksi-guard");
 
-const { generateNextCode } = require('../../../core/utils/sequence-code-helper'); 
-const { badReq, conflict } = require('../../../core/utils/http-error'); 
-
+const {
+  generateNextCode,
+} = require("../../../core/utils/sequence-code-helper");
+const { badReq, conflict } = require("../../../core/utils/http-error");
 
 /**
  * Tables used:
@@ -44,7 +45,7 @@ exports.getAll = async ({ page, limit, search }) => {
         OR ISNULL(bs.NoBongkarSusun,'') LIKE @search
       )
     `
-    : '';
+    : "";
 
   const baseQuery = `
     SELECT
@@ -57,6 +58,7 @@ exports.getAll = async ({ page, limit, search }) => {
       c.Blok,
       c.IdLokasi,
       c.Berat,
+      MAX(ISNULL(CAST(c.HasBeenPrinted AS int), 0)) AS HasBeenPrinted,
       CASE
         WHEN c.IdStatus = 1 THEN 'PASS'
         WHEN c.IdStatus = 0 THEN 'HOLD'
@@ -118,21 +120,20 @@ exports.getAll = async ({ page, limit, search }) => {
       ${whereSearch}
   `;
 
-  request.input('offset', sql.Int, offset);
-  request.input('limit',  sql.Int, limit);
-  if (search) request.input('search', sql.VarChar, `%${search}%`);
+  request.input("offset", sql.Int, offset);
+  request.input("limit", sql.Int, limit);
+  if (search) request.input("search", sql.VarChar, `%${search}%`);
 
   const [dataResult, countResult] = await Promise.all([
     request.query(baseQuery),
     request.query(countQuery),
   ]);
 
-  const data  = dataResult.recordset || [];
+  const data = dataResult.recordset || [];
   const total = countResult.recordset?.[0]?.total ?? 0;
 
   return { data, total };
 };
-
 
 // =======================================
 // Crusher CREATE (cascade) — mengikuti pattern Broker (trigger + session_context + generateNextCode)
@@ -143,31 +144,39 @@ exports.createCrusherCascade = async (payload) => {
   const tx = new sql.Transaction(pool);
 
   const header = payload?.header || {};
-  const processedCode = (payload?.ProcessedCode || '').toString().trim(); // '', 'G.****', 'BG.****'
+  const processedCode = (payload?.ProcessedCode || "").toString().trim(); // '', 'G.****', 'BG.****'
 
   // ---- validation dasar
-  if (!header.IdCrusher) throw badReq('IdCrusher wajib diisi');
-  if (!header.IdWarehouse) throw badReq('IdWarehouse wajib diisi');
-  if (!header.CreateBy) throw badReq('CreateBy wajib diisi'); // controller overwrite dari token
+  if (!header.IdCrusher) throw badReq("IdCrusher wajib diisi");
+  if (!header.IdWarehouse) throw badReq("IdWarehouse wajib diisi");
+  if (!header.CreateBy) throw badReq("CreateBy wajib diisi"); // controller overwrite dari token
 
   // Identify target from ProcessedCode (optional)
   const hasProcessed = processedCode.length > 0;
   let processedType = null; // 'PRODUKSI' | 'BONGKAR'
   if (hasProcessed) {
-    if (processedCode.startsWith('G.')) processedType = 'PRODUKSI';
-    else if (processedCode.startsWith('BG.')) processedType = 'BONGKAR';
-    else throw badReq('ProcessedCode prefix tidak dikenali (pakai G. atau BG.)');
+    if (processedCode.startsWith("G.")) processedType = "PRODUKSI";
+    else if (processedCode.startsWith("BG.")) processedType = "BONGKAR";
+    else
+      throw badReq("ProcessedCode prefix tidak dikenali (pakai G. atau BG.)");
   }
 
   // =====================================================
   // [AUDIT] Pakai actorId dari controller (token)
   // =====================================================
   const actorIdNum = Number(payload?.actorId);
-  const actorId = Number.isFinite(actorIdNum) && actorIdNum > 0 ? actorIdNum : null;
+  const actorId =
+    Number.isFinite(actorIdNum) && actorIdNum > 0 ? actorIdNum : null;
 
-  const requestId = String(payload?.requestId || `${Date.now()}-${Math.random().toString(16).slice(2)}`);
+  const requestId = String(
+    payload?.requestId ||
+      `${Date.now()}-${Math.random().toString(16).slice(2)}`,
+  );
 
-  if (!actorId) throw badReq('actorId kosong. Controller harus inject payload.actorId dari token.');
+  if (!actorId)
+    throw badReq(
+      "actorId kosong. Controller harus inject payload.actorId dari token.",
+    );
 
   try {
     await tx.begin(sql.ISOLATION_LEVEL.SERIALIZABLE);
@@ -176,9 +185,8 @@ exports.createCrusherCascade = async (payload) => {
     // [AUDIT CTX] Set actor_id + request_id untuk trigger audit
     // =====================================================
     await new sql.Request(tx)
-      .input('actorId', sql.Int, actorId)
-      .input('rid', sql.NVarChar(64), requestId)
-      .query(`
+      .input("actorId", sql.Int, actorId)
+      .input("rid", sql.NVarChar(64), requestId).query(`
         EXEC sys.sp_set_session_context @key=N'actor_id', @value=@actorId;
         EXEC sys.sp_set_session_context @key=N'request_id', @value=@rid;
       `);
@@ -186,18 +194,20 @@ exports.createCrusherCascade = async (payload) => {
     // ===============================
     // [A] TUTUP TRANSAKSI CHECK (CREATE)
     // ===============================
-    const effectiveDateCreate = resolveEffectiveDateForCreate(header.DateCreate); // date-only
+    const effectiveDateCreate = resolveEffectiveDateForCreate(
+      header.DateCreate,
+    ); // date-only
     await assertNotLocked({
       date: effectiveDateCreate,
       runner: tx,
-      action: 'create crusher',
+      action: "create crusher",
       useLock: true,
     });
 
     // ===============================
     // 0) Auto-isi Blok & IdLokasi dari kode (produksi / bongkar) kalau header belum isi
     // ===============================
-    const needBlok = header.Blok == null || String(header.Blok).trim() === '';
+    const needBlok = header.Blok == null || String(header.Blok).trim() === "";
     const needLokasi = header.IdLokasi == null;
 
     if (needBlok || needLokasi) {
@@ -205,7 +215,10 @@ exports.createCrusherCascade = async (payload) => {
 
       let lokasi = null;
       if (kodeRef) {
-        lokasi = await getBlokLokasiFromKodeProduksi({ kode: kodeRef, runner: tx });
+        lokasi = await getBlokLokasiFromKodeProduksi({
+          kode: kodeRef,
+          runner: tx,
+        });
       }
 
       if (lokasi) {
@@ -219,9 +232,9 @@ exports.createCrusherCascade = async (payload) => {
     // ===============================
     const gen = async () =>
       generateNextCode(tx, {
-        tableName: 'Crusher',
-        columnName: 'NoCrusher',
-        prefix: 'F.',
+        tableName: "Crusher",
+        columnName: "NoCrusher",
+        prefix: "F.",
         width: 10,
       });
 
@@ -229,17 +242,21 @@ exports.createCrusherCascade = async (payload) => {
 
     // 2) Double-check belum dipakai (lock supaya konsisten)
     const exist = await new sql.Request(tx)
-      .input('NoCrusher', sql.VarChar(50), generatedNo)
-      .query(`SELECT 1 FROM dbo.Crusher WITH (UPDLOCK, HOLDLOCK) WHERE NoCrusher = @NoCrusher`);
+      .input("NoCrusher", sql.VarChar(50), generatedNo)
+      .query(
+        `SELECT 1 FROM dbo.Crusher WITH (UPDLOCK, HOLDLOCK) WHERE NoCrusher = @NoCrusher`,
+      );
 
     if (exist.recordset.length > 0) {
       const retryNo = await gen();
       const exist2 = await new sql.Request(tx)
-        .input('NoCrusher', sql.VarChar(50), retryNo)
-        .query(`SELECT 1 FROM dbo.Crusher WITH (UPDLOCK, HOLDLOCK) WHERE NoCrusher = @NoCrusher`);
+        .input("NoCrusher", sql.VarChar(50), retryNo)
+        .query(
+          `SELECT 1 FROM dbo.Crusher WITH (UPDLOCK, HOLDLOCK) WHERE NoCrusher = @NoCrusher`,
+        );
 
       if (exist2.recordset.length > 0) {
-        throw conflict('Gagal generate NoCrusher unik, coba lagi.');
+        throw conflict("Gagal generate NoCrusher unik, coba lagi.");
       }
       header.NoCrusher = retryNo;
     } else {
@@ -263,16 +280,16 @@ exports.createCrusherCascade = async (payload) => {
     `;
 
     await new sql.Request(tx)
-      .input('NoCrusher', sql.VarChar(50), header.NoCrusher)
-      .input('DateCreate', sql.Date, effectiveDateCreate)
-      .input('IdCrusher', sql.Int, header.IdCrusher)
-      .input('IdWarehouse', sql.Int, header.IdWarehouse)
-      .input('Berat', sql.Decimal(18, 3), header.Berat ?? null)
-      .input('IdStatus', sql.Int, header.IdStatus ?? 1)
-      .input('Blok', sql.VarChar(50), header.Blok ?? null)
-      .input('IdLokasi', sql.Int, header.IdLokasi ?? null)
-      .input('CreateBy', sql.VarChar(50), header.CreateBy) // overwritten by controller
-      .input('DateTimeCreate', sql.DateTime, nowDateTime)
+      .input("NoCrusher", sql.VarChar(50), header.NoCrusher)
+      .input("DateCreate", sql.Date, effectiveDateCreate)
+      .input("IdCrusher", sql.Int, header.IdCrusher)
+      .input("IdWarehouse", sql.Int, header.IdWarehouse)
+      .input("Berat", sql.Decimal(18, 3), header.Berat ?? null)
+      .input("IdStatus", sql.Int, header.IdStatus ?? 1)
+      .input("Blok", sql.VarChar(50), header.Blok ?? null)
+      .input("IdLokasi", sql.Int, header.IdLokasi ?? null)
+      .input("CreateBy", sql.VarChar(50), header.CreateBy) // overwritten by controller
+      .input("DateTimeCreate", sql.DateTime, nowDateTime)
       .query(insertHeaderSql);
 
     // ===============================
@@ -281,26 +298,24 @@ exports.createCrusherCascade = async (payload) => {
     // ===============================
     let mappingTable = null;
 
-    if (processedType === 'PRODUKSI') {
+    if (processedType === "PRODUKSI") {
       await new sql.Request(tx)
-        .input('NoCrusherProduksi', sql.VarChar(50), processedCode)
-        .input('NoCrusher', sql.VarChar(50), header.NoCrusher)
-        .query(`
+        .input("NoCrusherProduksi", sql.VarChar(50), processedCode)
+        .input("NoCrusher", sql.VarChar(50), header.NoCrusher).query(`
           INSERT INTO dbo.CrusherProduksiOutput (NoCrusherProduksi, NoCrusher)
           VALUES (@NoCrusherProduksi, @NoCrusher);
         `);
 
-      mappingTable = 'CrusherProduksiOutput';
-    } else if (processedType === 'BONGKAR') {
+      mappingTable = "CrusherProduksiOutput";
+    } else if (processedType === "BONGKAR") {
       await new sql.Request(tx)
-        .input('NoBongkarSusun', sql.VarChar(50), processedCode)
-        .input('NoCrusher', sql.VarChar(50), header.NoCrusher)
-        .query(`
+        .input("NoBongkarSusun", sql.VarChar(50), processedCode)
+        .input("NoCrusher", sql.VarChar(50), header.NoCrusher).query(`
           INSERT INTO dbo.BongkarSusunOutputCrusher (NoBongkarSusun, NoCrusher)
           VALUES (@NoBongkarSusun, @NoCrusher);
         `);
 
-      mappingTable = 'BongkarSusunOutputCrusher';
+      mappingTable = "BongkarSusunOutputCrusher";
     }
 
     await tx.commit();
@@ -333,7 +348,6 @@ exports.createCrusherCascade = async (payload) => {
   }
 };
 
-
 // =======================================
 // Crusher UPDATE — mengikuti pattern updateBrokerCascade
 // - SERIALIZABLE
@@ -349,27 +363,35 @@ exports.updateCrusherCascade = async (payload) => {
   const tx = new sql.Transaction(pool);
 
   const NoCrusher = payload?.NoCrusher?.toString().trim();
-  if (!NoCrusher) throw badReq('NoCrusher (path) wajib diisi');
+  if (!NoCrusher) throw badReq("NoCrusher (path) wajib diisi");
 
   const header = payload?.header || {};
-  const processedCode = (payload?.ProcessedCode || '').toString().trim(); // '' | 'G.****' | 'BG.****'
+  const processedCode = (payload?.ProcessedCode || "").toString().trim(); // '' | 'G.****' | 'BG.****'
 
   // =====================================================
   // [AUDIT] actorId + requestId (ID only)
   // =====================================================
   const actorIdNum = Number(payload?.actorId);
-  const actorId = Number.isFinite(actorIdNum) && actorIdNum > 0 ? actorIdNum : null;
+  const actorId =
+    Number.isFinite(actorIdNum) && actorIdNum > 0 ? actorIdNum : null;
 
-  const requestId = String(payload?.requestId || `${Date.now()}-${Math.random().toString(16).slice(2)}`);
-  if (!actorId) throw badReq('actorId kosong. Controller harus inject payload.actorId dari token.');
+  const requestId = String(
+    payload?.requestId ||
+      `${Date.now()}-${Math.random().toString(16).slice(2)}`,
+  );
+  if (!actorId)
+    throw badReq(
+      "actorId kosong. Controller harus inject payload.actorId dari token.",
+    );
 
   // Identify processedType from ProcessedCode (optional)
   const hasProcessed = processedCode.length > 0;
   let processedType = null; // 'PRODUKSI' | 'BONGKAR' | null
   if (hasProcessed) {
-    if (processedCode.startsWith('G.')) processedType = 'PRODUKSI';
-    else if (processedCode.startsWith('BG.')) processedType = 'BONGKAR';
-    else throw badReq('ProcessedCode prefix tidak dikenali (pakai G. atau BG.)');
+    if (processedCode.startsWith("G.")) processedType = "PRODUKSI";
+    else if (processedCode.startsWith("BG.")) processedType = "BONGKAR";
+    else
+      throw badReq("ProcessedCode prefix tidak dikenali (pakai G. atau BG.)");
   }
 
   try {
@@ -379,17 +401,18 @@ exports.updateCrusherCascade = async (payload) => {
     // [AUDIT CTX] Set actor_id + request_id untuk trigger audit
     // =====================================================
     await new sql.Request(tx)
-      .input('actorId', sql.Int, actorId)
-      .input('rid', sql.NVarChar(64), requestId)
-      .query(`
+      .input("actorId", sql.Int, actorId)
+      .input("rid", sql.NVarChar(64), requestId).query(`
         EXEC sys.sp_set_session_context @key=N'actor_id', @value=@actorId;
         EXEC sys.sp_set_session_context @key=N'request_id', @value=@rid;
       `);
 
     // 0) Pastikan header exist + ambil DateCreate existing (LOCK)
-    const exist = await new sql.Request(tx)
-      .input('NoCrusher', sql.VarChar(50), NoCrusher)
-      .query(`
+    const exist = await new sql.Request(tx).input(
+      "NoCrusher",
+      sql.VarChar(50),
+      NoCrusher,
+    ).query(`
         SELECT TOP 1 NoCrusher, DateCreate, DateUsage
         FROM dbo.Crusher WITH (UPDLOCK, HOLDLOCK)
         WHERE NoCrusher = @NoCrusher
@@ -416,9 +439,10 @@ exports.updateCrusherCascade = async (payload) => {
     // Jika client kirim DateCreate baru, cek juga
     let newDateCreateOnly = null;
     if (header.DateCreate !== undefined) {
-      if (header.DateCreate === null) throw badReq('DateCreate tidak boleh null pada UPDATE.');
+      if (header.DateCreate === null)
+        throw badReq("DateCreate tidak boleh null pada UPDATE.");
       newDateCreateOnly = toDateOnly(header.DateCreate);
-      if (!newDateCreateOnly) throw badReq('DateCreate tidak valid.');
+      if (!newDateCreateOnly) throw badReq("DateCreate tidak valid.");
 
       await assertNotLocked({
         date: newDateCreateOnly,
@@ -435,7 +459,7 @@ exports.updateCrusherCascade = async (payload) => {
         newDateUsageOnly = null; // allow clear
       } else {
         newDateUsageOnly = toDateOnly(header.DateUsage);
-        if (!newDateUsageOnly) throw badReq('DateUsage tidak valid.');
+        if (!newDateUsageOnly) throw badReq("DateUsage tidak valid.");
         await assertNotLocked({
           date: newDateUsageOnly,
           runner: tx,
@@ -449,7 +473,11 @@ exports.updateCrusherCascade = async (payload) => {
     // 1) Update header (partial/dynamic) — mirip broker
     // ===============================
     const setParts = [];
-    const reqHeader = new sql.Request(tx).input('NoCrusher', sql.VarChar(50), NoCrusher);
+    const reqHeader = new sql.Request(tx).input(
+      "NoCrusher",
+      sql.VarChar(50),
+      NoCrusher,
+    );
 
     const setIf = (col, param, type, val) => {
       if (val !== undefined) {
@@ -458,30 +486,31 @@ exports.updateCrusherCascade = async (payload) => {
       }
     };
 
-    setIf('IdCrusher', 'IdCrusher', sql.Int, header.IdCrusher);
-    setIf('IdWarehouse', 'IdWarehouse', sql.Int, header.IdWarehouse);
+    setIf("IdCrusher", "IdCrusher", sql.Int, header.IdCrusher);
+    setIf("IdWarehouse", "IdWarehouse", sql.Int, header.IdWarehouse);
 
     if (header.DateCreate !== undefined) {
-      setIf('DateCreate', 'DateCreate', sql.Date, newDateCreateOnly);
+      setIf("DateCreate", "DateCreate", sql.Date, newDateCreateOnly);
     }
 
     if (header.DateUsage !== undefined) {
       // allow clear => null
-      setIf('DateUsage', 'DateUsage', sql.Date, newDateUsageOnly);
+      setIf("DateUsage", "DateUsage", sql.Date, newDateUsageOnly);
     }
 
-    if (Object.prototype.hasOwnProperty.call(header, 'Berat')) {
+    if (Object.prototype.hasOwnProperty.call(header, "Berat")) {
       const num = header.Berat === null ? null : Number(header.Berat);
-      if (num !== null && (!Number.isFinite(num) || num < 0)) throw badReq('Berat tidak valid.');
-      setIf('Berat', 'Berat', sql.Decimal(18, 3), num);
+      if (num !== null && (!Number.isFinite(num) || num < 0))
+        throw badReq("Berat tidak valid.");
+      setIf("Berat", "Berat", sql.Decimal(18, 3), num);
     }
 
-    setIf('IdStatus', 'IdStatus', sql.Int, header.IdStatus);
+    setIf("IdStatus", "IdStatus", sql.Int, header.IdStatus);
 
     if (setParts.length > 0) {
       await reqHeader.query(`
         UPDATE dbo.Crusher
-        SET ${setParts.join(', ')}
+        SET ${setParts.join(", ")}
         WHERE NoCrusher = @NoCrusher
       `);
     }
@@ -491,39 +520,44 @@ exports.updateCrusherCascade = async (payload) => {
     // - hanya kalau user memang "mengirim field" ProcessedCode (meski kosong)
     // - reset dulu biar gak FK/duplikat
     // ===============================
-    const sentProcessedField = Object.prototype.hasOwnProperty.call(payload, 'ProcessedCode');
+    const sentProcessedField = Object.prototype.hasOwnProperty.call(
+      payload,
+      "ProcessedCode",
+    );
 
     let mappingTable = null;
     if (sentProcessedField) {
       // reset mapping (idempotent)
       await new sql.Request(tx)
-        .input('NoCrusher', sql.VarChar(50), NoCrusher)
-        .query(`DELETE FROM dbo.CrusherProduksiOutput WHERE NoCrusher = @NoCrusher`);
+        .input("NoCrusher", sql.VarChar(50), NoCrusher)
+        .query(
+          `DELETE FROM dbo.CrusherProduksiOutput WHERE NoCrusher = @NoCrusher`,
+        );
 
       await new sql.Request(tx)
-        .input('NoCrusher', sql.VarChar(50), NoCrusher)
-        .query(`DELETE FROM dbo.BongkarSusunOutputCrusher WHERE NoCrusher = @NoCrusher`);
+        .input("NoCrusher", sql.VarChar(50), NoCrusher)
+        .query(
+          `DELETE FROM dbo.BongkarSusunOutputCrusher WHERE NoCrusher = @NoCrusher`,
+        );
 
       // kalau processedCode kosong => artinya user ingin "lepas relasi"
       if (hasProcessed) {
-        if (processedType === 'PRODUKSI') {
+        if (processedType === "PRODUKSI") {
           await new sql.Request(tx)
-            .input('NoCrusherProduksi', sql.VarChar(50), processedCode)
-            .input('NoCrusher', sql.VarChar(50), NoCrusher)
-            .query(`
+            .input("NoCrusherProduksi", sql.VarChar(50), processedCode)
+            .input("NoCrusher", sql.VarChar(50), NoCrusher).query(`
               INSERT INTO dbo.CrusherProduksiOutput (NoCrusherProduksi, NoCrusher)
               VALUES (@NoCrusherProduksi, @NoCrusher);
             `);
-          mappingTable = 'CrusherProduksiOutput';
-        } else if (processedType === 'BONGKAR') {
+          mappingTable = "CrusherProduksiOutput";
+        } else if (processedType === "BONGKAR") {
           await new sql.Request(tx)
-            .input('NoBongkarSusun', sql.VarChar(50), processedCode)
-            .input('NoCrusher', sql.VarChar(50), NoCrusher)
-            .query(`
+            .input("NoBongkarSusun", sql.VarChar(50), processedCode)
+            .input("NoCrusher", sql.VarChar(50), NoCrusher).query(`
               INSERT INTO dbo.BongkarSusunOutputCrusher (NoBongkarSusun, NoCrusher)
               VALUES (@NoBongkarSusun, @NoCrusher);
             `);
-          mappingTable = 'BongkarSusunOutputCrusher';
+          mappingTable = "BongkarSusunOutputCrusher";
         }
       }
     }
@@ -534,10 +568,18 @@ exports.updateCrusherCascade = async (payload) => {
       header: {
         NoCrusher,
         ...header,
-        existingDateCreate: existingDateOnly ? formatYMD(existingDateOnly) : null,
-        ...(newDateCreateOnly ? { newDateCreate: formatYMD(newDateCreateOnly) } : {}),
+        existingDateCreate: existingDateOnly
+          ? formatYMD(existingDateOnly)
+          : null,
+        ...(newDateCreateOnly
+          ? { newDateCreate: formatYMD(newDateCreateOnly) }
+          : {}),
         ...(header.DateUsage !== undefined
-          ? { newDateUsage: newDateUsageOnly ? formatYMD(newDateUsageOnly) : null }
+          ? {
+              newDateUsage: newDateUsageOnly
+                ? formatYMD(newDateUsageOnly)
+                : null,
+            }
           : {}),
       },
       processed: sentProcessedField
@@ -556,7 +598,6 @@ exports.updateCrusherCascade = async (payload) => {
     throw e;
   }
 };
-
 
 // =======================================
 // Crusher DELETE (cascade) — mengikuti pattern deleteBrokerCascade
@@ -577,24 +618,36 @@ exports.deleteCrusherCascade = async (payload) => {
 
   // payload bisa string (legacy) atau object
   const NoCrusher =
-    typeof payload === 'string'
-      ? String(payload || '').trim()
-      : String(payload?.NoCrusher || payload?.noCrusher || payload?.nocrusher || '').trim();
+    typeof payload === "string"
+      ? String(payload || "").trim()
+      : String(
+          payload?.NoCrusher || payload?.noCrusher || payload?.nocrusher || "",
+        ).trim();
 
-  if (!NoCrusher) throw badReq('NoCrusher wajib diisi');
+  if (!NoCrusher) throw badReq("NoCrusher wajib diisi");
 
   // =====================================================
   // [AUDIT] actorId + requestId (ID only)
   // =====================================================
-  const actorIdNum = typeof payload === 'object' ? Number(payload?.actorId) : NaN;
-  const actorId = Number.isFinite(actorIdNum) && actorIdNum > 0 ? Math.trunc(actorIdNum) : null;
+  const actorIdNum =
+    typeof payload === "object" ? Number(payload?.actorId) : NaN;
+  const actorId =
+    Number.isFinite(actorIdNum) && actorIdNum > 0
+      ? Math.trunc(actorIdNum)
+      : null;
 
   const requestId =
-    typeof payload === 'object'
-      ? String(payload?.requestId || `${Date.now()}-${Math.random().toString(16).slice(2)}`)
+    typeof payload === "object"
+      ? String(
+          payload?.requestId ||
+            `${Date.now()}-${Math.random().toString(16).slice(2)}`,
+        )
       : String(`${Date.now()}-${Math.random().toString(16).slice(2)}`);
 
-  if (!actorId) throw badReq('actorId kosong. Controller harus inject payload.actorId dari token.');
+  if (!actorId)
+    throw badReq(
+      "actorId kosong. Controller harus inject payload.actorId dari token.",
+    );
 
   try {
     await tx.begin(sql.ISOLATION_LEVEL.SERIALIZABLE);
@@ -603,9 +656,8 @@ exports.deleteCrusherCascade = async (payload) => {
     // [AUDIT CTX] Set actor_id + request_id untuk trigger audit
     // =====================================================
     await new sql.Request(tx)
-      .input('actorId', sql.Int, actorId)
-      .input('rid', sql.NVarChar(64), requestId)
-      .query(`
+      .input("actorId", sql.Int, actorId)
+      .input("rid", sql.NVarChar(64), requestId).query(`
         EXEC sys.sp_set_session_context @key=N'actor_id', @value=@actorId;
         EXEC sys.sp_set_session_context @key=N'request_id', @value=@rid;
       `);
@@ -613,9 +665,11 @@ exports.deleteCrusherCascade = async (payload) => {
     // ===============================
     // 0) Pastikan header exist + lock + ambil DateCreate existing
     // ===============================
-    const headRes = await new sql.Request(tx)
-      .input('NoCrusher', sql.VarChar(50), NoCrusher)
-      .query(`
+    const headRes = await new sql.Request(tx).input(
+      "NoCrusher",
+      sql.VarChar(50),
+      NoCrusher,
+    ).query(`
         SELECT TOP 1 NoCrusher, DateCreate, DateUsage
         FROM dbo.Crusher WITH (UPDLOCK, HOLDLOCK)
         WHERE NoCrusher = @NoCrusher
@@ -644,34 +698,42 @@ exports.deleteCrusherCascade = async (payload) => {
     // [B] Optional: Block if already used
     // (Kalau di bisnis Crusher tidak boleh dihapus kalau sudah DateUsage terisi)
     // ===============================
-    const used = await new sql.Request(tx)
-      .input('NoCrusher', sql.VarChar(50), NoCrusher)
-      .query(`
+    const used = await new sql.Request(tx).input(
+      "NoCrusher",
+      sql.VarChar(50),
+      NoCrusher,
+    ).query(`
         SELECT TOP 1 1
         FROM dbo.Crusher WITH (UPDLOCK, HOLDLOCK)
         WHERE NoCrusher = @NoCrusher AND DateUsage IS NOT NULL
       `);
 
     if (used.recordset.length > 0) {
-      throw conflict('Tidak bisa hapus: Crusher sudah terpakai (DateUsage IS NOT NULL).');
+      throw conflict(
+        "Tidak bisa hapus: Crusher sudah terpakai (DateUsage IS NOT NULL).",
+      );
     }
 
     // ===============================
     // [C] Delete mappings first (avoid FK)
     // ===============================
     const delCpo = await new sql.Request(tx)
-      .input('NoCrusher', sql.VarChar(50), NoCrusher)
-      .query(`DELETE FROM dbo.CrusherProduksiOutput WHERE NoCrusher = @NoCrusher`);
+      .input("NoCrusher", sql.VarChar(50), NoCrusher)
+      .query(
+        `DELETE FROM dbo.CrusherProduksiOutput WHERE NoCrusher = @NoCrusher`,
+      );
 
     const delBso = await new sql.Request(tx)
-      .input('NoCrusher', sql.VarChar(50), NoCrusher)
-      .query(`DELETE FROM dbo.BongkarSusunOutputCrusher WHERE NoCrusher = @NoCrusher`);
+      .input("NoCrusher", sql.VarChar(50), NoCrusher)
+      .query(
+        `DELETE FROM dbo.BongkarSusunOutputCrusher WHERE NoCrusher = @NoCrusher`,
+      );
 
     // ===============================
     // [D] Delete header
     // ===============================
     const delHead = await new sql.Request(tx)
-      .input('NoCrusher', sql.VarChar(50), NoCrusher)
+      .input("NoCrusher", sql.VarChar(50), NoCrusher)
       .query(`DELETE FROM dbo.Crusher WHERE NoCrusher = @NoCrusher`);
 
     await tx.commit();
@@ -696,9 +758,82 @@ exports.deleteCrusherCascade = async (payload) => {
     // mapping FK error jika ada constraint lain di DB
     if (e.number === 547) {
       e.statusCode = 409;
-      e.message = e.message || 'Gagal hapus karena constraint referensi (FK).';
+      e.message = e.message || "Gagal hapus karena constraint referensi (FK).";
     }
     throw e;
   }
 };
 
+exports.incrementHasBeenPrinted = async (payload) => {
+  const NoCrusher = String(payload?.NoCrusher || "").trim();
+  if (!NoCrusher) throw badReq("NoCrusher wajib diisi");
+
+  const actorIdNum = Number(payload?.actorId);
+  const actorId =
+    Number.isFinite(actorIdNum) && actorIdNum > 0 ? actorIdNum : null;
+  if (!actorId) {
+    throw badReq(
+      "actorId kosong. Controller harus inject payload.actorId dari token.",
+    );
+  }
+
+  const requestId = String(
+    payload?.requestId ||
+      `${Date.now()}-${Math.random().toString(16).slice(2)}`,
+  );
+
+  const pool = await poolPromise;
+  const tx = new sql.Transaction(pool);
+
+  try {
+    await tx.begin(sql.ISOLATION_LEVEL.SERIALIZABLE);
+
+    await new sql.Request(tx)
+      .input("actorId", sql.Int, actorId)
+      .input("rid", sql.NVarChar(64), requestId).query(`
+        EXEC sys.sp_set_session_context @key=N'actor_id', @value=@actorId;
+        EXEC sys.sp_set_session_context @key=N'request_id', @value=@rid;
+      `);
+
+    const rs = await new sql.Request(tx).input(
+      "NoCrusher",
+      sql.VarChar(50),
+      NoCrusher,
+    ).query(`
+        DECLARE @out TABLE (
+          NoCrusher varchar(50),
+          HasBeenPrinted int
+        );
+
+        UPDATE dbo.Crusher
+        SET HasBeenPrinted = ISNULL(HasBeenPrinted, 0) + 1
+        OUTPUT
+          INSERTED.NoCrusher,
+          INSERTED.HasBeenPrinted
+        INTO @out
+        WHERE NoCrusher = @NoCrusher;
+
+        SELECT NoCrusher, HasBeenPrinted
+        FROM @out;
+      `);
+
+    const row = rs.recordset?.[0] || null;
+    if (!row) {
+      const e = new Error(`NoCrusher ${NoCrusher} tidak ditemukan`);
+      e.statusCode = 404;
+      throw e;
+    }
+
+    await tx.commit();
+
+    return {
+      NoCrusher: row.NoCrusher,
+      HasBeenPrinted: row.HasBeenPrinted,
+    };
+  } catch (e) {
+    try {
+      await tx.rollback();
+    } catch (_) {}
+    throw e;
+  }
+};

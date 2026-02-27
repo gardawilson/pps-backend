@@ -812,6 +812,48 @@ async function fetchInputs(noProduksi) {
   return out;
 }
 
+async function fetchOutputs(noProduksi) {
+  const pool = await poolPromise;
+  const req = pool.request();
+  req.input("no", sql.VarChar(50), noProduksi);
+
+  const q = `
+    SELECT DISTINCT
+      o.NoProduksi,
+      o.NoFurnitureWIP,
+      ISNULL(fw.HasBeenPrinted, 0) AS HasBeenPrinted
+    FROM dbo.SpannerOutputLabelFWIP o WITH (NOLOCK)
+    LEFT JOIN dbo.FurnitureWIP fw WITH (NOLOCK)
+      ON fw.NoFurnitureWIP = o.NoFurnitureWIP
+    WHERE o.NoProduksi = @no
+    ORDER BY o.NoFurnitureWIP DESC;
+  `;
+
+  const rs = await req.query(q);
+  return rs.recordset || [];
+}
+
+async function fetchOutputsReject(noProduksi) {
+  const pool = await poolPromise;
+  const req = pool.request();
+  req.input("no", sql.VarChar(50), noProduksi);
+
+  const q = `
+    SELECT DISTINCT
+      o.NoProduksi,
+      o.NoReject,
+      ISNULL(rj.HasBeenPrinted, 0) AS HasBeenPrinted
+    FROM dbo.SpannerOutputRejectV2 o WITH (NOLOCK)
+    LEFT JOIN dbo.RejectV2 rj WITH (NOLOCK)
+      ON rj.NoReject = o.NoReject
+    WHERE o.NoProduksi = @no
+    ORDER BY o.NoReject DESC;
+  `;
+
+  const rs = await req.query(q);
+  return rs.recordset || [];
+}
+
 /**
  * Payload shape (arrays optional):
  * {
@@ -876,6 +918,8 @@ module.exports = {
   updateSpannerProduksi,
   deleteSpannerProduksi,
   fetchInputs,
+  fetchOutputs,
+  fetchOutputsReject,
   upsertInputsAndPartials,
   deleteInputsAndPartials,
 };

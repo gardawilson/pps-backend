@@ -1,19 +1,20 @@
 // services/labels/gilingan-service.js
-const { sql, poolPromise } = require('../../../core/config/db');
+const { sql, poolPromise } = require("../../../core/config/db");
 const {
   getBlokLokasiFromKodeProduksi,
-} = require('../../../core/shared/mesin-location-helper'); 
+} = require("../../../core/shared/mesin-location-helper");
 
 const {
   resolveEffectiveDateForCreate,
   toDateOnly,
-  assertNotLocked,     
+  assertNotLocked,
   formatYMD,
-} = require('../../../core/shared/tutup-transaksi-guard');
+} = require("../../../core/shared/tutup-transaksi-guard");
 
-const { generateNextCode } = require('../../../core/utils/sequence-code-helper'); 
-const { badReq, conflict } = require('../../../core/utils/http-error'); 
-
+const {
+  generateNextCode,
+} = require("../../../core/utils/sequence-code-helper");
+const { badReq, conflict } = require("../../../core/utils/http-error");
 
 exports.getAll = async ({ page, limit, search }) => {
   const pool = await poolPromise;
@@ -45,6 +46,7 @@ exports.getAll = async ({ page, limit, search }) => {
           WHEN g.IdStatus = 0 THEN 'HOLD'
           ELSE ''
         END AS StatusText,
+        MAX(ISNULL(CAST(g.HasBeenPrinted AS int), 0)) AS HasBeenPrinted,
         g.Blok,
         g.IdLokasi,
 
@@ -95,7 +97,7 @@ exports.getAll = async ({ page, limit, search }) => {
                  OR ISNULL(m.NamaMesin,'') LIKE @search
                  OR ISNULL(bs.NoBongkarSusun,'') LIKE @search
                )`
-            : ''
+            : ""
         }
       GROUP BY
         g.NoGilingan,
@@ -138,14 +140,14 @@ exports.getAll = async ({ page, limit, search }) => {
                  OR ISNULL(m.NamaMesin,'') LIKE @search
                  OR ISNULL(bs.NoBongkarSusun,'') LIKE @search
                )`
-            : ''
+            : ""
         }
     `;
 
-  request.input('offset', sql.Int, offset);
-  request.input('limit', sql.Int, limit);
+  request.input("offset", sql.Int, offset);
+  request.input("limit", sql.Int, limit);
   if (search) {
-    request.input('search', sql.VarChar, `%${search}%`);
+    request.input("search", sql.VarChar, `%${search}%`);
   }
 
   const [dataResult, countResult] = await Promise.all([
@@ -159,14 +161,12 @@ exports.getAll = async ({ page, limit, search }) => {
   return { data, total };
 };
 
-
-
 exports.createGilinganCascade = async (payload) => {
   const pool = await poolPromise;
   const tx = new sql.Transaction(pool);
 
   const header = payload?.header || {};
-  const outputCode = (payload?.outputCode || '').toString().trim(); // '', 'W.****', 'BG.****'
+  const outputCode = (payload?.outputCode || "").toString().trim(); // '', 'W.****', 'BG.****'
 
   // ---- validation dasar
   const badReq = (msg) => {
@@ -180,27 +180,34 @@ exports.createGilinganCascade = async (payload) => {
     return e;
   };
 
-  if (!header.IdGilingan) throw badReq('IdGilingan wajib diisi');
-  if (!header.CreateBy) throw badReq('CreateBy wajib diisi'); // controller overwrite dari token
+  if (!header.IdGilingan) throw badReq("IdGilingan wajib diisi");
+  if (!header.CreateBy) throw badReq("CreateBy wajib diisi"); // controller overwrite dari token
 
   // Identify target from outputCode (optional, sama seperti crusher: boleh kosong)
   const hasOutput = outputCode.length > 0;
   let outputType = null; // 'PRODUKSI' | 'BONGKAR'
   if (hasOutput) {
-    if (outputCode.startsWith('W.')) outputType = 'PRODUKSI';
-    else if (outputCode.startsWith('BG.')) outputType = 'BONGKAR';
-    else throw badReq('outputCode prefix tidak dikenali (pakai W. atau BG.)');
+    if (outputCode.startsWith("W.")) outputType = "PRODUKSI";
+    else if (outputCode.startsWith("BG.")) outputType = "BONGKAR";
+    else throw badReq("outputCode prefix tidak dikenali (pakai W. atau BG.)");
   }
 
   // =====================================================
   // [AUDIT] Pakai actorId dari controller (token)
   // =====================================================
   const actorIdNum = Number(payload?.actorId);
-  const actorId = Number.isFinite(actorIdNum) && actorIdNum > 0 ? actorIdNum : null;
+  const actorId =
+    Number.isFinite(actorIdNum) && actorIdNum > 0 ? actorIdNum : null;
 
-  const requestId = String(payload?.requestId || `${Date.now()}-${Math.random().toString(16).slice(2)}`);
+  const requestId = String(
+    payload?.requestId ||
+      `${Date.now()}-${Math.random().toString(16).slice(2)}`,
+  );
 
-  if (!actorId) throw badReq('actorId kosong. Controller harus inject payload.actorId dari token.');
+  if (!actorId)
+    throw badReq(
+      "actorId kosong. Controller harus inject payload.actorId dari token.",
+    );
 
   try {
     await tx.begin(sql.ISOLATION_LEVEL.SERIALIZABLE);
@@ -209,9 +216,8 @@ exports.createGilinganCascade = async (payload) => {
     // [AUDIT CTX] Set actor_id + request_id untuk trigger audit
     // =====================================================
     await new sql.Request(tx)
-      .input('actorId', sql.Int, actorId)
-      .input('rid', sql.NVarChar(64), requestId)
-      .query(`
+      .input("actorId", sql.Int, actorId)
+      .input("rid", sql.NVarChar(64), requestId).query(`
         EXEC sys.sp_set_session_context @key=N'actor_id', @value=@actorId;
         EXEC sys.sp_set_session_context @key=N'request_id', @value=@rid;
       `);
@@ -219,18 +225,20 @@ exports.createGilinganCascade = async (payload) => {
     // ===============================
     // [A] TUTUP TRANSAKSI CHECK (CREATE)
     // ===============================
-    const effectiveDateCreate = resolveEffectiveDateForCreate(header.DateCreate); // date-only
+    const effectiveDateCreate = resolveEffectiveDateForCreate(
+      header.DateCreate,
+    ); // date-only
     await assertNotLocked({
       date: effectiveDateCreate,
       runner: tx,
-      action: 'create gilingan',
+      action: "create gilingan",
       useLock: true,
     });
 
     // ===============================
     // 0) Auto-isi Blok & IdLokasi dari kode (produksi / bongkar) kalau header belum isi
     // ===============================
-    const needBlok = header.Blok == null || String(header.Blok).trim() === '';
+    const needBlok = header.Blok == null || String(header.Blok).trim() === "";
     const needLokasi = header.IdLokasi == null;
 
     if (needBlok || needLokasi) {
@@ -238,7 +246,10 @@ exports.createGilinganCascade = async (payload) => {
 
       let lokasi = null;
       if (kodeRef) {
-        lokasi = await getBlokLokasiFromKodeProduksi({ kode: kodeRef, runner: tx });
+        lokasi = await getBlokLokasiFromKodeProduksi({
+          kode: kodeRef,
+          runner: tx,
+        });
       }
 
       if (lokasi) {
@@ -252,9 +263,9 @@ exports.createGilinganCascade = async (payload) => {
     // ===============================
     const gen = async () =>
       generateNextCode(tx, {
-        tableName: 'Gilingan',
-        columnName: 'NoGilingan',
-        prefix: 'V.',
+        tableName: "Gilingan",
+        columnName: "NoGilingan",
+        prefix: "V.",
         width: 10,
       });
 
@@ -262,17 +273,21 @@ exports.createGilinganCascade = async (payload) => {
 
     // 2) Double-check belum dipakai (lock supaya konsisten)
     const exist = await new sql.Request(tx)
-      .input('NoGilingan', sql.VarChar(50), generatedNo)
-      .query(`SELECT 1 FROM dbo.Gilingan WITH (UPDLOCK, HOLDLOCK) WHERE NoGilingan = @NoGilingan`);
+      .input("NoGilingan", sql.VarChar(50), generatedNo)
+      .query(
+        `SELECT 1 FROM dbo.Gilingan WITH (UPDLOCK, HOLDLOCK) WHERE NoGilingan = @NoGilingan`,
+      );
 
     if (exist.recordset.length > 0) {
       const retryNo = await gen();
       const exist2 = await new sql.Request(tx)
-        .input('NoGilingan', sql.VarChar(50), retryNo)
-        .query(`SELECT 1 FROM dbo.Gilingan WITH (UPDLOCK, HOLDLOCK) WHERE NoGilingan = @NoGilingan`);
+        .input("NoGilingan", sql.VarChar(50), retryNo)
+        .query(
+          `SELECT 1 FROM dbo.Gilingan WITH (UPDLOCK, HOLDLOCK) WHERE NoGilingan = @NoGilingan`,
+        );
 
       if (exist2.recordset.length > 0) {
-        throw conflict('Gagal generate NoGilingan unik, coba lagi.');
+        throw conflict("Gagal generate NoGilingan unik, coba lagi.");
       }
       header.NoGilingan = retryNo;
     } else {
@@ -298,16 +313,16 @@ exports.createGilinganCascade = async (payload) => {
     `;
 
     await new sql.Request(tx)
-      .input('NoGilingan', sql.VarChar(50), header.NoGilingan)
-      .input('DateCreate', sql.Date, effectiveDateCreate)
-      .input('IdGilingan', sql.Int, header.IdGilingan)
-      .input('Berat', sql.Decimal(18, 3), header.Berat ?? null)
-      .input('IsPartial', sql.Bit, header.IsPartial ?? 0)
-      .input('IdStatus', sql.Int, header.IdStatus ?? 1)
-      .input('Blok', sql.VarChar(50), header.Blok ?? null)
-      .input('IdLokasi', sql.Int, header.IdLokasi ?? null)
-      .input('CreateBy', sql.VarChar(50), header.CreateBy) // overwritten by controller
-      .input('DateTimeCreate', sql.DateTime, nowDateTime)
+      .input("NoGilingan", sql.VarChar(50), header.NoGilingan)
+      .input("DateCreate", sql.Date, effectiveDateCreate)
+      .input("IdGilingan", sql.Int, header.IdGilingan)
+      .input("Berat", sql.Decimal(18, 3), header.Berat ?? null)
+      .input("IsPartial", sql.Bit, header.IsPartial ?? 0)
+      .input("IdStatus", sql.Int, header.IdStatus ?? 1)
+      .input("Blok", sql.VarChar(50), header.Blok ?? null)
+      .input("IdLokasi", sql.Int, header.IdLokasi ?? null)
+      .input("CreateBy", sql.VarChar(50), header.CreateBy) // overwritten by controller
+      .input("DateTimeCreate", sql.DateTime, nowDateTime)
       .query(insertHeaderSql);
 
     // ===============================
@@ -316,27 +331,25 @@ exports.createGilinganCascade = async (payload) => {
     // ===============================
     let mappingTable = null;
 
-    if (outputType === 'PRODUKSI') {
+    if (outputType === "PRODUKSI") {
       await new sql.Request(tx)
-        .input('NoProduksi', sql.VarChar(50), outputCode)
-        .input('NoGilingan', sql.VarChar(50), header.NoGilingan)
-        .input('Berat', sql.Decimal(18, 3), header.Berat ?? null)
-        .query(`
+        .input("NoProduksi", sql.VarChar(50), outputCode)
+        .input("NoGilingan", sql.VarChar(50), header.NoGilingan)
+        .input("Berat", sql.Decimal(18, 3), header.Berat ?? null).query(`
           INSERT INTO dbo.GilinganProduksiOutput (NoProduksi, NoGilingan, Berat)
           VALUES (@NoProduksi, @NoGilingan, @Berat);
         `);
 
-      mappingTable = 'GilinganProduksiOutput';
-    } else if (outputType === 'BONGKAR') {
+      mappingTable = "GilinganProduksiOutput";
+    } else if (outputType === "BONGKAR") {
       await new sql.Request(tx)
-        .input('NoBongkarSusun', sql.VarChar(50), outputCode)
-        .input('NoGilingan', sql.VarChar(50), header.NoGilingan)
-        .query(`
+        .input("NoBongkarSusun", sql.VarChar(50), outputCode)
+        .input("NoGilingan", sql.VarChar(50), header.NoGilingan).query(`
           INSERT INTO dbo.BongkarSusunOutputGilingan (NoBongkarSusun, NoGilingan)
           VALUES (@NoBongkarSusun, @NoGilingan);
         `);
 
-      mappingTable = 'BongkarSusunOutputGilingan';
+      mappingTable = "BongkarSusunOutputGilingan";
     }
 
     await tx.commit();
@@ -369,39 +382,39 @@ exports.createGilinganCascade = async (payload) => {
   }
 };
 
-
-
-
-
-
-
-
 exports.updateGilinganCascade = async (payload) => {
   const pool = await poolPromise;
   const tx = new sql.Transaction(pool);
 
   const NoGilingan = payload?.NoGilingan?.toString().trim();
-  if (!NoGilingan) throw badReq('NoGilingan (path) wajib diisi');
+  if (!NoGilingan) throw badReq("NoGilingan (path) wajib diisi");
 
   const header = payload?.header || {};
-  const outputCode = (payload?.outputCode || '').toString().trim(); // '' | 'W.****' | 'BG.****'
+  const outputCode = (payload?.outputCode || "").toString().trim(); // '' | 'W.****' | 'BG.****'
 
   // =====================================================
   // [AUDIT] actorId + requestId (ID only)
   // =====================================================
   const actorIdNum = Number(payload?.actorId);
-  const actorId = Number.isFinite(actorIdNum) && actorIdNum > 0 ? actorIdNum : null;
+  const actorId =
+    Number.isFinite(actorIdNum) && actorIdNum > 0 ? actorIdNum : null;
 
-  const requestId = String(payload?.requestId || `${Date.now()}-${Math.random().toString(16).slice(2)}`);
-  if (!actorId) throw badReq('actorId kosong. Controller harus inject payload.actorId dari token.');
+  const requestId = String(
+    payload?.requestId ||
+      `${Date.now()}-${Math.random().toString(16).slice(2)}`,
+  );
+  if (!actorId)
+    throw badReq(
+      "actorId kosong. Controller harus inject payload.actorId dari token.",
+    );
 
   // Identify outputType from outputCode (optional)
   const hasOutput = outputCode.length > 0;
   let outputType = null; // 'PRODUKSI' | 'BONGKAR' | null
   if (hasOutput) {
-    if (outputCode.startsWith('W.')) outputType = 'PRODUKSI';
-    else if (outputCode.startsWith('BG.')) outputType = 'BONGKAR';
-    else throw badReq('outputCode prefix tidak dikenali (pakai W. atau BG.)');
+    if (outputCode.startsWith("W.")) outputType = "PRODUKSI";
+    else if (outputCode.startsWith("BG.")) outputType = "BONGKAR";
+    else throw badReq("outputCode prefix tidak dikenali (pakai W. atau BG.)");
   }
 
   try {
@@ -411,17 +424,18 @@ exports.updateGilinganCascade = async (payload) => {
     // [AUDIT CTX] Set actor_id + request_id untuk trigger audit
     // =====================================================
     await new sql.Request(tx)
-      .input('actorId', sql.Int, actorId)
-      .input('rid', sql.NVarChar(64), requestId)
-      .query(`
+      .input("actorId", sql.Int, actorId)
+      .input("rid", sql.NVarChar(64), requestId).query(`
         EXEC sys.sp_set_session_context @key=N'actor_id', @value=@actorId;
         EXEC sys.sp_set_session_context @key=N'request_id', @value=@rid;
       `);
 
     // 0) Pastikan header exist + ambil DateCreate existing (LOCK)
-    const exist = await new sql.Request(tx)
-      .input('NoGilingan', sql.VarChar(50), NoGilingan)
-      .query(`
+    const exist = await new sql.Request(tx).input(
+      "NoGilingan",
+      sql.VarChar(50),
+      NoGilingan,
+    ).query(`
         SELECT TOP 1 NoGilingan, DateCreate, DateUsage
         FROM dbo.Gilingan WITH (UPDLOCK, HOLDLOCK)
         WHERE NoGilingan = @NoGilingan
@@ -448,9 +462,10 @@ exports.updateGilinganCascade = async (payload) => {
     // Jika client kirim DateCreate baru, cek juga
     let newDateCreateOnly = null;
     if (header.DateCreate !== undefined) {
-      if (header.DateCreate === null) throw badReq('DateCreate tidak boleh null pada UPDATE.');
+      if (header.DateCreate === null)
+        throw badReq("DateCreate tidak boleh null pada UPDATE.");
       newDateCreateOnly = toDateOnly(header.DateCreate);
-      if (!newDateCreateOnly) throw badReq('DateCreate tidak valid.');
+      if (!newDateCreateOnly) throw badReq("DateCreate tidak valid.");
 
       await assertNotLocked({
         date: newDateCreateOnly,
@@ -467,7 +482,7 @@ exports.updateGilinganCascade = async (payload) => {
         newDateUsageOnly = null;
       } else {
         newDateUsageOnly = toDateOnly(header.DateUsage);
-        if (!newDateUsageOnly) throw badReq('DateUsage tidak valid.');
+        if (!newDateUsageOnly) throw badReq("DateUsage tidak valid.");
 
         await assertNotLocked({
           date: newDateUsageOnly,
@@ -482,7 +497,11 @@ exports.updateGilinganCascade = async (payload) => {
     // 1) Update header (partial/dynamic)
     // ===============================
     const setParts = [];
-    const reqHeader = new sql.Request(tx).input('NoGilingan', sql.VarChar(50), NoGilingan);
+    const reqHeader = new sql.Request(tx).input(
+      "NoGilingan",
+      sql.VarChar(50),
+      NoGilingan,
+    );
 
     const setIf = (col, param, type, val) => {
       if (val !== undefined) {
@@ -491,43 +510,44 @@ exports.updateGilinganCascade = async (payload) => {
       }
     };
 
-    setIf('IdGilingan', 'IdGilingan', sql.Int, header.IdGilingan);
+    setIf("IdGilingan", "IdGilingan", sql.Int, header.IdGilingan);
 
     if (header.DateCreate !== undefined) {
-      setIf('DateCreate', 'DateCreate', sql.Date, newDateCreateOnly);
+      setIf("DateCreate", "DateCreate", sql.Date, newDateCreateOnly);
     }
     if (header.DateUsage !== undefined) {
-      setIf('DateUsage', 'DateUsage', sql.Date, newDateUsageOnly);
+      setIf("DateUsage", "DateUsage", sql.Date, newDateUsageOnly);
     }
 
-    if (Object.prototype.hasOwnProperty.call(header, 'Berat')) {
+    if (Object.prototype.hasOwnProperty.call(header, "Berat")) {
       const num = header.Berat === null ? null : Number(header.Berat);
-      if (num !== null && (!Number.isFinite(num) || num < 0)) throw badReq('Berat tidak valid.');
-      setIf('Berat', 'Berat', sql.Decimal(18, 3), num);
+      if (num !== null && (!Number.isFinite(num) || num < 0))
+        throw badReq("Berat tidak valid.");
+      setIf("Berat", "Berat", sql.Decimal(18, 3), num);
     }
 
-    if (Object.prototype.hasOwnProperty.call(header, 'IsPartial')) {
-      const v = header.IsPartial === null ? null : (header.IsPartial ? 1 : 0);
-      setIf('IsPartial', 'IsPartial', sql.Bit, v);
+    if (Object.prototype.hasOwnProperty.call(header, "IsPartial")) {
+      const v = header.IsPartial === null ? null : header.IsPartial ? 1 : 0;
+      setIf("IsPartial", "IsPartial", sql.Bit, v);
     }
 
-    setIf('IdStatus', 'IdStatus', sql.Int, header.IdStatus);
-    setIf('Blok', 'Blok', sql.VarChar(50), header.Blok);
+    setIf("IdStatus", "IdStatus", sql.Int, header.IdStatus);
+    setIf("Blok", "Blok", sql.VarChar(50), header.Blok);
 
     if (header.IdLokasi !== undefined) {
-      if (header.IdLokasi === null || String(header.IdLokasi).trim() === '') {
-        setIf('IdLokasi', 'IdLokasi', sql.Int, null);
+      if (header.IdLokasi === null || String(header.IdLokasi).trim() === "") {
+        setIf("IdLokasi", "IdLokasi", sql.Int, null);
       } else {
         const n = Number(String(header.IdLokasi).trim());
-        if (!Number.isFinite(n)) throw badReq('IdLokasi harus angka.');
-        setIf('IdLokasi', 'IdLokasi', sql.Int, n);
+        if (!Number.isFinite(n)) throw badReq("IdLokasi harus angka.");
+        setIf("IdLokasi", "IdLokasi", sql.Int, n);
       }
     }
 
     if (setParts.length > 0) {
       await reqHeader.query(`
         UPDATE dbo.Gilingan
-        SET ${setParts.join(', ')}
+        SET ${setParts.join(", ")}
         WHERE NoGilingan = @NoGilingan
       `);
     }
@@ -535,38 +555,43 @@ exports.updateGilinganCascade = async (payload) => {
     // ===============================
     // 2) Optional: Output mapping (idempotent)
     // ===============================
-    const sentOutputField = Object.prototype.hasOwnProperty.call(payload, 'outputCode');
+    const sentOutputField = Object.prototype.hasOwnProperty.call(
+      payload,
+      "outputCode",
+    );
 
     let mappingTable = null;
     if (sentOutputField) {
       await new sql.Request(tx)
-        .input('NoGilingan', sql.VarChar(50), NoGilingan)
-        .query(`DELETE FROM dbo.GilinganProduksiOutput WHERE NoGilingan = @NoGilingan`);
+        .input("NoGilingan", sql.VarChar(50), NoGilingan)
+        .query(
+          `DELETE FROM dbo.GilinganProduksiOutput WHERE NoGilingan = @NoGilingan`,
+        );
 
       await new sql.Request(tx)
-        .input('NoGilingan', sql.VarChar(50), NoGilingan)
-        .query(`DELETE FROM dbo.BongkarSusunOutputGilingan WHERE NoGilingan = @NoGilingan`);
+        .input("NoGilingan", sql.VarChar(50), NoGilingan)
+        .query(
+          `DELETE FROM dbo.BongkarSusunOutputGilingan WHERE NoGilingan = @NoGilingan`,
+        );
 
       if (hasOutput) {
-        if (outputType === 'PRODUKSI') {
+        if (outputType === "PRODUKSI") {
           await new sql.Request(tx)
-            .input('NoProduksi', sql.VarChar(50), outputCode)
-            .input('NoGilingan', sql.VarChar(50), NoGilingan)
-            .input('Berat', sql.Decimal(18, 3), header.Berat ?? null)
-            .query(`
+            .input("NoProduksi", sql.VarChar(50), outputCode)
+            .input("NoGilingan", sql.VarChar(50), NoGilingan)
+            .input("Berat", sql.Decimal(18, 3), header.Berat ?? null).query(`
               INSERT INTO dbo.GilinganProduksiOutput (NoProduksi, NoGilingan, Berat)
               VALUES (@NoProduksi, @NoGilingan, @Berat);
             `);
-          mappingTable = 'GilinganProduksiOutput';
-        } else if (outputType === 'BONGKAR') {
+          mappingTable = "GilinganProduksiOutput";
+        } else if (outputType === "BONGKAR") {
           await new sql.Request(tx)
-            .input('NoBongkarSusun', sql.VarChar(50), outputCode)
-            .input('NoGilingan', sql.VarChar(50), NoGilingan)
-            .query(`
+            .input("NoBongkarSusun", sql.VarChar(50), outputCode)
+            .input("NoGilingan", sql.VarChar(50), NoGilingan).query(`
               INSERT INTO dbo.BongkarSusunOutputGilingan (NoBongkarSusun, NoGilingan)
               VALUES (@NoBongkarSusun, @NoGilingan);
             `);
-          mappingTable = 'BongkarSusunOutputGilingan';
+          mappingTable = "BongkarSusunOutputGilingan";
         }
       }
     }
@@ -577,10 +602,18 @@ exports.updateGilinganCascade = async (payload) => {
       header: {
         NoGilingan,
         ...header,
-        existingDateCreate: existingDateOnly ? formatYMD(existingDateOnly) : null,
-        ...(newDateCreateOnly ? { newDateCreate: formatYMD(newDateCreateOnly) } : {}),
+        existingDateCreate: existingDateOnly
+          ? formatYMD(existingDateOnly)
+          : null,
+        ...(newDateCreateOnly
+          ? { newDateCreate: formatYMD(newDateCreateOnly) }
+          : {}),
         ...(header.DateUsage !== undefined
-          ? { newDateUsage: newDateUsageOnly ? formatYMD(newDateUsageOnly) : null }
+          ? {
+              newDateUsage: newDateUsageOnly
+                ? formatYMD(newDateUsageOnly)
+                : null,
+            }
           : {}),
       },
       output: sentOutputField
@@ -596,24 +629,28 @@ exports.updateGilinganCascade = async (payload) => {
   }
 };
 
-
-
-
 exports.deleteGilinganCascade = async (payload) => {
   const pool = await poolPromise;
   const tx = new sql.Transaction(pool);
 
   const NoGilingan = payload?.NoGilingan?.toString().trim();
-  if (!NoGilingan) throw badReq('NoGilingan (path) wajib diisi');
+  if (!NoGilingan) throw badReq("NoGilingan (path) wajib diisi");
 
   // =====================================================
   // [AUDIT] actorId + requestId (ID only)
   // =====================================================
   const actorIdNum = Number(payload?.actorId);
-  const actorId = Number.isFinite(actorIdNum) && actorIdNum > 0 ? actorIdNum : null;
+  const actorId =
+    Number.isFinite(actorIdNum) && actorIdNum > 0 ? actorIdNum : null;
 
-  const requestId = String(payload?.requestId || `${Date.now()}-${Math.random().toString(16).slice(2)}`);
-  if (!actorId) throw badReq('actorId kosong. Controller harus inject payload.actorId dari token.');
+  const requestId = String(
+    payload?.requestId ||
+      `${Date.now()}-${Math.random().toString(16).slice(2)}`,
+  );
+  if (!actorId)
+    throw badReq(
+      "actorId kosong. Controller harus inject payload.actorId dari token.",
+    );
 
   try {
     await tx.begin(sql.ISOLATION_LEVEL.SERIALIZABLE);
@@ -622,9 +659,8 @@ exports.deleteGilinganCascade = async (payload) => {
     // [AUDIT CTX] Set actor_id + request_id untuk trigger audit
     // =====================================================
     await new sql.Request(tx)
-      .input('actorId', sql.Int, actorId)
-      .input('rid', sql.NVarChar(64), requestId)
-      .query(`
+      .input("actorId", sql.Int, actorId)
+      .input("rid", sql.NVarChar(64), requestId).query(`
         EXEC sys.sp_set_session_context @key=N'actor_id', @value=@actorId;
         EXEC sys.sp_set_session_context @key=N'request_id', @value=@rid;
       `);
@@ -632,9 +668,11 @@ exports.deleteGilinganCascade = async (payload) => {
     // ===============================
     // 0) Lock + ambil DateCreate existing
     // ===============================
-    const head = await new sql.Request(tx)
-      .input('NoGilingan', sql.VarChar(50), NoGilingan)
-      .query(`
+    const head = await new sql.Request(tx).input(
+      "NoGilingan",
+      sql.VarChar(50),
+      NoGilingan,
+    ).query(`
         SELECT TOP 1 NoGilingan, DateCreate
         FROM dbo.Gilingan WITH (UPDLOCK, HOLDLOCK)
         WHERE NoGilingan = @NoGilingan
@@ -659,8 +697,7 @@ exports.deleteGilinganCascade = async (payload) => {
     // ===============================
     // 2) delete PARTIALS first
     // ===============================
-    await new sql.Request(tx)
-      .input('NoGilingan', sql.VarChar(50), NoGilingan)
+    await new sql.Request(tx).input("NoGilingan", sql.VarChar(50), NoGilingan)
       .query(`
         DELETE FROM dbo.GilinganPartial
         WHERE NoGilingan = @NoGilingan;
@@ -670,19 +707,25 @@ exports.deleteGilinganCascade = async (payload) => {
     // 3) delete OUTPUT mappings (idempotent)
     // ===============================
     await new sql.Request(tx)
-      .input('NoGilingan', sql.VarChar(50), NoGilingan)
-      .query(`DELETE FROM dbo.BongkarSusunOutputGilingan WHERE NoGilingan = @NoGilingan`);
+      .input("NoGilingan", sql.VarChar(50), NoGilingan)
+      .query(
+        `DELETE FROM dbo.BongkarSusunOutputGilingan WHERE NoGilingan = @NoGilingan`,
+      );
 
     await new sql.Request(tx)
-      .input('NoGilingan', sql.VarChar(50), NoGilingan)
-      .query(`DELETE FROM dbo.GilinganProduksiOutput WHERE NoGilingan = @NoGilingan`);
+      .input("NoGilingan", sql.VarChar(50), NoGilingan)
+      .query(
+        `DELETE FROM dbo.GilinganProduksiOutput WHERE NoGilingan = @NoGilingan`,
+      );
 
     // ===============================
     // 4) delete header
     // ===============================
-    const result = await new sql.Request(tx)
-      .input('NoGilingan', sql.VarChar(50), NoGilingan)
-      .query(`
+    const result = await new sql.Request(tx).input(
+      "NoGilingan",
+      sql.VarChar(50),
+      NoGilingan,
+    ).query(`
         DELETE FROM dbo.Gilingan
         WHERE NoGilingan = @NoGilingan;
       `);
@@ -708,17 +751,12 @@ exports.deleteGilinganCascade = async (payload) => {
   }
 };
 
+exports.getPartialInfoByGilingan = async (nogilingan) => {
+  const pool = await poolPromise;
 
+  const req = pool.request().input("NoGilingan", sql.VarChar, nogilingan);
 
-
-  exports.getPartialInfoByGilingan = async (nogilingan) => {
-    const pool = await poolPromise;
-  
-    const req = pool
-      .request()
-      .input('NoGilingan', sql.VarChar, nogilingan);
-  
-    const query = `
+  const query = `
       ;WITH BasePartial AS (
         SELECT
           gp.NoGilinganPartial,
@@ -804,47 +842,119 @@ exports.deleteGilinganCascade = async (payload) => {
         c.SourceType ASC,
         c.NoProduksi ASC;
     `;
-  
-    const result = await req.query(query);
-  
-    // total partial weight (unique per NoGilinganPartial)
-    const seen = new Set();
-    let totalPartialWeight = 0;
-  
-    for (const row of result.recordset) {
-      const key = row.NoGilinganPartial;
-      if (!seen.has(key)) {
-        seen.add(key);
-        const w =
-          typeof row.Berat === 'number'
-            ? row.Berat
-            : Number(row.Berat) || 0;
-        totalPartialWeight += w;
-      }
+
+  const result = await req.query(query);
+
+  // total partial weight (unique per NoGilinganPartial)
+  const seen = new Set();
+  let totalPartialWeight = 0;
+
+  for (const row of result.recordset) {
+    const key = row.NoGilinganPartial;
+    if (!seen.has(key)) {
+      seen.add(key);
+      const w =
+        typeof row.Berat === "number" ? row.Berat : Number(row.Berat) || 0;
+      totalPartialWeight += w;
     }
-  
-    const formatDate = (date) => {
-      if (!date) return null;
-      const d = new Date(date);
-      const pad = (n) => (n < 10 ? '0' + n : '' + n);
-      return `${d.getFullYear()}-${pad(d.getMonth() + 1)}-${pad(d.getDate())}`;
-    };
-  
-    const rows = result.recordset.map((r) => ({
-      NoGilinganPartial: r.NoGilinganPartial,
-      NoGilingan: r.NoGilingan,
-      Berat: r.Berat,
-  
-      SourceType: r.SourceType || null,      // 'BROKER' | 'INJECT' | 'MIXER' | 'WASHING' | null
-      NoProduksi: r.NoProduksi || null,
-  
-      TglProduksi: r.TglProduksi ? formatDate(r.TglProduksi) : null,
-      IdMesin: r.IdMesin || null,
-      NamaMesin: r.NamaMesin || null,
-      IdOperator: r.IdOperator || null,
-      Jam: r.Jam || null,
-      Shift: r.Shift || null,
-    }));
-  
-    return { totalPartialWeight, rows };
+  }
+
+  const formatDate = (date) => {
+    if (!date) return null;
+    const d = new Date(date);
+    const pad = (n) => (n < 10 ? "0" + n : "" + n);
+    return `${d.getFullYear()}-${pad(d.getMonth() + 1)}-${pad(d.getDate())}`;
   };
+
+  const rows = result.recordset.map((r) => ({
+    NoGilinganPartial: r.NoGilinganPartial,
+    NoGilingan: r.NoGilingan,
+    Berat: r.Berat,
+
+    SourceType: r.SourceType || null, // 'BROKER' | 'INJECT' | 'MIXER' | 'WASHING' | null
+    NoProduksi: r.NoProduksi || null,
+
+    TglProduksi: r.TglProduksi ? formatDate(r.TglProduksi) : null,
+    IdMesin: r.IdMesin || null,
+    NamaMesin: r.NamaMesin || null,
+    IdOperator: r.IdOperator || null,
+    Jam: r.Jam || null,
+    Shift: r.Shift || null,
+  }));
+
+  return { totalPartialWeight, rows };
+};
+
+exports.incrementHasBeenPrinted = async (payload) => {
+  const NoGilingan = String(payload?.NoGilingan || "").trim();
+  if (!NoGilingan) throw badReq("NoGilingan wajib diisi");
+
+  const actorIdNum = Number(payload?.actorId);
+  const actorId =
+    Number.isFinite(actorIdNum) && actorIdNum > 0 ? actorIdNum : null;
+  if (!actorId) {
+    throw badReq(
+      "actorId kosong. Controller harus inject payload.actorId dari token.",
+    );
+  }
+
+  const requestId = String(
+    payload?.requestId ||
+      `${Date.now()}-${Math.random().toString(16).slice(2)}`,
+  );
+
+  const pool = await poolPromise;
+  const tx = new sql.Transaction(pool);
+
+  try {
+    await tx.begin(sql.ISOLATION_LEVEL.SERIALIZABLE);
+
+    await new sql.Request(tx)
+      .input("actorId", sql.Int, actorId)
+      .input("rid", sql.NVarChar(64), requestId).query(`
+        EXEC sys.sp_set_session_context @key=N'actor_id', @value=@actorId;
+        EXEC sys.sp_set_session_context @key=N'request_id', @value=@rid;
+      `);
+
+    const rs = await new sql.Request(tx).input(
+      "NoGilingan",
+      sql.VarChar(50),
+      NoGilingan,
+    ).query(`
+        DECLARE @out TABLE (
+          NoGilingan varchar(50),
+          HasBeenPrinted int
+        );
+
+        UPDATE dbo.Gilingan
+        SET HasBeenPrinted = ISNULL(HasBeenPrinted, 0) + 1
+        OUTPUT
+          INSERTED.NoGilingan,
+          INSERTED.HasBeenPrinted
+        INTO @out
+        WHERE NoGilingan = @NoGilingan;
+
+        SELECT NoGilingan, HasBeenPrinted
+        FROM @out;
+      `);
+
+    const row = rs.recordset?.[0] || null;
+    if (!row) {
+      const e = new Error(`NoGilingan ${NoGilingan} tidak ditemukan`);
+      e.statusCode = 404;
+      throw e;
+    }
+
+    await tx.commit();
+
+    return {
+      NoGilingan: row.NoGilingan,
+      HasBeenPrinted: row.HasBeenPrinted,
+    };
+  } catch (e) {
+    try {
+      await tx.rollback();
+    } catch (_) {}
+    throw e;
+  }
+};

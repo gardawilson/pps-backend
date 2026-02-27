@@ -45,6 +45,7 @@ exports.getAll = async ({ page, limit, search }) => {
       h.Moisture,
       h.Moisture2,
       h.Moisture3,
+      MAX(ISNULL(CAST(h.HasBeenPrinted AS int), 0)) AS HasBeenPrinted,
 
       -- ambil NoProduksi & NamaMesin
       MAX(wpo.NoProduksi) AS NoProduksi,
@@ -951,6 +952,80 @@ exports.deleteWashingCascade = async (payload) => {
       e.statusCode = 409;
       e.message = e.message || "Gagal hapus karena constraint referensi (FK).";
     }
+    throw e;
+  }
+};
+
+exports.incrementHasBeenPrinted = async (payload) => {
+  const NoWashing = String(payload?.NoWashing || "").trim();
+  if (!NoWashing) throw badReq("NoWashing wajib diisi");
+
+  const actorIdNum = Number(payload?.actorId);
+  const actorId =
+    Number.isFinite(actorIdNum) && actorIdNum > 0 ? actorIdNum : null;
+  if (!actorId) {
+    throw badReq(
+      "actorId kosong. Controller harus inject payload.actorId dari token.",
+    );
+  }
+
+  const requestId = String(
+    payload?.requestId ||
+      `${Date.now()}-${Math.random().toString(16).slice(2)}`,
+  );
+
+  const pool = await poolPromise;
+  const tx = new sql.Transaction(pool);
+
+  try {
+    await tx.begin(sql.ISOLATION_LEVEL.SERIALIZABLE);
+
+    await new sql.Request(tx)
+      .input("actorId", sql.Int, actorId)
+      .input("rid", sql.NVarChar(64), requestId).query(`
+        EXEC sys.sp_set_session_context @key=N'actor_id', @value=@actorId;
+        EXEC sys.sp_set_session_context @key=N'request_id', @value=@rid;
+      `);
+
+    const rs = await new sql.Request(tx).input(
+      "NoWashing",
+      sql.VarChar(50),
+      NoWashing,
+    ).query(`
+        DECLARE @out TABLE (
+          NoWashing varchar(50),
+          HasBeenPrinted int
+        );
+
+        UPDATE dbo.Washing_h
+        SET HasBeenPrinted = ISNULL(HasBeenPrinted, 0) + 1
+        OUTPUT
+          INSERTED.NoWashing,
+          INSERTED.HasBeenPrinted
+        INTO @out
+        WHERE NoWashing = @NoWashing;
+
+        SELECT NoWashing, HasBeenPrinted
+        FROM @out;
+      `);
+
+    const row = rs.recordset?.[0] || null;
+    if (!row) {
+      const e = new Error(`NoWashing ${NoWashing} tidak ditemukan`);
+      e.statusCode = 404;
+      throw e;
+    }
+
+    await tx.commit();
+
+    return {
+      NoWashing: row.NoWashing,
+      HasBeenPrinted: row.HasBeenPrinted,
+    };
+  } catch (e) {
+    try {
+      await tx.rollback();
+    } catch (_) {}
     throw e;
   }
 };

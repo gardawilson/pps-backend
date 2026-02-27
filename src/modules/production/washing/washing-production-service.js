@@ -1160,6 +1160,27 @@ async function fetchInputs(noProduksi) {
   return out;
 }
 
+async function fetchOutputs(noProduksi) {
+  const pool = await poolPromise;
+  const req = pool.request();
+  req.input("no", sql.VarChar(50), noProduksi);
+
+  const q = `
+    SELECT DISTINCT
+      o.NoProduksi,
+      o.NoWashing,
+      ISNULL(h.HasBeenPrinted, 0) AS HasBeenPrinted
+    FROM dbo.WashingProduksiOutput o WITH (NOLOCK)
+    LEFT JOIN dbo.Washing_h h WITH (NOLOCK)
+      ON h.NoWashing = o.NoWashing
+    WHERE o.NoProduksi = @no
+    ORDER BY o.NoWashing DESC;
+  `;
+
+  const rs = await req.query(q);
+  return rs.recordset || [];
+}
+
 /**
  * Validate label untuk Washing Production
  * Support prefix: A. (Bahan Baku), B. (Washing), V. (Gilingan)
@@ -1420,6 +1441,7 @@ module.exports = {
   updateWashingProduksi,
   deleteWashingProduksi,
   fetchInputs,
+  fetchOutputs,
   validateLabel,
   upsertInputsAndPartials,
   deleteInputsAndPartials,

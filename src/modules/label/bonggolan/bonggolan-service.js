@@ -1,19 +1,20 @@
 // services/bonggolan-service.js
-const { sql, poolPromise } = require('../../../core/config/db');
+const { sql, poolPromise } = require("../../../core/config/db");
 const {
   getBlokLokasiFromKodeProduksi,
-} = require('../../../core/shared/mesin-location-helper'); 
+} = require("../../../core/shared/mesin-location-helper");
 
 const {
   resolveEffectiveDateForCreate,
   toDateOnly,
-  assertNotLocked,     
+  assertNotLocked,
   formatYMD,
-} = require('../../../core/shared/tutup-transaksi-guard');
+} = require("../../../core/shared/tutup-transaksi-guard");
 
-const { generateNextCode } = require('../../../core/utils/sequence-code-helper'); 
-const { badReq, conflict } = require('../../../core/utils/http-error'); 
-
+const {
+  generateNextCode,
+} = require("../../../core/utils/sequence-code-helper");
+const { badReq, conflict } = require("../../../core/utils/http-error");
 
 exports.getAll = async ({ page, limit, search }) => {
   const pool = await poolPromise;
@@ -31,6 +32,7 @@ exports.getAll = async ({ page, limit, search }) => {
       b.Blok,
       b.IdLokasi,
       b.Berat,
+      MAX(ISNULL(CAST(b.HasBeenPrinted AS int), 0)) AS HasBeenPrinted,
       CASE 
         WHEN b.IdStatus = 1 THEN 'PASS'
         WHEN b.IdStatus = 0 THEN 'HOLD'
@@ -92,7 +94,7 @@ exports.getAll = async ({ page, limit, search }) => {
                OR ISNULL(m2.NamaMesin,'') LIKE @search
                OR ISNULL(bs.NoBongkarSusun,'') LIKE @search
              )`
-          : ''
+          : ""
       }
     GROUP BY
       b.NoBonggolan, b.DateCreate, b.IdBonggolan, mb.NamaBonggolan,
@@ -139,13 +141,13 @@ exports.getAll = async ({ page, limit, search }) => {
                OR ISNULL(m2.NamaMesin,'') LIKE @search
                OR ISNULL(bs.NoBongkarSusun,'') LIKE @search
              )`
-          : ''
+          : ""
       }
   `;
 
-  request.input('offset', sql.Int, offset);
-  request.input('limit', sql.Int, limit);
-  if (search) request.input('search', sql.VarChar, `%${search}%`);
+  request.input("offset", sql.Int, offset);
+  request.input("limit", sql.Int, limit);
+  if (search) request.input("search", sql.VarChar, `%${search}%`);
 
   const [dataResult, countResult] = await Promise.all([
     request.query(baseQuery),
@@ -158,39 +160,46 @@ exports.getAll = async ({ page, limit, search }) => {
   return { data, total };
 };
 
-
-
-
 exports.createBonggolanCascade = async (payload) => {
   const pool = await poolPromise;
   const tx = new sql.Transaction(pool);
 
   const header = payload?.header || {};
-  const processedCode = (payload?.ProcessedCode || '').toString().trim(); // '' | 'E.****' | 'S.****' | 'BG.****'
+  const processedCode = (payload?.ProcessedCode || "").toString().trim(); // '' | 'E.****' | 'S.****' | 'BG.****'
 
   // ---- validation dasar (samakan crusher)
-  if (!header.IdBonggolan) throw badReq('IdBonggolan wajib diisi');
-  if (!header.IdWarehouse) throw badReq('IdWarehouse wajib diisi');
-  if (!header.CreateBy) throw badReq('CreateBy wajib diisi'); // controller overwrite dari token
+  if (!header.IdBonggolan) throw badReq("IdBonggolan wajib diisi");
+  if (!header.IdWarehouse) throw badReq("IdWarehouse wajib diisi");
+  if (!header.CreateBy) throw badReq("CreateBy wajib diisi"); // controller overwrite dari token
 
   // Identify target from ProcessedCode (optional)
   const hasProcessed = processedCode.length > 0;
   let processedType = null; // 'BROKER' | 'INJECT' | 'BONGKAR'
   if (hasProcessed) {
-    if (processedCode.startsWith('E.')) processedType = 'BROKER';
-    else if (processedCode.startsWith('S.')) processedType = 'INJECT';
-    else if (processedCode.startsWith('BG.')) processedType = 'BONGKAR';
-    else throw badReq('ProcessedCode prefix tidak dikenali (pakai E., S., atau BG.)');
+    if (processedCode.startsWith("E.")) processedType = "BROKER";
+    else if (processedCode.startsWith("S.")) processedType = "INJECT";
+    else if (processedCode.startsWith("BG.")) processedType = "BONGKAR";
+    else
+      throw badReq(
+        "ProcessedCode prefix tidak dikenali (pakai E., S., atau BG.)",
+      );
   }
 
   // =====================================================
   // [AUDIT] Pakai actorId dari controller (token)
   // =====================================================
   const actorIdNum = Number(payload?.actorId);
-  const actorId = Number.isFinite(actorIdNum) && actorIdNum > 0 ? actorIdNum : null;
+  const actorId =
+    Number.isFinite(actorIdNum) && actorIdNum > 0 ? actorIdNum : null;
 
-  const requestId = String(payload?.requestId || `${Date.now()}-${Math.random().toString(16).slice(2)}`);
-  if (!actorId) throw badReq('actorId kosong. Controller harus inject payload.actorId dari token.');
+  const requestId = String(
+    payload?.requestId ||
+      `${Date.now()}-${Math.random().toString(16).slice(2)}`,
+  );
+  if (!actorId)
+    throw badReq(
+      "actorId kosong. Controller harus inject payload.actorId dari token.",
+    );
 
   try {
     await tx.begin(sql.ISOLATION_LEVEL.SERIALIZABLE);
@@ -199,9 +208,8 @@ exports.createBonggolanCascade = async (payload) => {
     // [AUDIT CTX] Set actor_id + request_id untuk trigger audit
     // =====================================================
     await new sql.Request(tx)
-      .input('actorId', sql.Int, actorId)
-      .input('rid', sql.NVarChar(64), requestId)
-      .query(`
+      .input("actorId", sql.Int, actorId)
+      .input("rid", sql.NVarChar(64), requestId).query(`
         EXEC sys.sp_set_session_context @key=N'actor_id', @value=@actorId;
         EXEC sys.sp_set_session_context @key=N'request_id', @value=@rid;
       `);
@@ -209,18 +217,20 @@ exports.createBonggolanCascade = async (payload) => {
     // ===============================
     // [A] TUTUP TRANSAKSI CHECK (CREATE)
     // ===============================
-    const effectiveDateCreate = resolveEffectiveDateForCreate(header.DateCreate); // date-only
+    const effectiveDateCreate = resolveEffectiveDateForCreate(
+      header.DateCreate,
+    ); // date-only
     await assertNotLocked({
       date: effectiveDateCreate,
       runner: tx,
-      action: 'create bonggolan',
+      action: "create bonggolan",
       useLock: true,
     });
 
     // ===============================
     // 0) Auto-isi Blok & IdLokasi dari kode (processedCode) kalau header belum isi
     // ===============================
-    const needBlok = header.Blok == null || String(header.Blok).trim() === '';
+    const needBlok = header.Blok == null || String(header.Blok).trim() === "";
     const needLokasi = header.IdLokasi == null;
 
     if (needBlok || needLokasi) {
@@ -228,7 +238,10 @@ exports.createBonggolanCascade = async (payload) => {
 
       let lokasi = null;
       if (kodeRef) {
-        lokasi = await getBlokLokasiFromKodeProduksi({ kode: kodeRef, runner: tx });
+        lokasi = await getBlokLokasiFromKodeProduksi({
+          kode: kodeRef,
+          runner: tx,
+        });
       }
 
       if (lokasi) {
@@ -242,9 +255,9 @@ exports.createBonggolanCascade = async (payload) => {
     // ===============================
     const gen = async () =>
       generateNextCode(tx, {
-        tableName: 'Bonggolan',
-        columnName: 'NoBonggolan',
-        prefix: 'M.',
+        tableName: "Bonggolan",
+        columnName: "NoBonggolan",
+        prefix: "M.",
         width: 10,
       });
 
@@ -252,17 +265,21 @@ exports.createBonggolanCascade = async (payload) => {
 
     // 2) Double-check belum dipakai (lock)
     const exist = await new sql.Request(tx)
-      .input('NoBonggolan', sql.VarChar(50), generatedNo)
-      .query(`SELECT 1 FROM dbo.Bonggolan WITH (UPDLOCK, HOLDLOCK) WHERE NoBonggolan = @NoBonggolan`);
+      .input("NoBonggolan", sql.VarChar(50), generatedNo)
+      .query(
+        `SELECT 1 FROM dbo.Bonggolan WITH (UPDLOCK, HOLDLOCK) WHERE NoBonggolan = @NoBonggolan`,
+      );
 
     if (exist.recordset.length > 0) {
       const retryNo = await gen();
       const exist2 = await new sql.Request(tx)
-        .input('NoBonggolan', sql.VarChar(50), retryNo)
-        .query(`SELECT 1 FROM dbo.Bonggolan WITH (UPDLOCK, HOLDLOCK) WHERE NoBonggolan = @NoBonggolan`);
+        .input("NoBonggolan", sql.VarChar(50), retryNo)
+        .query(
+          `SELECT 1 FROM dbo.Bonggolan WITH (UPDLOCK, HOLDLOCK) WHERE NoBonggolan = @NoBonggolan`,
+        );
 
       if (exist2.recordset.length > 0) {
-        throw conflict('Gagal generate NoBonggolan unik, coba lagi.');
+        throw conflict("Gagal generate NoBonggolan unik, coba lagi.");
       }
       header.NoBonggolan = retryNo;
     } else {
@@ -286,16 +303,16 @@ exports.createBonggolanCascade = async (payload) => {
     `;
 
     await new sql.Request(tx)
-      .input('NoBonggolan', sql.VarChar(50), header.NoBonggolan)
-      .input('DateCreate', sql.Date, effectiveDateCreate)
-      .input('IdBonggolan', sql.Int, header.IdBonggolan)
-      .input('IdWarehouse', sql.Int, header.IdWarehouse)
-      .input('Berat', sql.Decimal(18, 3), header.Berat ?? null)
-      .input('IdStatus', sql.Int, header.IdStatus ?? 1)
-      .input('Blok', sql.VarChar(50), header.Blok ?? null)
-      .input('IdLokasi', sql.Int, header.IdLokasi ?? null)
-      .input('CreateBy', sql.VarChar(50), header.CreateBy)
-      .input('DateTimeCreate', sql.DateTime, nowDateTime)
+      .input("NoBonggolan", sql.VarChar(50), header.NoBonggolan)
+      .input("DateCreate", sql.Date, effectiveDateCreate)
+      .input("IdBonggolan", sql.Int, header.IdBonggolan)
+      .input("IdWarehouse", sql.Int, header.IdWarehouse)
+      .input("Berat", sql.Decimal(18, 3), header.Berat ?? null)
+      .input("IdStatus", sql.Int, header.IdStatus ?? 1)
+      .input("Blok", sql.VarChar(50), header.Blok ?? null)
+      .input("IdLokasi", sql.Int, header.IdLokasi ?? null)
+      .input("CreateBy", sql.VarChar(50), header.CreateBy)
+      .input("DateTimeCreate", sql.DateTime, nowDateTime)
       .query(insertHeaderSql);
 
     // ===============================
@@ -303,36 +320,33 @@ exports.createBonggolanCascade = async (payload) => {
     // ===============================
     let mappingTable = null;
 
-    if (processedType === 'BROKER') {
+    if (processedType === "BROKER") {
       await new sql.Request(tx)
-        .input('NoProduksi', sql.VarChar(50), processedCode)
-        .input('NoBonggolan', sql.VarChar(50), header.NoBonggolan)
-        .query(`
+        .input("NoProduksi", sql.VarChar(50), processedCode)
+        .input("NoBonggolan", sql.VarChar(50), header.NoBonggolan).query(`
           INSERT INTO dbo.BrokerProduksiOutputBonggolan (NoProduksi, NoBonggolan)
           VALUES (@NoProduksi, @NoBonggolan);
         `);
 
-      mappingTable = 'BrokerProduksiOutputBonggolan';
-    } else if (processedType === 'INJECT') {
+      mappingTable = "BrokerProduksiOutputBonggolan";
+    } else if (processedType === "INJECT") {
       await new sql.Request(tx)
-        .input('NoProduksi', sql.VarChar(50), processedCode)
-        .input('NoBonggolan', sql.VarChar(50), header.NoBonggolan)
-        .query(`
+        .input("NoProduksi", sql.VarChar(50), processedCode)
+        .input("NoBonggolan", sql.VarChar(50), header.NoBonggolan).query(`
           INSERT INTO dbo.InjectProduksiOutputBonggolan (NoProduksi, NoBonggolan)
           VALUES (@NoProduksi, @NoBonggolan);
         `);
 
-      mappingTable = 'InjectProduksiOutputBonggolan';
-    } else if (processedType === 'BONGKAR') {
+      mappingTable = "InjectProduksiOutputBonggolan";
+    } else if (processedType === "BONGKAR") {
       await new sql.Request(tx)
-        .input('NoBongkarSusun', sql.VarChar(50), processedCode)
-        .input('NoBonggolan', sql.VarChar(50), header.NoBonggolan)
-        .query(`
+        .input("NoBongkarSusun", sql.VarChar(50), processedCode)
+        .input("NoBonggolan", sql.VarChar(50), header.NoBonggolan).query(`
           INSERT INTO dbo.BongkarSusunOutputBonggolan (NoBongkarSusun, NoBonggolan)
           VALUES (@NoBongkarSusun, @NoBonggolan);
         `);
-        
-      mappingTable = 'BongkarSusunOutputBonggolan';
+
+      mappingTable = "BongkarSusunOutputBonggolan";
     }
 
     await tx.commit();
@@ -365,35 +379,43 @@ exports.createBonggolanCascade = async (payload) => {
   }
 };
 
-
-
 exports.updateBonggolanCascade = async (payload) => {
   const pool = await poolPromise;
   const tx = new sql.Transaction(pool);
 
   const NoBonggolan = payload?.NoBonggolan?.toString().trim();
-  if (!NoBonggolan) throw badReq('NoBonggolan (path) wajib diisi');
+  if (!NoBonggolan) throw badReq("NoBonggolan (path) wajib diisi");
 
   const header = payload?.header || {};
-  const processedCode = (payload?.ProcessedCode || '').toString().trim(); // '' | 'E.****' | 'S.****' | 'BG.****'
+  const processedCode = (payload?.ProcessedCode || "").toString().trim(); // '' | 'E.****' | 'S.****' | 'BG.****'
 
   // =====================================================
   // [AUDIT] actorId + requestId (ID only)
   // =====================================================
   const actorIdNum = Number(payload?.actorId);
-  const actorId = Number.isFinite(actorIdNum) && actorIdNum > 0 ? actorIdNum : null;
+  const actorId =
+    Number.isFinite(actorIdNum) && actorIdNum > 0 ? actorIdNum : null;
 
-  const requestId = String(payload?.requestId || `${Date.now()}-${Math.random().toString(16).slice(2)}`);
-  if (!actorId) throw badReq('actorId kosong. Controller harus inject payload.actorId dari token.');
+  const requestId = String(
+    payload?.requestId ||
+      `${Date.now()}-${Math.random().toString(16).slice(2)}`,
+  );
+  if (!actorId)
+    throw badReq(
+      "actorId kosong. Controller harus inject payload.actorId dari token.",
+    );
 
   // Identify processedType from ProcessedCode (optional)
   const hasProcessed = processedCode.length > 0;
   let processedType = null; // 'BROKER' | 'INJECT' | 'BONGKAR' | null
   if (hasProcessed) {
-    if (processedCode.startsWith('E.')) processedType = 'BROKER';
-    else if (processedCode.startsWith('S.')) processedType = 'INJECT';
-    else if (processedCode.startsWith('BG.')) processedType = 'BONGKAR';
-    else throw badReq('ProcessedCode prefix tidak dikenali (pakai E., S., atau BG.)');
+    if (processedCode.startsWith("E.")) processedType = "BROKER";
+    else if (processedCode.startsWith("S.")) processedType = "INJECT";
+    else if (processedCode.startsWith("BG.")) processedType = "BONGKAR";
+    else
+      throw badReq(
+        "ProcessedCode prefix tidak dikenali (pakai E., S., atau BG.)",
+      );
   }
 
   try {
@@ -403,17 +425,18 @@ exports.updateBonggolanCascade = async (payload) => {
     // [AUDIT CTX] Set actor_id + request_id untuk trigger audit
     // =====================================================
     await new sql.Request(tx)
-      .input('actorId', sql.Int, actorId)
-      .input('rid', sql.NVarChar(64), requestId)
-      .query(`
+      .input("actorId", sql.Int, actorId)
+      .input("rid", sql.NVarChar(64), requestId).query(`
         EXEC sys.sp_set_session_context @key=N'actor_id', @value=@actorId;
         EXEC sys.sp_set_session_context @key=N'request_id', @value=@rid;
       `);
 
     // 0) Pastikan header exist + ambil DateCreate existing (LOCK)
-    const exist = await new sql.Request(tx)
-      .input('NoBonggolan', sql.VarChar(50), NoBonggolan)
-      .query(`
+    const exist = await new sql.Request(tx).input(
+      "NoBonggolan",
+      sql.VarChar(50),
+      NoBonggolan,
+    ).query(`
         SELECT TOP 1 NoBonggolan, DateCreate, DateUsage
         FROM dbo.Bonggolan WITH (UPDLOCK, HOLDLOCK)
         WHERE NoBonggolan = @NoBonggolan
@@ -440,9 +463,10 @@ exports.updateBonggolanCascade = async (payload) => {
     // Jika client kirim DateCreate baru, cek juga
     let newDateCreateOnly = null;
     if (header.DateCreate !== undefined) {
-      if (header.DateCreate === null) throw badReq('DateCreate tidak boleh null pada UPDATE.');
+      if (header.DateCreate === null)
+        throw badReq("DateCreate tidak boleh null pada UPDATE.");
       newDateCreateOnly = toDateOnly(header.DateCreate);
-      if (!newDateCreateOnly) throw badReq('DateCreate tidak valid.');
+      if (!newDateCreateOnly) throw badReq("DateCreate tidak valid.");
 
       await assertNotLocked({
         date: newDateCreateOnly,
@@ -459,7 +483,7 @@ exports.updateBonggolanCascade = async (payload) => {
         newDateUsageOnly = null; // allow clear
       } else {
         newDateUsageOnly = toDateOnly(header.DateUsage);
-        if (!newDateUsageOnly) throw badReq('DateUsage tidak valid.');
+        if (!newDateUsageOnly) throw badReq("DateUsage tidak valid.");
         await assertNotLocked({
           date: newDateUsageOnly,
           runner: tx,
@@ -473,7 +497,11 @@ exports.updateBonggolanCascade = async (payload) => {
     // 1) Update header (partial/dynamic) — mirip crusher/broker
     // ===============================
     const setParts = [];
-    const reqHeader = new sql.Request(tx).input('NoBonggolan', sql.VarChar(50), NoBonggolan);
+    const reqHeader = new sql.Request(tx).input(
+      "NoBonggolan",
+      sql.VarChar(50),
+      NoBonggolan,
+    );
 
     const setIf = (col, param, type, val) => {
       if (val !== undefined) {
@@ -482,41 +510,42 @@ exports.updateBonggolanCascade = async (payload) => {
       }
     };
 
-    setIf('IdBonggolan', 'IdBonggolan', sql.Int, header.IdBonggolan);
-    setIf('IdWarehouse', 'IdWarehouse', sql.Int, header.IdWarehouse);
+    setIf("IdBonggolan", "IdBonggolan", sql.Int, header.IdBonggolan);
+    setIf("IdWarehouse", "IdWarehouse", sql.Int, header.IdWarehouse);
 
     if (header.DateCreate !== undefined) {
-      setIf('DateCreate', 'DateCreate', sql.Date, newDateCreateOnly);
+      setIf("DateCreate", "DateCreate", sql.Date, newDateCreateOnly);
     }
 
     if (header.DateUsage !== undefined) {
-      setIf('DateUsage', 'DateUsage', sql.Date, newDateUsageOnly);
+      setIf("DateUsage", "DateUsage", sql.Date, newDateUsageOnly);
     }
 
-    if (Object.prototype.hasOwnProperty.call(header, 'Berat')) {
+    if (Object.prototype.hasOwnProperty.call(header, "Berat")) {
       const num = header.Berat === null ? null : Number(header.Berat);
-      if (num !== null && (!Number.isFinite(num) || num < 0)) throw badReq('Berat tidak valid.');
-      setIf('Berat', 'Berat', sql.Decimal(18, 3), num);
+      if (num !== null && (!Number.isFinite(num) || num < 0))
+        throw badReq("Berat tidak valid.");
+      setIf("Berat", "Berat", sql.Decimal(18, 3), num);
     }
 
-    setIf('IdStatus', 'IdStatus', sql.Int, header.IdStatus);
-    setIf('Blok', 'Blok', sql.VarChar(50), header.Blok);
+    setIf("IdStatus", "IdStatus", sql.Int, header.IdStatus);
+    setIf("Blok", "Blok", sql.VarChar(50), header.Blok);
 
     // IdLokasi -> INT (samakan create bonggolan). Kalau di DB varchar, ubah ke sql.VarChar(50)
     if (header.IdLokasi !== undefined) {
-      if (header.IdLokasi === null || String(header.IdLokasi).trim() === '') {
-        setIf('IdLokasi', 'IdLokasi', sql.Int, null);
+      if (header.IdLokasi === null || String(header.IdLokasi).trim() === "") {
+        setIf("IdLokasi", "IdLokasi", sql.Int, null);
       } else {
         const n = Number(String(header.IdLokasi).trim());
-        if (!Number.isFinite(n)) throw badReq('IdLokasi harus angka.');
-        setIf('IdLokasi', 'IdLokasi', sql.Int, n);
+        if (!Number.isFinite(n)) throw badReq("IdLokasi harus angka.");
+        setIf("IdLokasi", "IdLokasi", sql.Int, n);
       }
     }
 
     if (setParts.length > 0) {
       await reqHeader.query(`
         UPDATE dbo.Bonggolan
-        SET ${setParts.join(', ')}
+        SET ${setParts.join(", ")}
         WHERE NoBonggolan = @NoBonggolan
       `);
     }
@@ -526,52 +555,58 @@ exports.updateBonggolanCascade = async (payload) => {
     // - hanya kalau user memang "mengirim field" ProcessedCode (meski kosong)
     // - reset dulu biar gak duplikat
     // ===============================
-    const sentProcessedField = Object.prototype.hasOwnProperty.call(payload, 'ProcessedCode');
+    const sentProcessedField = Object.prototype.hasOwnProperty.call(
+      payload,
+      "ProcessedCode",
+    );
 
     let mappingTable = null;
     if (sentProcessedField) {
       // reset mapping
       await new sql.Request(tx)
-        .input('NoBonggolan', sql.VarChar(50), NoBonggolan)
-        .query(`DELETE FROM dbo.BrokerProduksiOutputBonggolan WHERE NoBonggolan = @NoBonggolan`);
+        .input("NoBonggolan", sql.VarChar(50), NoBonggolan)
+        .query(
+          `DELETE FROM dbo.BrokerProduksiOutputBonggolan WHERE NoBonggolan = @NoBonggolan`,
+        );
 
       await new sql.Request(tx)
-        .input('NoBonggolan', sql.VarChar(50), NoBonggolan)
-        .query(`DELETE FROM dbo.InjectProduksiOutputBonggolan WHERE NoBonggolan = @NoBonggolan`);
+        .input("NoBonggolan", sql.VarChar(50), NoBonggolan)
+        .query(
+          `DELETE FROM dbo.InjectProduksiOutputBonggolan WHERE NoBonggolan = @NoBonggolan`,
+        );
 
       await new sql.Request(tx)
-        .input('NoBonggolan', sql.VarChar(50), NoBonggolan)
-        .query(`DELETE FROM dbo.BongkarSusunInputBonggolan WHERE NoBonggolan = @NoBonggolan`);
+        .input("NoBonggolan", sql.VarChar(50), NoBonggolan)
+        .query(
+          `DELETE FROM dbo.BongkarSusunInputBonggolan WHERE NoBonggolan = @NoBonggolan`,
+        );
 
       // kalau processedCode kosong => user ingin "lepas relasi"
       if (hasProcessed) {
-        if (processedType === 'BROKER') {
+        if (processedType === "BROKER") {
           await new sql.Request(tx)
-            .input('NoProduksi', sql.VarChar(50), processedCode)
-            .input('NoBonggolan', sql.VarChar(50), NoBonggolan)
-            .query(`
+            .input("NoProduksi", sql.VarChar(50), processedCode)
+            .input("NoBonggolan", sql.VarChar(50), NoBonggolan).query(`
               INSERT INTO dbo.BrokerProduksiOutputBonggolan (NoProduksi, NoBonggolan)
               VALUES (@NoProduksi, @NoBonggolan);
             `);
-          mappingTable = 'BrokerProduksiOutputBonggolan';
-        } else if (processedType === 'INJECT') {
+          mappingTable = "BrokerProduksiOutputBonggolan";
+        } else if (processedType === "INJECT") {
           await new sql.Request(tx)
-            .input('NoProduksi', sql.VarChar(50), processedCode)
-            .input('NoBonggolan', sql.VarChar(50), NoBonggolan)
-            .query(`
+            .input("NoProduksi", sql.VarChar(50), processedCode)
+            .input("NoBonggolan", sql.VarChar(50), NoBonggolan).query(`
               INSERT INTO dbo.InjectProduksiOutputBonggolan (NoProduksi, NoBonggolan)
               VALUES (@NoProduksi, @NoBonggolan);
             `);
-          mappingTable = 'InjectProduksiOutputBonggolan';
-        } else if (processedType === 'BONGKAR') {
+          mappingTable = "InjectProduksiOutputBonggolan";
+        } else if (processedType === "BONGKAR") {
           await new sql.Request(tx)
-            .input('NoBongkarSusun', sql.VarChar(50), processedCode)
-            .input('NoBonggolan', sql.VarChar(50), NoBonggolan)
-            .query(`
+            .input("NoBongkarSusun", sql.VarChar(50), processedCode)
+            .input("NoBonggolan", sql.VarChar(50), NoBonggolan).query(`
               INSERT INTO dbo.BongkarSusunInputBonggolan (NoBongkarSusun, NoBonggolan)
               VALUES (@NoBongkarSusun, @NoBonggolan);
             `);
-          mappingTable = 'BongkarSusunInputBonggolan';
+          mappingTable = "BongkarSusunInputBonggolan";
         }
       }
     }
@@ -582,10 +617,18 @@ exports.updateBonggolanCascade = async (payload) => {
       header: {
         NoBonggolan,
         ...header,
-        existingDateCreate: existingDateOnly ? formatYMD(existingDateOnly) : null,
-        ...(newDateCreateOnly ? { newDateCreate: formatYMD(newDateCreateOnly) } : {}),
+        existingDateCreate: existingDateOnly
+          ? formatYMD(existingDateOnly)
+          : null,
+        ...(newDateCreateOnly
+          ? { newDateCreate: formatYMD(newDateCreateOnly) }
+          : {}),
         ...(header.DateUsage !== undefined
-          ? { newDateUsage: newDateUsageOnly ? formatYMD(newDateUsageOnly) : null }
+          ? {
+              newDateUsage: newDateUsageOnly
+                ? formatYMD(newDateUsageOnly)
+                : null,
+            }
           : {}),
       },
       processed: sentProcessedField
@@ -601,24 +644,28 @@ exports.updateBonggolanCascade = async (payload) => {
   }
 };
 
-
-
-
 exports.deleteBonggolanCascade = async (payload) => {
   const pool = await poolPromise;
   const tx = new sql.Transaction(pool);
 
   const NoBonggolan = payload?.NoBonggolan?.toString().trim();
-  if (!NoBonggolan) throw badReq('NoBonggolan (path) wajib diisi');
+  if (!NoBonggolan) throw badReq("NoBonggolan (path) wajib diisi");
 
   // =====================================================
   // [AUDIT] actorId + requestId (ID only)
   // =====================================================
   const actorIdNum = Number(payload?.actorId);
-  const actorId = Number.isFinite(actorIdNum) && actorIdNum > 0 ? actorIdNum : null;
+  const actorId =
+    Number.isFinite(actorIdNum) && actorIdNum > 0 ? actorIdNum : null;
 
-  const requestId = String(payload?.requestId || `${Date.now()}-${Math.random().toString(16).slice(2)}`);
-  if (!actorId) throw badReq('actorId kosong. Controller harus inject payload.actorId dari token.');
+  const requestId = String(
+    payload?.requestId ||
+      `${Date.now()}-${Math.random().toString(16).slice(2)}`,
+  );
+  if (!actorId)
+    throw badReq(
+      "actorId kosong. Controller harus inject payload.actorId dari token.",
+    );
 
   try {
     await tx.begin(sql.ISOLATION_LEVEL.SERIALIZABLE);
@@ -627,9 +674,8 @@ exports.deleteBonggolanCascade = async (payload) => {
     // [AUDIT CTX] Set actor_id + request_id untuk trigger audit
     // =====================================================
     await new sql.Request(tx)
-      .input('actorId', sql.Int, actorId)
-      .input('rid', sql.NVarChar(64), requestId)
-      .query(`
+      .input("actorId", sql.Int, actorId)
+      .input("rid", sql.NVarChar(64), requestId).query(`
         EXEC sys.sp_set_session_context @key=N'actor_id', @value=@actorId;
         EXEC sys.sp_set_session_context @key=N'request_id', @value=@rid;
       `);
@@ -637,9 +683,11 @@ exports.deleteBonggolanCascade = async (payload) => {
     // ===============================
     // 0) Lock + ambil DateCreate existing
     // ===============================
-    const headRes = await new sql.Request(tx)
-      .input('NoBonggolan', sql.VarChar(50), NoBonggolan)
-      .query(`
+    const headRes = await new sql.Request(tx).input(
+      "NoBonggolan",
+      sql.VarChar(50),
+      NoBonggolan,
+    ).query(`
         SELECT TOP 1 NoBonggolan, DateCreate
         FROM dbo.Bonggolan WITH (UPDLOCK, HOLDLOCK)
         WHERE NoBonggolan = @NoBonggolan
@@ -665,17 +713,23 @@ exports.deleteBonggolanCascade = async (payload) => {
     // 2) delete mappings (idempotent)
     // ===============================
     await new sql.Request(tx)
-      .input('NoBonggolan', sql.VarChar(50), NoBonggolan)
-      .query(`DELETE FROM dbo.BrokerProduksiOutputBonggolan WHERE NoBonggolan = @NoBonggolan`);
+      .input("NoBonggolan", sql.VarChar(50), NoBonggolan)
+      .query(
+        `DELETE FROM dbo.BrokerProduksiOutputBonggolan WHERE NoBonggolan = @NoBonggolan`,
+      );
 
     await new sql.Request(tx)
-      .input('NoBonggolan', sql.VarChar(50), NoBonggolan)
-      .query(`DELETE FROM dbo.InjectProduksiOutputBonggolan WHERE NoBonggolan = @NoBonggolan`);
+      .input("NoBonggolan", sql.VarChar(50), NoBonggolan)
+      .query(
+        `DELETE FROM dbo.InjectProduksiOutputBonggolan WHERE NoBonggolan = @NoBonggolan`,
+      );
 
     // ✅ pakai yang kamu punya di kode lama:
     await new sql.Request(tx)
-      .input('NoBonggolan', sql.VarChar(50), NoBonggolan)
-      .query(`DELETE FROM dbo.BongkarSusunOutputBonggolan WHERE NoBonggolan = @NoBonggolan`);
+      .input("NoBonggolan", sql.VarChar(50), NoBonggolan)
+      .query(
+        `DELETE FROM dbo.BongkarSusunOutputBonggolan WHERE NoBonggolan = @NoBonggolan`,
+      );
 
     // (kalau yang benar adalah Input, ganti jadi ini)
     // await new sql.Request(tx)
@@ -685,9 +739,11 @@ exports.deleteBonggolanCascade = async (payload) => {
     // ===============================
     // 3) delete header
     // ===============================
-    const result = await new sql.Request(tx)
-      .input('NoBonggolan', sql.VarChar(50), NoBonggolan)
-      .query(`
+    const result = await new sql.Request(tx).input(
+      "NoBonggolan",
+      sql.VarChar(50),
+      NoBonggolan,
+    ).query(`
         DELETE FROM dbo.Bonggolan
         WHERE NoBonggolan = @NoBonggolan;
       `);
@@ -704,6 +760,80 @@ exports.deleteBonggolanCascade = async (payload) => {
       NoBonggolan,
       existingDateCreate: existingDateOnly ? formatYMD(existingDateOnly) : null,
       audit: { actorId, requestId },
+    };
+  } catch (e) {
+    try {
+      await tx.rollback();
+    } catch (_) {}
+    throw e;
+  }
+};
+
+exports.incrementHasBeenPrinted = async (payload) => {
+  const NoBonggolan = String(payload?.NoBonggolan || "").trim();
+  if (!NoBonggolan) throw badReq("NoBonggolan wajib diisi");
+
+  const actorIdNum = Number(payload?.actorId);
+  const actorId =
+    Number.isFinite(actorIdNum) && actorIdNum > 0 ? actorIdNum : null;
+  if (!actorId) {
+    throw badReq(
+      "actorId kosong. Controller harus inject payload.actorId dari token.",
+    );
+  }
+
+  const requestId = String(
+    payload?.requestId ||
+      `${Date.now()}-${Math.random().toString(16).slice(2)}`,
+  );
+
+  const pool = await poolPromise;
+  const tx = new sql.Transaction(pool);
+
+  try {
+    await tx.begin(sql.ISOLATION_LEVEL.SERIALIZABLE);
+
+    await new sql.Request(tx)
+      .input("actorId", sql.Int, actorId)
+      .input("rid", sql.NVarChar(64), requestId).query(`
+        EXEC sys.sp_set_session_context @key=N'actor_id', @value=@actorId;
+        EXEC sys.sp_set_session_context @key=N'request_id', @value=@rid;
+      `);
+
+    const rs = await new sql.Request(tx).input(
+      "NoBonggolan",
+      sql.VarChar(50),
+      NoBonggolan,
+    ).query(`
+        DECLARE @out TABLE (
+          NoBonggolan varchar(50),
+          HasBeenPrinted int
+        );
+
+        UPDATE dbo.Bonggolan
+        SET HasBeenPrinted = ISNULL(HasBeenPrinted, 0) + 1
+        OUTPUT
+          INSERTED.NoBonggolan,
+          INSERTED.HasBeenPrinted
+        INTO @out
+        WHERE NoBonggolan = @NoBonggolan;
+
+        SELECT NoBonggolan, HasBeenPrinted
+        FROM @out;
+      `);
+
+    const row = rs.recordset?.[0] || null;
+    if (!row) {
+      const e = new Error(`NoBonggolan ${NoBonggolan} tidak ditemukan`);
+      e.statusCode = 404;
+      throw e;
+    }
+
+    await tx.commit();
+
+    return {
+      NoBonggolan: row.NoBonggolan,
+      HasBeenPrinted: row.HasBeenPrinted,
     };
   } catch (e) {
     try {

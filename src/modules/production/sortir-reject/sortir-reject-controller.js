@@ -380,6 +380,29 @@ async function getInputsByNoBJSortir(req, res) {
   }
 }
 
+async function getOutputsRejectByNoBJSortir(req, res) {
+  const noBJSortir = String(req.params.noBJSortir || "").trim();
+  if (!noBJSortir) {
+    return res
+      .status(400)
+      .json({ success: false, message: "noBJSortir is required" });
+  }
+
+  try {
+    const data = await sortirRejectService.fetchOutputsReject(noBJSortir);
+    return res
+      .status(200)
+      .json({ success: true, message: "Outputs retrieved", data });
+  } catch (e) {
+    console.error("[sortirReject.getOutputsRejectByNoBJSortir]", e);
+    return res.status(500).json({
+      success: false,
+      message: "Internal Server Error",
+      error: e.message,
+    });
+  }
+}
+
 async function upsertInputs(req, res) {
   const noProduksi = String(req.params.noBJSortir || "").trim();
 
@@ -613,6 +636,7 @@ module.exports = {
   updateSortirReject,
   deleteSortirReject,
   getInputsByNoBJSortir,
+  getOutputsRejectByNoBJSortir,
   upsertInputs,
   deleteInputs,
 };

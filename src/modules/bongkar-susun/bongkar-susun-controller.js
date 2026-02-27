@@ -391,6 +391,133 @@ async function getInputsByNoBongkarSusun(req, res) {
   }
 }
 
+async function getOutputsByNoBongkarSusun(req, res) {
+  const noBongkarSusun = (req.params.noBongkarSusun || "").trim();
+  if (!noBongkarSusun) {
+    return res
+      .status(400)
+      .json({ success: false, message: "noBongkarSusun is required" });
+  }
+
+  try {
+    const data = await bongkarSusunService.fetchOutputs(noBongkarSusun);
+    return res
+      .status(200)
+      .json({ success: true, message: "Outputs retrieved", data });
+  } catch (e) {
+    console.error("[getOutputsByNoBongkarSusun]", e);
+    return res.status(500).json({
+      success: false,
+      message: "Internal Server Error",
+      error: e.message,
+    });
+  }
+}
+
+async function getOutputList(req, res, fetchFn, errorTag) {
+  const noBongkarSusun = (req.params.noBongkarSusun || "").trim();
+  if (!noBongkarSusun) {
+    return res
+      .status(400)
+      .json({ success: false, message: "noBongkarSusun is required" });
+  }
+
+  try {
+    const data = await fetchFn(noBongkarSusun);
+    return res
+      .status(200)
+      .json({ success: true, message: "Outputs retrieved", data });
+  } catch (e) {
+    console.error(errorTag, e);
+    return res.status(500).json({
+      success: false,
+      message: "Internal Server Error",
+      error: e.message,
+    });
+  }
+}
+
+async function getOutputsBbByNoBongkarSusun(req, res) {
+  return getOutputList(
+    req,
+    res,
+    bongkarSusunService.fetchOutputsBb,
+    "[getOutputsBbByNoBongkarSusun]",
+  );
+}
+
+async function getOutputsBarangJadiByNoBongkarSusun(req, res) {
+  return getOutputList(
+    req,
+    res,
+    bongkarSusunService.fetchOutputsBarangJadi,
+    "[getOutputsBarangJadiByNoBongkarSusun]",
+  );
+}
+
+async function getOutputsBonggolanByNoBongkarSusun(req, res) {
+  return getOutputList(
+    req,
+    res,
+    bongkarSusunService.fetchOutputsBonggolan,
+    "[getOutputsBonggolanByNoBongkarSusun]",
+  );
+}
+
+async function getOutputsBrokerByNoBongkarSusun(req, res) {
+  return getOutputList(
+    req,
+    res,
+    bongkarSusunService.fetchOutputsBroker,
+    "[getOutputsBrokerByNoBongkarSusun]",
+  );
+}
+
+async function getOutputsCrusherByNoBongkarSusun(req, res) {
+  return getOutputList(
+    req,
+    res,
+    bongkarSusunService.fetchOutputsCrusher,
+    "[getOutputsCrusherByNoBongkarSusun]",
+  );
+}
+
+async function getOutputsFurnitureWipByNoBongkarSusun(req, res) {
+  return getOutputList(
+    req,
+    res,
+    bongkarSusunService.fetchOutputsFurnitureWip,
+    "[getOutputsFurnitureWipByNoBongkarSusun]",
+  );
+}
+
+async function getOutputsGilinganByNoBongkarSusun(req, res) {
+  return getOutputList(
+    req,
+    res,
+    bongkarSusunService.fetchOutputsGilingan,
+    "[getOutputsGilinganByNoBongkarSusun]",
+  );
+}
+
+async function getOutputsMixerByNoBongkarSusun(req, res) {
+  return getOutputList(
+    req,
+    res,
+    bongkarSusunService.fetchOutputsMixer,
+    "[getOutputsMixerByNoBongkarSusun]",
+  );
+}
+
+async function getOutputsWashingByNoBongkarSusun(req, res) {
+  return getOutputList(
+    req,
+    res,
+    bongkarSusunService.fetchOutputsWashing,
+    "[getOutputsWashingByNoBongkarSusun]",
+  );
+}
+
 async function validateLabel(req, res) {
   const { labelCode } = req.params;
 
@@ -685,6 +812,16 @@ module.exports = {
   updateBongkarSusun,
   deleteBongkarSusun,
   getInputsByNoBongkarSusun,
+  getOutputsByNoBongkarSusun,
+  getOutputsBbByNoBongkarSusun,
+  getOutputsBarangJadiByNoBongkarSusun,
+  getOutputsBonggolanByNoBongkarSusun,
+  getOutputsBrokerByNoBongkarSusun,
+  getOutputsCrusherByNoBongkarSusun,
+  getOutputsFurnitureWipByNoBongkarSusun,
+  getOutputsGilinganByNoBongkarSusun,
+  getOutputsMixerByNoBongkarSusun,
+  getOutputsWashingByNoBongkarSusun,
   validateLabel,
   upsertInputs,
   deleteInputs,

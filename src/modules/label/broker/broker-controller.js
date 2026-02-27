@@ -244,3 +244,42 @@ exports.getPartialInfo = async (req, res) => {
     });
   }
 };
+
+exports.incrementHasBeenPrinted = async (req, res) => {
+  const { nobroker } = req.params;
+
+  try {
+    const NoBroker = String(nobroker || "").trim();
+    if (!NoBroker) {
+      return res
+        .status(400)
+        .json({ success: false, message: "nobroker wajib diisi" });
+    }
+
+    const actorId = getActorId(req);
+    if (!actorId) {
+      return res
+        .status(401)
+        .json({ success: false, message: "Unauthorized (idUsername missing)" });
+    }
+
+    const result = await brokerService.incrementHasBeenPrinted({
+      NoBroker,
+      actorId,
+      requestId: makeRequestId(req),
+    });
+
+    return res.status(200).json({
+      success: true,
+      message: "HasBeenPrinted berhasil ditambah",
+      data: result,
+    });
+  } catch (err) {
+    console.error("Increment HasBeenPrinted Error:", err);
+    const status = err.statusCode || 500;
+    return res.status(status).json({
+      success: false,
+      message: err.message || "Terjadi kesalahan server",
+    });
+  }
+};

@@ -1,43 +1,64 @@
 // routes/production-route.js
-const express = require('express');
+const express = require("express");
 const router = express.Router();
-const verifyToken = require('../../../core/middleware/verify-token');
-const washingProduksiController = require('./washing-production-controller');
-
+const verifyToken = require("../../../core/middleware/verify-token");
+const washingProduksiController = require("./washing-production-controller");
 
 // GET /washing?page=1&pageSize=20
-router.get('/washing', verifyToken, washingProduksiController.getAllProduksi);
-
+router.get("/washing", verifyToken, washingProduksiController.getAllProduksi);
 
 // Validasi pola tanggal langsung di route (YYYY-MM-DD)
 router.get(
-  '/washing/:date(\\d{4}-\\d{2}-\\d{2})',
+  "/washing/:date(\\d{4}-\\d{2}-\\d{2})",
   verifyToken,
-  washingProduksiController.getProduksiByDate
+  washingProduksiController.getProduksiByDate,
 );
 
-
 // ✅ Create WashingProduksi_h
-router.post('/washing', verifyToken, washingProduksiController.createProduksi);
+router.post("/washing", verifyToken, washingProduksiController.createProduksi);
 
-router.put('/washing/:noProduksi', verifyToken, washingProduksiController.updateProduksi);
+router.put(
+  "/washing/:noProduksi",
+  verifyToken,
+  washingProduksiController.updateProduksi,
+);
 
-router.delete('/washing/:noProduksi', verifyToken, washingProduksiController.deleteProduksi);
-
-
+router.delete(
+  "/washing/:noProduksi",
+  verifyToken,
+  washingProduksiController.deleteProduksi,
+);
 
 // GET /api/production/washing/:noProduksi/inputs
 router.get(
-  '/washing/:noProduksi/inputs',
+  "/washing/:noProduksi/inputs",
   verifyToken,
-  washingProduksiController.getInputsByNoProduksi
+  washingProduksiController.getInputsByNoProduksi,
 );
 
+// GET /api/production/washing/:noProduksi/outputs
+router.get(
+  "/washing/:noProduksi/outputs",
+  verifyToken,
+  washingProduksiController.getOutputsByNoProduksi,
+);
 
-router.get('/washing/validate-label/:labelCode', verifyToken, washingProduksiController.validateLabel);
+router.get(
+  "/washing/validate-label/:labelCode",
+  verifyToken,
+  washingProduksiController.validateLabel,
+);
 
-router.post('/washing/:noProduksi/inputs', verifyToken, washingProduksiController.upsertInputsAndPartials);
+router.post(
+  "/washing/:noProduksi/inputs",
+  verifyToken,
+  washingProduksiController.upsertInputsAndPartials,
+);
 
-router.delete('/washing/:noProduksi/inputs', verifyToken, washingProduksiController.deleteInputsAndPartials);
+router.delete(
+  "/washing/:noProduksi/inputs",
+  verifyToken,
+  washingProduksiController.deleteInputsAndPartials,
+);
 
 module.exports = router;

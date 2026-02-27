@@ -37,4 +37,10 @@ router.put(
   ctrl.updateByNoBahanBakuAndNoPallet,
 );
 
+router.patch(
+  "/labels/bahan-baku/:nobahanbaku/pallet/:nopallet/print",
+  requirePermission("label_crusher:update"),
+  ctrl.incrementHasBeenPrinted,
+);
+
 module.exports = router;

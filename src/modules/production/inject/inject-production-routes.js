@@ -50,6 +50,36 @@ router.get(
 );
 
 router.get(
+  "/inject/:noProduksi/outputs",
+  verifyToken,
+  injectProduksiController.getOutputsByNoProduksi,
+);
+
+router.get(
+  "/inject/:noProduksi/outputs/bonggolan",
+  verifyToken,
+  injectProduksiController.getOutputsBonggolanByNoProduksi,
+);
+
+router.get(
+  "/inject/:noProduksi/outputs/furniture-wip",
+  verifyToken,
+  injectProduksiController.getOutputsFurnitureWipByNoProduksi,
+);
+
+router.get(
+  "/inject/:noProduksi/outputs/barang-jadi",
+  verifyToken,
+  injectProduksiController.getOutputsPackingByNoProduksi,
+);
+
+router.get(
+  "/inject/:noProduksi/outputs/reject",
+  verifyToken,
+  injectProduksiController.getOutputsRejectByNoProduksi,
+);
+
+router.get(
   "/inject/validate-label/:labelCode",
   verifyToken,
   injectProduksiController.validateLabel,

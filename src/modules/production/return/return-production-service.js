@@ -443,10 +443,54 @@ async function deleteReturn(noRetur) {
   }
 }
 
+async function fetchOutputsFurnitureWip(noRetur) {
+  const pool = await poolPromise;
+  const req = pool.request();
+  req.input("noRetur", sql.VarChar(50), noRetur);
+
+  const q = `
+    SELECT DISTINCT
+      d.NoRetur,
+      d.NoFurnitureWIP,
+      ISNULL(fw.HasBeenPrinted, 0) AS HasBeenPrinted
+    FROM dbo.BJReturFurnitureWIP_d d WITH (NOLOCK)
+    LEFT JOIN dbo.FurnitureWIP fw WITH (NOLOCK)
+      ON fw.NoFurnitureWIP = d.NoFurnitureWIP
+    WHERE d.NoRetur = @noRetur
+    ORDER BY d.NoFurnitureWIP DESC;
+  `;
+
+  const rs = await req.query(q);
+  return rs.recordset || [];
+}
+
+async function fetchOutputsBarangJadi(noRetur) {
+  const pool = await poolPromise;
+  const req = pool.request();
+  req.input("noRetur", sql.VarChar(50), noRetur);
+
+  const q = `
+    SELECT DISTINCT
+      d.NoRetur,
+      d.NoBJ,
+      ISNULL(bj.HasBeenPrinted, 0) AS HasBeenPrinted
+    FROM dbo.BJReturBarangJadi_d d WITH (NOLOCK)
+    LEFT JOIN dbo.BarangJadi bj WITH (NOLOCK)
+      ON bj.NoBJ = d.NoBJ
+    WHERE d.NoRetur = @noRetur
+    ORDER BY d.NoBJ DESC;
+  `;
+
+  const rs = await req.query(q);
+  return rs.recordset || [];
+}
+
 module.exports = {
   getAllReturns,
   getReturnsByDate,
   createReturn,
   updateReturn,
   deleteReturn,
+  fetchOutputsFurnitureWip,
+  fetchOutputsBarangJadi,
 };

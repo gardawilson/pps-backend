@@ -535,6 +535,117 @@ async function getInputsByNoProduksi(req, res) {
   }
 }
 
+async function getOutputsByNoProduksi(req, res) {
+  const noProduksi = (req.params.noProduksi || "").trim();
+  if (!noProduksi) {
+    return res
+      .status(400)
+      .json({ success: false, message: "noProduksi is required" });
+  }
+
+  try {
+    const data = await injectProduksiService.fetchOutputs(noProduksi);
+    return res
+      .status(200)
+      .json({ success: true, message: "Outputs retrieved", data });
+  } catch (e) {
+    console.error("[inject.getOutputsByNoProduksi]", e);
+    return res.status(e.statusCode || 500).json({
+      success: false,
+      message: e.message || "Internal Server Error",
+    });
+  }
+}
+
+async function getOutputsBonggolanByNoProduksi(req, res) {
+  const noProduksi = (req.params.noProduksi || "").trim();
+  if (!noProduksi) {
+    return res
+      .status(400)
+      .json({ success: false, message: "noProduksi is required" });
+  }
+
+  try {
+    const data = await injectProduksiService.fetchOutputsBonggolan(noProduksi);
+    return res
+      .status(200)
+      .json({ success: true, message: "Outputs retrieved", data });
+  } catch (e) {
+    console.error("[inject.getOutputsBonggolanByNoProduksi]", e);
+    return res.status(e.statusCode || 500).json({
+      success: false,
+      message: e.message || "Internal Server Error",
+    });
+  }
+}
+
+async function getOutputsFurnitureWipByNoProduksi(req, res) {
+  const noProduksi = (req.params.noProduksi || "").trim();
+  if (!noProduksi) {
+    return res
+      .status(400)
+      .json({ success: false, message: "noProduksi is required" });
+  }
+
+  try {
+    const data =
+      await injectProduksiService.fetchOutputsFurnitureWip(noProduksi);
+    return res
+      .status(200)
+      .json({ success: true, message: "Outputs retrieved", data });
+  } catch (e) {
+    console.error("[inject.getOutputsFurnitureWipByNoProduksi]", e);
+    return res.status(e.statusCode || 500).json({
+      success: false,
+      message: e.message || "Internal Server Error",
+    });
+  }
+}
+
+async function getOutputsPackingByNoProduksi(req, res) {
+  const noProduksi = (req.params.noProduksi || "").trim();
+  if (!noProduksi) {
+    return res
+      .status(400)
+      .json({ success: false, message: "noProduksi is required" });
+  }
+
+  try {
+    const data = await injectProduksiService.fetchOutputsPacking(noProduksi);
+    return res
+      .status(200)
+      .json({ success: true, message: "Outputs retrieved", data });
+  } catch (e) {
+    console.error("[inject.getOutputsPackingByNoProduksi]", e);
+    return res.status(e.statusCode || 500).json({
+      success: false,
+      message: e.message || "Internal Server Error",
+    });
+  }
+}
+
+async function getOutputsRejectByNoProduksi(req, res) {
+  const noProduksi = (req.params.noProduksi || "").trim();
+  if (!noProduksi) {
+    return res
+      .status(400)
+      .json({ success: false, message: "noProduksi is required" });
+  }
+
+  try {
+    const data = await injectProduksiService.fetchOutputsReject(noProduksi);
+    return res
+      .status(200)
+      .json({ success: true, message: "Outputs retrieved", data });
+  } catch (e) {
+    console.error("[inject.getOutputsRejectByNoProduksi]", e);
+    return res.status(e.statusCode || 500).json({
+      success: false,
+      message: e.message || "Internal Server Error",
+    });
+  }
+}
+
 async function validateLabel(req, res) {
   const labelCode = String(req.params.labelCode || "").trim();
 
@@ -831,6 +942,11 @@ module.exports = {
   updateProduksi,
   deleteProduksi,
   getInputsByNoProduksi,
+  getOutputsByNoProduksi,
+  getOutputsBonggolanByNoProduksi,
+  getOutputsFurnitureWipByNoProduksi,
+  getOutputsPackingByNoProduksi,
+  getOutputsRejectByNoProduksi,
   validateLabel,
   upsertInputsAndPartials,
   deleteInputsAndPartials,

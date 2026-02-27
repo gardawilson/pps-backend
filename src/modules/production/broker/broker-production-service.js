@@ -481,6 +481,48 @@ async function fetchInputs(noProduksi) {
   return out;
 }
 
+async function fetchOutputs(noProduksi) {
+  const pool = await poolPromise;
+  const req = pool.request();
+  req.input("no", sql.VarChar(50), noProduksi);
+
+  const q = `
+    SELECT DISTINCT
+      o.NoProduksi,
+      o.NoBroker,
+      ISNULL(h.HasBeenPrinted, 0) AS HasBeenPrinted
+    FROM dbo.BrokerProduksiOutput o WITH (NOLOCK)
+    LEFT JOIN dbo.Broker_h h WITH (NOLOCK)
+      ON h.NoBroker = o.NoBroker
+    WHERE o.NoProduksi = @no
+    ORDER BY o.NoBroker DESC;
+  `;
+
+  const rs = await req.query(q);
+  return rs.recordset || [];
+}
+
+async function fetchOutputsBonggolan(noProduksi) {
+  const pool = await poolPromise;
+  const req = pool.request();
+  req.input("no", sql.VarChar(50), noProduksi);
+
+  const q = `
+    SELECT DISTINCT
+      o.NoProduksi,
+      o.NoBonggolan,
+      ISNULL(b.HasBeenPrinted, 0) AS HasBeenPrinted
+    FROM dbo.BrokerProduksiOutputBonggolan o WITH (NOLOCK)
+    LEFT JOIN dbo.Bonggolan b WITH (NOLOCK)
+      ON b.NoBonggolan = o.NoBonggolan
+    WHERE o.NoProduksi = @no
+    ORDER BY o.NoBonggolan DESC;
+  `;
+
+  const rs = await req.query(q);
+  return rs.recordset || [];
+}
+
 async function getProduksiByDate(date) {
   const pool = await poolPromise;
   const request = pool.request();
@@ -2008,6 +2050,8 @@ module.exports = {
   getAllProduksi,
   getProduksiByDate,
   fetchInputs,
+  fetchOutputs,
+  fetchOutputsBonggolan,
   createBrokerProduksi,
   updateBrokerProduksi,
   deleteBrokerProduksi,

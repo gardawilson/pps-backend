@@ -51,6 +51,7 @@ exports.getAll = async ({ page, limit, search }) => {
       h.Density3,
       h.Moisture2,
       h.Moisture3,
+      MAX(ISNULL(CAST(h.HasBeenPrinted AS int), 0)) AS HasBeenPrinted,
 
       -- 🔎 Tambahan sesuai permintaan
       MAX(bpo.NoProduksi)         AS NoProduksi,        -- dari BrokerProduksiOutput
@@ -1231,4 +1232,78 @@ exports.getPartialInfoByBrokerAndSak = async (nobroker, nosak) => {
   }));
 
   return { totalPartialWeight, rows };
+};
+
+exports.incrementHasBeenPrinted = async (payload) => {
+  const NoBroker = String(payload?.NoBroker || "").trim();
+  if (!NoBroker) throw badReq("NoBroker wajib diisi");
+
+  const actorIdNum = Number(payload?.actorId);
+  const actorId =
+    Number.isFinite(actorIdNum) && actorIdNum > 0 ? actorIdNum : null;
+  if (!actorId) {
+    throw badReq(
+      "actorId kosong. Controller harus inject payload.actorId dari token.",
+    );
+  }
+
+  const requestId = String(
+    payload?.requestId ||
+      `${Date.now()}-${Math.random().toString(16).slice(2)}`,
+  );
+
+  const pool = await poolPromise;
+  const tx = new sql.Transaction(pool);
+
+  try {
+    await tx.begin(sql.ISOLATION_LEVEL.SERIALIZABLE);
+
+    await new sql.Request(tx)
+      .input("actorId", sql.Int, actorId)
+      .input("rid", sql.NVarChar(64), requestId).query(`
+        EXEC sys.sp_set_session_context @key=N'actor_id', @value=@actorId;
+        EXEC sys.sp_set_session_context @key=N'request_id', @value=@rid;
+      `);
+
+    const rs = await new sql.Request(tx).input(
+      "NoBroker",
+      sql.VarChar(50),
+      NoBroker,
+    ).query(`
+        DECLARE @out TABLE (
+          NoBroker varchar(50),
+          HasBeenPrinted int
+        );
+
+        UPDATE dbo.Broker_h
+        SET HasBeenPrinted = ISNULL(HasBeenPrinted, 0) + 1
+        OUTPUT
+          INSERTED.NoBroker,
+          INSERTED.HasBeenPrinted
+        INTO @out
+        WHERE NoBroker = @NoBroker;
+
+        SELECT NoBroker, HasBeenPrinted
+        FROM @out;
+      `);
+
+    const row = rs.recordset?.[0] || null;
+    if (!row) {
+      const e = new Error(`NoBroker ${NoBroker} tidak ditemukan`);
+      e.statusCode = 404;
+      throw e;
+    }
+
+    await tx.commit();
+
+    return {
+      NoBroker: row.NoBroker,
+      HasBeenPrinted: row.HasBeenPrinted,
+    };
+  } catch (e) {
+    try {
+      await tx.rollback();
+    } catch (_) {}
+    throw e;
+  }
 };

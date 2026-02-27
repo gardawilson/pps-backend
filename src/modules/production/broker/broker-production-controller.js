@@ -1,7 +1,10 @@
 // controllers/broker-production-controller.js
-const brokerProduksiService = require('./broker-production-service');
-const { getActorId, getActorUsername, makeRequestId } = require('../../../core/utils/http-context');
-
+const brokerProduksiService = require("./broker-production-service");
+const {
+  getActorId,
+  getActorUsername,
+  makeRequestId,
+} = require("../../../core/utils/http-context");
 
 async function getAllProduksi(req, res) {
   const page = Math.max(parseInt(req.query.page, 10) || 1, 1);
@@ -10,20 +13,20 @@ async function getAllProduksi(req, res) {
 
   // support both ?noProduksi= and ?search=
   const search =
-    (typeof req.query.noProduksi === 'string' && req.query.noProduksi) ||
-    (typeof req.query.search === 'string' && req.query.search) ||
-    '';
+    (typeof req.query.noProduksi === "string" && req.query.noProduksi) ||
+    (typeof req.query.search === "string" && req.query.search) ||
+    "";
 
   try {
     const { data, total } = await brokerProduksiService.getAllProduksi(
       page,
       pageSize,
-      search
+      search,
     );
 
     return res.status(200).json({
       success: true,
-      message: 'BrokerProduksi_h retrieved successfully',
+      message: "BrokerProduksi_h retrieved successfully",
       totalData: total,
       data,
       meta: {
@@ -36,36 +39,97 @@ async function getAllProduksi(req, res) {
       },
     });
   } catch (error) {
-    console.error('Error fetching BrokerProduksi_h:', error);
+    console.error("Error fetching BrokerProduksi_h:", error);
     return res.status(500).json({
       success: false,
-      message: 'Internal Server Error',
+      message: "Internal Server Error",
       error: error.message,
     });
   }
 }
 
-
 async function getInputsByNoProduksi(req, res) {
-  const noProduksi = (req.params.noProduksi || '').trim();
+  const noProduksi = (req.params.noProduksi || "").trim();
   if (!noProduksi) {
-    return res.status(400).json({ success:false, message:'noProduksi is required' });
+    return res
+      .status(400)
+      .json({ success: false, message: "noProduksi is required" });
   }
   try {
     // make sure brokerProduksiService.fetchInputs exists
     const data = await brokerProduksiService.fetchInputs(noProduksi);
-    return res.status(200).json({ success:true, message:'Inputs retrieved', data });
+    return res
+      .status(200)
+      .json({ success: true, message: "Inputs retrieved", data });
   } catch (e) {
-    console.error('[getInputsByNoProduksi]', e);
-    return res.status(500).json({ success:false, message:'Internal Server Error', error:e.message });
+    console.error("[getInputsByNoProduksi]", e);
+    return res
+      .status(500)
+      .json({
+        success: false,
+        message: "Internal Server Error",
+        error: e.message,
+      });
   }
 }
 
+async function getOutputsByNoProduksi(req, res) {
+  const noProduksi = (req.params.noProduksi || "").trim();
+  if (!noProduksi) {
+    return res
+      .status(400)
+      .json({ success: false, message: "noProduksi is required" });
+  }
+  try {
+    const data = await brokerProduksiService.fetchOutputs(noProduksi);
+    return res
+      .status(200)
+      .json({ success: true, message: "Outputs retrieved", data });
+  } catch (e) {
+    console.error("[getOutputsByNoProduksi]", e);
+    return res
+      .status(500)
+      .json({
+        success: false,
+        message: "Internal Server Error",
+        error: e.message,
+      });
+  }
+}
+
+async function getOutputsBonggolanByNoProduksi(req, res) {
+  const noProduksi = (req.params.noProduksi || "").trim();
+  if (!noProduksi) {
+    return res
+      .status(400)
+      .json({ success: false, message: "noProduksi is required" });
+  }
+  try {
+    const data = await brokerProduksiService.fetchOutputsBonggolan(noProduksi);
+    return res
+      .status(200)
+      .json({ success: true, message: "Outputs retrieved", data });
+  } catch (e) {
+    console.error("[getOutputsBonggolanByNoProduksi]", e);
+    return res
+      .status(500)
+      .json({
+        success: false,
+        message: "Internal Server Error",
+        error: e.message,
+      });
+  }
+}
 
 async function getProduksiByDate(req, res) {
   const { username } = req;
   const date = req.params.date;
-  console.log("🔍 Fetching BrokerProduksi_h | Username:", username, "| date:", date);
+  console.log(
+    "🔍 Fetching BrokerProduksi_h | Username:",
+    username,
+    "| date:",
+    date,
+  );
 
   try {
     const data = await brokerProduksiService.getProduksiByDate(date);
@@ -88,19 +152,18 @@ async function getProduksiByDate(req, res) {
       meta: { date },
     });
   } catch (error) {
-    console.error('Error fetching BrokerProduksi_h:', error);
+    console.error("Error fetching BrokerProduksi_h:", error);
     return res.status(500).json({
       success: false,
-      message: 'Internal Server Error',
+      message: "Internal Server Error",
       error: error.message,
     });
   }
 }
 
-
 async function createProduksi(req, res) {
   // body bisa datang sebagai string (x-www-form-urlencoded) atau JSON
-  const body = req.body && typeof req.body === 'object' ? req.body : {};
+  const body = req.body && typeof req.body === "object" ? req.body : {};
 
   // ✅ jangan percaya audit fields dari client
   const {
@@ -116,38 +179,38 @@ async function createProduksi(req, res) {
   if (!actorId) {
     return res.status(401).json({
       success: false,
-      message: 'Unauthorized (idUsername missing)',
+      message: "Unauthorized (idUsername missing)",
     });
   }
 
   // ✅ username untuk business fields / audit actor string
   const actorUsername =
-    getActorUsername(req) || req.username || req.user?.username || 'system';
+    getActorUsername(req) || req.username || req.user?.username || "system";
 
   // ✅ request id per HTTP request (kalau ada header ikut pakai)
-  const requestId = String(makeRequestId(req) || '').trim();
-  if (requestId) res.setHeader('x-request-id', requestId);
+  const requestId = String(makeRequestId(req) || "").trim();
+  if (requestId) res.setHeader("x-request-id", requestId);
 
   // helper kecil buat parse number
   const toInt = (v) => {
-    if (v === undefined || v === null || v === '') return null;
+    if (v === undefined || v === null || v === "") return null;
     const n = Number(v);
     return Number.isNaN(n) ? null : Math.trunc(n);
   };
   const toFloat = (v) => {
-    if (v === undefined || v === null || v === '') return null;
+    if (v === undefined || v === null || v === "") return null;
     const n = Number(v);
     return Number.isNaN(n) ? null : n;
   };
 
   // ✅ payload business (tanpa audit fields)
   const payload = {
-    tglProduksi: b.tglProduksi,          // 'YYYY-MM-DD'
-    idMesin: toInt(b.idMesin),           // number
-    idOperator: toInt(b.idOperator),     // number
-    jam: b.jam,                          // number or 'HH:mm-HH:mm'
-    shift: toInt(b.shift),               // number
-    createBy: actorUsername,             // controller overwrite dari token
+    tglProduksi: b.tglProduksi, // 'YYYY-MM-DD'
+    idMesin: toInt(b.idMesin), // number
+    idOperator: toInt(b.idOperator), // number
+    jam: b.jam, // number or 'HH:mm-HH:mm'
+    shift: toInt(b.shift), // number
+    createBy: actorUsername, // controller overwrite dari token
 
     checkBy1: b.checkBy1 ?? null,
     checkBy2: b.checkBy2 ?? null,
@@ -156,21 +219,21 @@ async function createProduksi(req, res) {
     hadir: toInt(b.hadir),
     hourMeter: toFloat(b.hourMeter),
 
-    hourStart: b.hourStart || null,      // ex: '08:00:00'
-    hourEnd: b.hourEnd || null,          // ex: '09:00:00'
+    hourStart: b.hourStart || null, // ex: '08:00:00'
+    hourEnd: b.hourEnd || null, // ex: '09:00:00'
   };
 
   // optional: validasi cepat agar error 400 rapih (service juga akan validasi)
   const must = [];
-  if (!payload.tglProduksi) must.push('tglProduksi');
-  if (payload.idMesin == null) must.push('idMesin');
-  if (payload.idOperator == null) must.push('idOperator');
-  if (payload.jam == null) must.push('jam');
-  if (payload.shift == null) must.push('shift');
+  if (!payload.tglProduksi) must.push("tglProduksi");
+  if (payload.idMesin == null) must.push("idMesin");
+  if (payload.idOperator == null) must.push("idOperator");
+  if (payload.jam == null) must.push("jam");
+  if (payload.shift == null) must.push("shift");
   if (must.length) {
     return res.status(400).json({
       success: false,
-      message: `Field wajib: ${must.join(', ')}`,
+      message: `Field wajib: ${must.join(", ")}`,
       error: { fields: must },
     });
   }
@@ -180,29 +243,33 @@ async function createProduksi(req, res) {
     const ctx = { actorId, actorUsername, requestId };
 
     // ⚠️ ubah signature service jadi (payload, ctx)
-    const result = await brokerProduksiService.createBrokerProduksi(payload, ctx);
+    const result = await brokerProduksiService.createBrokerProduksi(
+      payload,
+      ctx,
+    );
 
     // support return: { header, audit? }
     const header = result?.header ?? result;
 
     return res.status(201).json({
       success: true,
-      message: 'Created',
+      message: "Created",
       data: header,
       meta: {
         audit: { actorId, actorUsername, requestId },
       },
     });
   } catch (err) {
-    console.error('[createProduksi]', err);
+    console.error("[createProduksi]", err);
     const status = err.statusCode || err.status || 500;
 
     return res.status(status).json({
       success: false,
-      message: status === 500 ? 'Internal Server Error' : (err.message || 'Error'),
+      message:
+        status === 500 ? "Internal Server Error" : err.message || "Error",
       error: {
         message: err.message,
-        details: process.env.NODE_ENV === 'development' ? err.stack : undefined,
+        details: process.env.NODE_ENV === "development" ? err.stack : undefined,
       },
       meta: {
         audit: { actorId, actorUsername, requestId },
@@ -216,12 +283,12 @@ async function updateProduksi(req, res) {
   if (!noProduksi) {
     return res.status(400).json({
       success: false,
-      message: 'noProduksi is required in route param',
+      message: "noProduksi is required in route param",
     });
   }
 
   // body bisa datang sebagai string (x-www-form-urlencoded) atau JSON
-  const body = req.body && typeof req.body === 'object' ? req.body : {};
+  const body = req.body && typeof req.body === "object" ? req.body : {};
 
   // ✅ jangan percaya audit fields dari client
   const {
@@ -237,26 +304,26 @@ async function updateProduksi(req, res) {
   if (!actorId) {
     return res.status(401).json({
       success: false,
-      message: 'Unauthorized (idUsername missing)',
+      message: "Unauthorized (idUsername missing)",
     });
   }
 
   // ✅ username untuk business fields / audit actor string
   const actorUsername =
-    getActorUsername(req) || req.username || req.user?.username || 'system';
+    getActorUsername(req) || req.username || req.user?.username || "system";
 
   // ✅ request id per HTTP request (kalau ada header ikut pakai)
-  const requestId = String(makeRequestId(req) || '').trim();
-  if (requestId) res.setHeader('x-request-id', requestId);
+  const requestId = String(makeRequestId(req) || "").trim();
+  if (requestId) res.setHeader("x-request-id", requestId);
 
   // helper kecil buat parse number
   const toInt = (v) => {
-    if (v === undefined || v === null || v === '') return null;
+    if (v === undefined || v === null || v === "") return null;
     const n = Number(v);
     return Number.isNaN(n) ? null : Math.trunc(n);
   };
   const toFloat = (v) => {
-    if (v === undefined || v === null || v === '') return null;
+    if (v === undefined || v === null || v === "") return null;
     const n = Number(v);
     return Number.isNaN(n) ? null : n;
   };
@@ -285,8 +352,8 @@ async function updateProduksi(req, res) {
 
     hourMeter: b.hourMeter !== undefined ? toFloat(b.hourMeter) : undefined,
 
-    hourStart: b.hourStart !== undefined ? (b.hourStart || null) : undefined,
-    hourEnd: b.hourEnd !== undefined ? (b.hourEnd || null) : undefined,
+    hourStart: b.hourStart !== undefined ? b.hourStart || null : undefined,
+    hourEnd: b.hourEnd !== undefined ? b.hourEnd || null : undefined,
 
     // NOTE:
     // - Jangan kirim updateBy kalau kolomnya tidak ada di tabel.
@@ -300,7 +367,7 @@ async function updateProduksi(req, res) {
   if (!hasAnyField) {
     return res.status(400).json({
       success: false,
-      message: 'No fields to update',
+      message: "No fields to update",
       error: { fields: [] },
     });
   }
@@ -313,29 +380,30 @@ async function updateProduksi(req, res) {
     const result = await brokerProduksiService.updateBrokerProduksi(
       noProduksi,
       payload,
-      ctx
+      ctx,
     );
 
     const header = result?.header ?? result;
 
     return res.status(200).json({
       success: true,
-      message: 'Updated',
+      message: "Updated",
       data: header,
       meta: {
         audit: { actorId, actorUsername, requestId },
       },
     });
   } catch (err) {
-    console.error('[updateProduksi]', err);
+    console.error("[updateProduksi]", err);
     const status = err.statusCode || err.status || 500;
 
     return res.status(status).json({
       success: false,
-      message: status === 500 ? 'Internal Server Error' : (err.message || 'Error'),
+      message:
+        status === 500 ? "Internal Server Error" : err.message || "Error",
       error: {
         message: err.message,
-        details: process.env.NODE_ENV === 'development' ? err.stack : undefined,
+        details: process.env.NODE_ENV === "development" ? err.stack : undefined,
       },
       meta: {
         audit: { actorId, actorUsername, requestId },
@@ -349,12 +417,12 @@ async function deleteProduksi(req, res) {
   if (!noProduksi) {
     return res.status(400).json({
       success: false,
-      message: 'noProduksi is required in route param',
+      message: "noProduksi is required in route param",
     });
   }
 
   // body bisa datang sebagai string (x-www-form-urlencoded) atau JSON
-  const body = req.body && typeof req.body === 'object' ? req.body : {};
+  const body = req.body && typeof req.body === "object" ? req.body : {};
 
   // ✅ jangan percaya audit fields dari client
   const {
@@ -370,44 +438,48 @@ async function deleteProduksi(req, res) {
   if (!actorId) {
     return res.status(401).json({
       success: false,
-      message: 'Unauthorized (idUsername missing)',
+      message: "Unauthorized (idUsername missing)",
     });
   }
 
   // ✅ username untuk audit actor string
   const actorUsername =
-    getActorUsername(req) || req.username || req.user?.username || 'system';
+    getActorUsername(req) || req.username || req.user?.username || "system";
 
   // ✅ request id per HTTP request (kalau ada header ikut pakai)
-  const requestId = String(makeRequestId(req) || '').trim();
-  if (requestId) res.setHeader('x-request-id', requestId);
+  const requestId = String(makeRequestId(req) || "").trim();
+  if (requestId) res.setHeader("x-request-id", requestId);
 
   try {
     // ✅ Forward audit context ke service (trigger akan pakai SESSION_CONTEXT dari ctx ini)
     const ctx = { actorId, actorUsername, requestId };
 
     // ⚠️ pastikan signature service: (noProduksi, ctx)
-    const result = await brokerProduksiService.deleteBrokerProduksi(noProduksi, ctx);
+    const result = await brokerProduksiService.deleteBrokerProduksi(
+      noProduksi,
+      ctx,
+    );
 
     // kalau service return header deleted, kita support juga
     return res.status(200).json({
       success: true,
-      message: 'Deleted',
+      message: "Deleted",
       data: result?.header ?? undefined,
       meta: {
         audit: { actorId, actorUsername, requestId },
       },
     });
   } catch (err) {
-    console.error('[deleteProduksi]', err);
+    console.error("[deleteProduksi]", err);
     const status = err.statusCode || err.status || 500;
 
     return res.status(status).json({
       success: false,
-      message: status === 500 ? 'Internal Server Error' : (err.message || 'Error'),
+      message:
+        status === 500 ? "Internal Server Error" : err.message || "Error",
       error: {
         message: err.message,
-        details: process.env.NODE_ENV === 'development' ? err.stack : undefined,
+        details: process.env.NODE_ENV === "development" ? err.stack : undefined,
       },
       meta: {
         audit: { actorId, actorUsername, requestId },
@@ -416,16 +488,14 @@ async function deleteProduksi(req, res) {
   }
 }
 
-
-
 async function validateLabel(req, res) {
   const { labelCode } = req.params;
 
   // Validate input
-  if (!labelCode || typeof labelCode !== 'string') {
+  if (!labelCode || typeof labelCode !== "string") {
     return res.status(400).json({
       success: false,
-      message: 'Label number is required and must be a string',
+      message: "Label number is required and must be a string",
     });
   }
 
@@ -443,34 +513,37 @@ async function validateLabel(req, res) {
 
     return res.status(200).json({
       success: true,
-      message: 'Label validated successfully',
+      message: "Label validated successfully",
       prefix: result.prefix,
       tableName: result.tableName,
       totalRecords: result.count,
       data: result.data, // Now returns array of all matching records
     });
   } catch (error) {
-    console.error('Error validating label:', error);
+    console.error("Error validating label:", error);
     return res.status(500).json({
       success: false,
-      message: 'Internal Server Error',
+      message: "Internal Server Error",
       error: error.message,
     });
   }
 }
 
 async function upsertInputsAndPartials(req, res) {
-  const noProduksi = String(req.params.noProduksi || '').trim();
+  const noProduksi = String(req.params.noProduksi || "").trim();
   if (!noProduksi) {
     return res.status(400).json({
       success: false,
-      message: 'noProduksi is required',
-      error: { field: 'noProduksi', message: 'Parameter noProduksi tidak boleh kosong' },
+      message: "noProduksi is required",
+      error: {
+        field: "noProduksi",
+        message: "Parameter noProduksi tidak boleh kosong",
+      },
     });
   }
 
   // ✅ pastikan body object
-  const body = req.body && typeof req.body === 'object' ? req.body : {};
+  const body = req.body && typeof req.body === "object" ? req.body : {};
 
   // ✅ jangan percaya audit fields dari client
   // (biar client tidak bisa spoof requestId/actorId dan biar tidak bikin null/aneh)
@@ -487,23 +560,33 @@ async function upsertInputsAndPartials(req, res) {
   if (!actorId) {
     return res.status(401).json({
       success: false,
-      message: 'Unauthorized (idUsername missing)',
+      message: "Unauthorized (idUsername missing)",
     });
   }
 
   // ✅ username untuk business fields / audit actor string
-  const actorUsername = getActorUsername(req) || req.username || req.user?.username || 'system';
+  const actorUsername =
+    getActorUsername(req) || req.username || req.user?.username || "system";
 
   // ✅ request id per HTTP request (kalau ada header ikut pakai)
-  const requestId = String(makeRequestId(req) || '').trim();
+  const requestId = String(makeRequestId(req) || "").trim();
 
   // optional: echo header for tracing
-  if (requestId) res.setHeader('x-request-id', requestId);
+  if (requestId) res.setHeader("x-request-id", requestId);
 
   // optional validate: at least one input exists
   const hasInput = [
-    'broker', 'bb', 'washing', 'crusher', 'gilingan', 'mixer', 'reject',
-    'bbPartial', 'gilinganPartial', 'mixerPartial', 'rejectPartial',
+    "broker",
+    "bb",
+    "washing",
+    "crusher",
+    "gilingan",
+    "mixer",
+    "reject",
+    "bbPartial",
+    "gilinganPartial",
+    "mixerPartial",
+    "rejectPartial",
   ].some((key) => Array.isArray(payload?.[key]) && payload[key].length > 0);
 
   // if (!hasInput) { ... } // kalau mau strict, aktifkan lagi
@@ -512,7 +595,11 @@ async function upsertInputsAndPartials(req, res) {
     // ✅ Forward audit context ke service
     const ctx = { actorId, actorUsername, requestId };
 
-    const result = await brokerProduksiService.upsertInputsAndPartials(noProduksi, payload, ctx);
+    const result = await brokerProduksiService.upsertInputsAndPartials(
+      noProduksi,
+      payload,
+      ctx,
+    );
 
     // Support beberapa bentuk return (backward compatible)
     const success = result?.success !== undefined ? !!result.success : true;
@@ -520,22 +607,24 @@ async function upsertInputsAndPartials(req, res) {
     const data = result?.data ?? result;
 
     let statusCode = 200;
-    let message = 'Inputs & partials processed successfully';
+    let message = "Inputs & partials processed successfully";
 
     if (!success) {
       const totalInvalid = Number(data?.summary?.totalInvalid ?? 0);
       const totalInserted = Number(data?.summary?.totalInserted ?? 0);
-      const totalPartialsCreated = Number(data?.summary?.totalPartialsCreated ?? 0);
+      const totalPartialsCreated = Number(
+        data?.summary?.totalPartialsCreated ?? 0,
+      );
 
       if (totalInvalid > 0) {
         statusCode = 422;
-        message = 'Beberapa data tidak valid';
+        message = "Beberapa data tidak valid";
       } else if (totalInserted === 0 && totalPartialsCreated === 0) {
         statusCode = 400;
-        message = 'Tidak ada data yang berhasil diproses';
+        message = "Tidak ada data yang berhasil diproses";
       }
     } else if (hasWarnings) {
-      message = 'Inputs & partials processed with warnings';
+      message = "Inputs & partials processed with warnings";
     }
 
     return res.status(statusCode).json({
@@ -549,28 +638,31 @@ async function upsertInputsAndPartials(req, res) {
       },
     });
   } catch (e) {
-    console.error('[upsertInputsAndPartials]', e);
+    console.error("[upsertInputsAndPartials]", e);
     const status = e.statusCode || e.status || 500;
 
     return res.status(status).json({
       success: false,
-      message: status === 500 ? 'Internal Server Error' : e.message,
+      message: status === 500 ? "Internal Server Error" : e.message,
       error: {
         message: e.message,
-        details: process.env.NODE_ENV === 'development' ? e.stack : undefined,
+        details: process.env.NODE_ENV === "development" ? e.stack : undefined,
       },
     });
   }
 }
 
 async function deleteInputsAndPartials(req, res) {
-  const noProduksi = String(req.params.noProduksi || '').trim();
-  
+  const noProduksi = String(req.params.noProduksi || "").trim();
+
   if (!noProduksi) {
-    return res.status(400).json({ 
-      success: false, 
-      message: 'noProduksi is required',
-      error: { field: 'noProduksi', message: 'Parameter noProduksi tidak boleh kosong' }
+    return res.status(400).json({
+      success: false,
+      message: "noProduksi is required",
+      error: {
+        field: "noProduksi",
+        message: "Parameter noProduksi tidak boleh kosong",
+      },
     });
   }
 
@@ -588,45 +680,60 @@ async function deleteInputsAndPartials(req, res) {
   if (!actorId) {
     return res.status(401).json({
       success: false,
-      message: 'Unauthorized (idUsername missing)',
+      message: "Unauthorized (idUsername missing)",
     });
   }
 
-  const actorUsername = getActorUsername(req) || req.username || req.user?.username || 'system';
-  const requestId = String(makeRequestId(req) || '').trim();
+  const actorUsername =
+    getActorUsername(req) || req.username || req.user?.username || "system";
+  const requestId = String(makeRequestId(req) || "").trim();
 
-  if (requestId) res.setHeader('x-request-id', requestId);
+  if (requestId) res.setHeader("x-request-id", requestId);
 
   // Validate input
   const hasInput = [
-    'broker', 'bb', 'washing', 'crusher', 'gilingan', 'mixer', 'reject',
-    'bbPartial', 'brokerPartial', 'gilinganPartial', 'mixerPartial', 'rejectPartial'
-  ].some(key => Array.isArray(payload?.[key]) && payload[key].length > 0);
+    "broker",
+    "bb",
+    "washing",
+    "crusher",
+    "gilingan",
+    "mixer",
+    "reject",
+    "bbPartial",
+    "brokerPartial",
+    "gilinganPartial",
+    "mixerPartial",
+    "rejectPartial",
+  ].some((key) => Array.isArray(payload?.[key]) && payload[key].length > 0);
 
   if (!hasInput) {
     return res.status(400).json({
       success: false,
-      message: 'Tidak ada data input yang diberikan',
-      error: { message: 'Request body harus berisi minimal satu array input' }
+      message: "Tidak ada data input yang diberikan",
+      error: { message: "Request body harus berisi minimal satu array input" },
     });
   }
 
   try {
     // ✅ Forward audit context
     const ctx = { actorId, actorUsername, requestId };
-    
-    const result = await brokerProduksiService.deleteInputsAndPartials(noProduksi, payload, ctx);
+
+    const result = await brokerProduksiService.deleteInputsAndPartials(
+      noProduksi,
+      payload,
+      ctx,
+    );
 
     const { success, hasWarnings, data } = result;
 
     let statusCode = 200;
-    let message = 'Inputs & partials deleted successfully';
+    let message = "Inputs & partials deleted successfully";
 
     if (!success) {
       statusCode = 404;
-      message = 'Tidak ada data yang berhasil dihapus';
+      message = "Tidak ada data yang berhasil dihapus";
     } else if (hasWarnings) {
-      message = 'Inputs & partials deleted with warnings';
+      message = "Inputs & partials deleted with warnings";
     }
 
     return res.status(statusCode).json({
@@ -640,18 +747,30 @@ async function deleteInputsAndPartials(req, res) {
       },
     });
   } catch (e) {
-    console.error('[deleteInputsAndPartials]', e);
+    console.error("[deleteInputsAndPartials]", e);
     const status = e.statusCode || e.status || 500;
 
     return res.status(status).json({
       success: false,
-      message: status === 500 ? 'Internal Server Error' : e.message,
+      message: status === 500 ? "Internal Server Error" : e.message,
       error: {
         message: e.message,
-        details: process.env.NODE_ENV === 'development' ? e.stack : undefined
-      }
+        details: process.env.NODE_ENV === "development" ? e.stack : undefined,
+      },
     });
   }
 }
 
-module.exports = { getProduksiByDate, getInputsByNoProduksi, getAllProduksi, createProduksi, updateProduksi, deleteProduksi, validateLabel, upsertInputsAndPartials, deleteInputsAndPartials };
+module.exports = {
+  getProduksiByDate,
+  getInputsByNoProduksi,
+  getOutputsByNoProduksi,
+  getOutputsBonggolanByNoProduksi,
+  getAllProduksi,
+  createProduksi,
+  updateProduksi,
+  deleteProduksi,
+  validateLabel,
+  upsertInputsAndPartials,
+  deleteInputsAndPartials,
+};

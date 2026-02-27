@@ -12,7 +12,11 @@ const {
   calcJamKerjaFromStartEnd,
 } = require("../../../core/utils/jam-kerja-helper");
 const sharedInputService = require("../../../core/shared/produksi-input.service");
-const { badReq, conflict, notFound } = require("../../../core/utils/http-error");
+const {
+  badReq,
+  conflict,
+  notFound,
+} = require("../../../core/utils/http-error");
 const { applyAuditContext } = require("../../../core/utils/db-audit-context");
 const {
   generateNextCode,
@@ -1011,6 +1015,27 @@ async function fetchInputs(noProduksi) {
   return out;
 }
 
+async function fetchOutputs(noProduksi) {
+  const pool = await poolPromise;
+  const req = pool.request();
+  req.input("no", sql.VarChar(50), noProduksi);
+
+  const q = `
+    SELECT DISTINCT
+      o.NoProduksi,
+      o.NoMixer,
+      ISNULL(h.HasBeenPrinted, 0) AS HasBeenPrinted
+    FROM dbo.MixerProduksiOutput o WITH (NOLOCK)
+    LEFT JOIN dbo.Mixer_h h WITH (NOLOCK)
+      ON h.NoMixer = o.NoMixer
+    WHERE o.NoProduksi = @no
+    ORDER BY o.NoMixer DESC;
+  `;
+
+  const rs = await req.query(q);
+  return rs.recordset || [];
+}
+
 async function validateLabel(labelCode) {
   const pool = await poolPromise;
 
@@ -1441,6 +1466,7 @@ module.exports = {
   updateMixerProduksi,
   deleteMixerProduksi,
   fetchInputs,
+  fetchOutputs,
   validateLabel,
   upsertInputsAndPartials,
   deleteInputsAndPartials,

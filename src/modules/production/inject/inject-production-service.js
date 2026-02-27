@@ -1314,6 +1314,108 @@ async function fetchInputs(noProduksi) {
   return out;
 }
 
+async function fetchOutputs(noProduksi) {
+  const pool = await poolPromise;
+  const req = pool.request();
+  req.input("no", sql.VarChar(50), noProduksi);
+
+  const q = `
+    SELECT DISTINCT
+      o.NoProduksi,
+      o.NoMixer
+    FROM dbo.InjectProduksiOutputMixer o WITH (NOLOCK)
+    WHERE o.NoProduksi = @no
+    ORDER BY o.NoMixer DESC;
+  `;
+
+  const rs = await req.query(q);
+  return rs.recordset || [];
+}
+
+async function fetchOutputsBonggolan(noProduksi) {
+  const pool = await poolPromise;
+  const req = pool.request();
+  req.input("no", sql.VarChar(50), noProduksi);
+
+  const q = `
+    SELECT DISTINCT
+      o.NoProduksi,
+      o.NoBonggolan,
+      ISNULL(b.HasBeenPrinted, 0) AS HasBeenPrinted
+    FROM dbo.InjectProduksiOutputBonggolan o WITH (NOLOCK)
+    LEFT JOIN dbo.Bonggolan b WITH (NOLOCK)
+      ON b.NoBonggolan = o.NoBonggolan
+    WHERE o.NoProduksi = @no
+    ORDER BY o.NoBonggolan DESC;
+  `;
+
+  const rs = await req.query(q);
+  return rs.recordset || [];
+}
+
+async function fetchOutputsFurnitureWip(noProduksi) {
+  const pool = await poolPromise;
+  const req = pool.request();
+  req.input("no", sql.VarChar(50), noProduksi);
+
+  const q = `
+    SELECT DISTINCT
+      o.NoProduksi,
+      o.NoFurnitureWIP,
+      ISNULL(fw.HasBeenPrinted, 0) AS HasBeenPrinted
+    FROM dbo.InjectProduksiOutputFurnitureWIP o WITH (NOLOCK)
+    LEFT JOIN dbo.FurnitureWIP fw WITH (NOLOCK)
+      ON fw.NoFurnitureWIP = o.NoFurnitureWIP
+    WHERE o.NoProduksi = @no
+    ORDER BY o.NoFurnitureWIP DESC;
+  `;
+
+  const rs = await req.query(q);
+  return rs.recordset || [];
+}
+
+async function fetchOutputsPacking(noProduksi) {
+  const pool = await poolPromise;
+  const req = pool.request();
+  req.input("no", sql.VarChar(50), noProduksi);
+
+  const q = `
+    SELECT DISTINCT
+      o.NoProduksi,
+      o.NoBJ,
+      ISNULL(bj.HasBeenPrinted, 0) AS HasBeenPrinted
+    FROM dbo.InjectProduksiOutputBarangJadi o WITH (NOLOCK)
+    LEFT JOIN dbo.BarangJadi bj WITH (NOLOCK)
+      ON bj.NoBJ = o.NoBJ
+    WHERE o.NoProduksi = @no
+    ORDER BY o.NoBJ DESC;
+  `;
+
+  const rs = await req.query(q);
+  return rs.recordset || [];
+}
+
+async function fetchOutputsReject(noProduksi) {
+  const pool = await poolPromise;
+  const req = pool.request();
+  req.input("no", sql.VarChar(50), noProduksi);
+
+  const q = `
+    SELECT DISTINCT
+      o.NoProduksi,
+      o.NoReject,
+      ISNULL(rj.HasBeenPrinted, 0) AS HasBeenPrinted
+    FROM dbo.InjectProduksiOutputRejectV2 o WITH (NOLOCK)
+    LEFT JOIN dbo.RejectV2 rj WITH (NOLOCK)
+      ON rj.NoReject = o.NoReject
+    WHERE o.NoProduksi = @no
+    ORDER BY o.NoReject DESC;
+  `;
+
+  const rs = await req.query(q);
+  return rs.recordset || [];
+}
+
 async function validateLabel(labelCode) {
   const pool = await poolPromise;
 
@@ -1649,6 +1751,11 @@ module.exports = {
   updateInjectProduksi,
   deleteInjectProduksi,
   fetchInputs,
+  fetchOutputs,
+  fetchOutputsBonggolan,
+  fetchOutputsFurnitureWip,
+  fetchOutputsPacking,
+  fetchOutputsReject,
   validateLabel,
   upsertInputsAndPartials,
   deleteInputsAndPartials,

@@ -1348,6 +1348,274 @@ async function fetchInputs(noBongkarSusun) {
   return out;
 }
 
+async function fetchOutputs(noBongkarSusun) {
+  const pool = await poolPromise;
+  const req = pool.request();
+  req.input("no", sql.VarChar(50), noBongkarSusun);
+
+  const q = `
+    SELECT DISTINCT
+      o.NoBongkarSusun,
+      o.NoBahanBaku,
+      o.NoPallet
+    FROM dbo.BongkarSusunOutputBahanBaku o WITH (NOLOCK)
+    WHERE o.NoBongkarSusun = @no
+    ORDER BY o.NoBahanBaku DESC, o.NoPallet ASC;
+
+    SELECT DISTINCT
+      o.NoBongkarSusun,
+      o.NoBJ
+    FROM dbo.BongkarSusunOutputBarangjadi o WITH (NOLOCK)
+    WHERE o.NoBongkarSusun = @no
+    ORDER BY o.NoBJ DESC;
+
+    SELECT DISTINCT
+      o.NoBongkarSusun,
+      o.NoBonggolan
+    FROM dbo.BongkarSusunOutputBonggolan o WITH (NOLOCK)
+    WHERE o.NoBongkarSusun = @no
+    ORDER BY o.NoBonggolan DESC;
+
+    SELECT DISTINCT
+      o.NoBongkarSusun,
+      o.NoBroker
+    FROM dbo.BongkarSusunOutputBroker o WITH (NOLOCK)
+    WHERE o.NoBongkarSusun = @no
+    ORDER BY o.NoBroker DESC;
+
+    SELECT DISTINCT
+      o.NoBongkarSusun,
+      o.NoCrusher,
+      ISNULL(c.HasBeenPrinted, 0) AS HasBeenPrinted
+    FROM dbo.BongkarSusunOutputCrusher o WITH (NOLOCK)
+    LEFT JOIN dbo.Crusher c WITH (NOLOCK)
+      ON c.NoCrusher = o.NoCrusher
+    WHERE o.NoBongkarSusun = @no
+    ORDER BY o.NoCrusher DESC;
+
+    SELECT DISTINCT
+      o.NoBongkarSusun,
+      o.NoFurnitureWIP
+    FROM dbo.BongkarSusunOutputFurnitureWIP o WITH (NOLOCK)
+    WHERE o.NoBongkarSusun = @no
+    ORDER BY o.NoFurnitureWIP DESC;
+
+    SELECT DISTINCT
+      o.NoBongkarSusun,
+      o.NoGilingan
+    FROM dbo.BongkarSusunOutputGilingan o WITH (NOLOCK)
+    WHERE o.NoBongkarSusun = @no
+    ORDER BY o.NoGilingan DESC;
+
+    SELECT DISTINCT
+      o.NoBongkarSusun,
+      o.NoMixer
+    FROM dbo.BongkarSusunOutputMixer o WITH (NOLOCK)
+    WHERE o.NoBongkarSusun = @no
+    ORDER BY o.NoMixer DESC;
+
+    SELECT DISTINCT
+      o.NoBongkarSusun,
+      o.NoWashing
+    FROM dbo.BongkarSusunOutputWashing o WITH (NOLOCK)
+    WHERE o.NoBongkarSusun = @no
+    ORDER BY o.NoWashing DESC;
+  `;
+
+  const rs = await req.query(q);
+
+  return {
+    bb: (rs.recordsets?.[0] || []).map((r) => ({
+      noBongkarSusun: r.NoBongkarSusun,
+      noBahanBaku: r.NoBahanBaku,
+      noPallet: r.NoPallet,
+    })),
+    barangJadi: (rs.recordsets?.[1] || []).map((r) => ({
+      noBongkarSusun: r.NoBongkarSusun,
+      noBJ: r.NoBJ,
+    })),
+    bonggolan: (rs.recordsets?.[2] || []).map((r) => ({
+      noBongkarSusun: r.NoBongkarSusun,
+      noBonggolan: r.NoBonggolan,
+    })),
+    broker: (rs.recordsets?.[3] || []).map((r) => ({
+      noBongkarSusun: r.NoBongkarSusun,
+      noBroker: r.NoBroker,
+    })),
+    crusher: (rs.recordsets?.[4] || []).map((r) => ({
+      noBongkarSusun: r.NoBongkarSusun,
+      noCrusher: r.NoCrusher,
+      hasBeenPrinted: r.HasBeenPrinted,
+    })),
+    furnitureWip: (rs.recordsets?.[5] || []).map((r) => ({
+      noBongkarSusun: r.NoBongkarSusun,
+      noFurnitureWip: r.NoFurnitureWIP,
+    })),
+    gilingan: (rs.recordsets?.[6] || []).map((r) => ({
+      noBongkarSusun: r.NoBongkarSusun,
+      noGilingan: r.NoGilingan,
+    })),
+    mixer: (rs.recordsets?.[7] || []).map((r) => ({
+      noBongkarSusun: r.NoBongkarSusun,
+      noMixer: r.NoMixer,
+    })),
+    washing: (rs.recordsets?.[8] || []).map((r) => ({
+      noBongkarSusun: r.NoBongkarSusun,
+      noWashing: r.NoWashing,
+    })),
+  };
+}
+
+async function fetchOutputRows(noBongkarSusun, query) {
+  const pool = await poolPromise;
+  const req = pool.request();
+  req.input("no", sql.VarChar(50), noBongkarSusun);
+  const rs = await req.query(query);
+  return rs.recordset || [];
+}
+
+async function fetchOutputsBb(noBongkarSusun) {
+  return fetchOutputRows(
+    noBongkarSusun,
+    `
+      SELECT DISTINCT
+        o.NoBongkarSusun,
+        o.NoBahanBaku,
+        o.NoPallet
+      FROM dbo.BongkarSusunOutputBahanBaku o WITH (NOLOCK)
+      WHERE o.NoBongkarSusun = @no
+      ORDER BY o.NoBahanBaku DESC, o.NoPallet ASC;
+    `,
+  );
+}
+
+async function fetchOutputsBarangJadi(noBongkarSusun) {
+  return fetchOutputRows(
+    noBongkarSusun,
+    `
+      SELECT DISTINCT
+        o.NoBongkarSusun,
+        o.NoBJ,
+        ISNULL(bj.HasBeenPrinted, 0) AS HasBeenPrinted
+      FROM dbo.BongkarSusunOutputBarangjadi o WITH (NOLOCK)
+      LEFT JOIN dbo.BarangJadi bj WITH (NOLOCK)
+        ON bj.NoBJ = o.NoBJ
+      WHERE o.NoBongkarSusun = @no
+      ORDER BY o.NoBJ DESC;
+    `,
+  );
+}
+
+async function fetchOutputsBonggolan(noBongkarSusun) {
+  return fetchOutputRows(
+    noBongkarSusun,
+    `
+      SELECT DISTINCT
+        o.NoBongkarSusun,
+        o.NoBonggolan,
+        ISNULL(b.HasBeenPrinted, 0) AS HasBeenPrinted
+      FROM dbo.BongkarSusunOutputBonggolan o WITH (NOLOCK)
+      LEFT JOIN dbo.Bonggolan b WITH (NOLOCK)
+        ON b.NoBonggolan = o.NoBonggolan
+      WHERE o.NoBongkarSusun = @no
+      ORDER BY o.NoBonggolan DESC;
+    `,
+  );
+}
+
+async function fetchOutputsBroker(noBongkarSusun) {
+  return fetchOutputRows(
+    noBongkarSusun,
+    `
+      SELECT DISTINCT
+        o.NoBongkarSusun,
+        o.NoBroker
+      FROM dbo.BongkarSusunOutputBroker o WITH (NOLOCK)
+      WHERE o.NoBongkarSusun = @no
+      ORDER BY o.NoBroker DESC;
+    `,
+  );
+}
+
+async function fetchOutputsCrusher(noBongkarSusun) {
+  return fetchOutputRows(
+    noBongkarSusun,
+    `
+      SELECT DISTINCT
+        o.NoBongkarSusun,
+        o.NoCrusher,
+        ISNULL(c.HasBeenPrinted, 0) AS HasBeenPrinted
+      FROM dbo.BongkarSusunOutputCrusher o WITH (NOLOCK)
+      LEFT JOIN dbo.Crusher c WITH (NOLOCK)
+        ON c.NoCrusher = o.NoCrusher
+      WHERE o.NoBongkarSusun = @no
+      ORDER BY o.NoCrusher DESC;
+    `,
+  );
+}
+
+async function fetchOutputsFurnitureWip(noBongkarSusun) {
+  return fetchOutputRows(
+    noBongkarSusun,
+    `
+      SELECT DISTINCT
+        o.NoBongkarSusun,
+        o.NoFurnitureWIP,
+        ISNULL(fw.HasBeenPrinted, 0) AS HasBeenPrinted
+      FROM dbo.BongkarSusunOutputFurnitureWIP o WITH (NOLOCK)
+      LEFT JOIN dbo.FurnitureWIP fw WITH (NOLOCK)
+        ON fw.NoFurnitureWIP = o.NoFurnitureWIP
+      WHERE o.NoBongkarSusun = @no
+      ORDER BY o.NoFurnitureWIP DESC;
+    `,
+  );
+}
+
+async function fetchOutputsGilingan(noBongkarSusun) {
+  return fetchOutputRows(
+    noBongkarSusun,
+    `
+      SELECT DISTINCT
+        o.NoBongkarSusun,
+        o.NoGilingan,
+        ISNULL(g.HasBeenPrinted, 0) AS HasBeenPrinted
+      FROM dbo.BongkarSusunOutputGilingan o WITH (NOLOCK)
+      LEFT JOIN dbo.Gilingan g WITH (NOLOCK)
+        ON g.NoGilingan = o.NoGilingan
+      WHERE o.NoBongkarSusun = @no
+      ORDER BY o.NoGilingan DESC;
+    `,
+  );
+}
+
+async function fetchOutputsMixer(noBongkarSusun) {
+  return fetchOutputRows(
+    noBongkarSusun,
+    `
+      SELECT DISTINCT
+        o.NoBongkarSusun,
+        o.NoMixer
+      FROM dbo.BongkarSusunOutputMixer o WITH (NOLOCK)
+      WHERE o.NoBongkarSusun = @no
+      ORDER BY o.NoMixer DESC;
+    `,
+  );
+}
+
+async function fetchOutputsWashing(noBongkarSusun) {
+  return fetchOutputRows(
+    noBongkarSusun,
+    `
+      SELECT DISTINCT
+        o.NoBongkarSusun,
+        o.NoWashing
+      FROM dbo.BongkarSusunOutputWashing o WITH (NOLOCK)
+      WHERE o.NoBongkarSusun = @no
+      ORDER BY o.NoWashing DESC;
+    `,
+  );
+}
+
 /**
  * Validate label khusus untuk Bongkar Susun
  * Bedanya dengan validateLabel biasa:
@@ -1881,6 +2149,16 @@ module.exports = {
   updateBongkarSusunCascade,
   deleteBongkarSusun,
   fetchInputs,
+  fetchOutputs,
+  fetchOutputsBb,
+  fetchOutputsBarangJadi,
+  fetchOutputsBonggolan,
+  fetchOutputsBroker,
+  fetchOutputsCrusher,
+  fetchOutputsFurnitureWip,
+  fetchOutputsGilingan,
+  fetchOutputsMixer,
+  fetchOutputsWashing,
   validateLabelBongkarSusun,
   upsertInputs,
   deleteInputs,

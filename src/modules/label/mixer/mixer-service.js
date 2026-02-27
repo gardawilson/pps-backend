@@ -97,6 +97,7 @@ exports.getAll = async ({ page, limit, search }) => {
       h.MFI,
       h.Moisture2,
       h.Moisture3,
+      ISNULL(CAST(h.HasBeenPrinted AS int), 0) AS HasBeenPrinted,
       h.Blok,
       h.IdLokasi,
 
@@ -1405,4 +1406,78 @@ exports.getPartialInfoByMixerAndSak = async (nomixer, nosak) => {
   }));
 
   return { totalPartialWeight, rows };
+};
+
+exports.incrementHasBeenPrinted = async (payload) => {
+  const NoMixer = String(payload?.NoMixer || "").trim();
+  if (!NoMixer) throw badReq("NoMixer wajib diisi");
+
+  const actorIdNum = Number(payload?.actorId);
+  const actorId =
+    Number.isFinite(actorIdNum) && actorIdNum > 0 ? actorIdNum : null;
+  if (!actorId) {
+    throw badReq(
+      "actorId kosong. Controller harus inject payload.actorId dari token.",
+    );
+  }
+
+  const requestId = String(
+    payload?.requestId ||
+      `${Date.now()}-${Math.random().toString(16).slice(2)}`,
+  );
+
+  const pool = await poolPromise;
+  const tx = new sql.Transaction(pool);
+
+  try {
+    await tx.begin(sql.ISOLATION_LEVEL.SERIALIZABLE);
+
+    await new sql.Request(tx)
+      .input("actorId", sql.Int, actorId)
+      .input("rid", sql.NVarChar(64), requestId).query(`
+        EXEC sys.sp_set_session_context @key=N'actor_id', @value=@actorId;
+        EXEC sys.sp_set_session_context @key=N'request_id', @value=@rid;
+      `);
+
+    const rs = await new sql.Request(tx).input(
+      "NoMixer",
+      sql.VarChar(50),
+      NoMixer,
+    ).query(`
+        DECLARE @out TABLE (
+          NoMixer varchar(50),
+          HasBeenPrinted int
+        );
+
+        UPDATE dbo.Mixer_h
+        SET HasBeenPrinted = ISNULL(HasBeenPrinted, 0) + 1
+        OUTPUT
+          INSERTED.NoMixer,
+          INSERTED.HasBeenPrinted
+        INTO @out
+        WHERE NoMixer = @NoMixer;
+
+        SELECT NoMixer, HasBeenPrinted
+        FROM @out;
+      `);
+
+    const row = rs.recordset?.[0] || null;
+    if (!row) {
+      const e = new Error(`NoMixer ${NoMixer} tidak ditemukan`);
+      e.statusCode = 404;
+      throw e;
+    }
+
+    await tx.commit();
+
+    return {
+      NoMixer: row.NoMixer,
+      HasBeenPrinted: row.HasBeenPrinted,
+    };
+  } catch (e) {
+    try {
+      await tx.rollback();
+    } catch (_) {}
+    throw e;
+  }
 };

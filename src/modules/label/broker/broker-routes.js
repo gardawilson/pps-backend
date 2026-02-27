@@ -38,6 +38,12 @@ router.put(
   ctrl.update,
 );
 
+router.patch(
+  "/labels/broker/:nobroker/print",
+  requirePermission("label_broker:update"),
+  ctrl.incrementHasBeenPrinted,
+);
+
 router.delete(
   "/labels/broker/:nobroker",
   requirePermission("label_broker:delete"),

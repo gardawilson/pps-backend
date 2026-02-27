@@ -831,6 +831,27 @@ async function fetchInputs(noPacking) {
   return out;
 }
 
+async function fetchOutputs(noPacking) {
+  const pool = await poolPromise;
+  const req = pool.request();
+  req.input("no", sql.VarChar(50), noPacking);
+
+  const q = `
+    SELECT DISTINCT
+      o.NoPacking,
+      o.NoBJ,
+      ISNULL(bj.HasBeenPrinted, 0) AS HasBeenPrinted
+    FROM dbo.PackingProduksiOutputLabelBJ o WITH (NOLOCK)
+    LEFT JOIN dbo.BarangJadi bj WITH (NOLOCK)
+      ON bj.NoBJ = o.NoBJ
+    WHERE o.NoPacking = @no
+    ORDER BY o.NoBJ DESC;
+  `;
+
+  const rs = await req.query(q);
+  return rs.recordset || [];
+}
+
 /**
  * Payload shape (arrays optional):
  * {
@@ -904,6 +925,7 @@ module.exports = {
   updatePackingProduksi,
   deletePackingProduksi,
   fetchInputs,
+  fetchOutputs,
   upsertInputsAndPartials,
   deleteInputsAndPartials,
 };

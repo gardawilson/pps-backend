@@ -714,6 +714,27 @@ async function fetchInputs(noBJSortir) {
   return out;
 }
 
+async function fetchOutputsReject(noBJSortir) {
+  const pool = await poolPromise;
+  const req = pool.request();
+  req.input("no", sql.VarChar(50), noBJSortir);
+
+  const q = `
+    SELECT DISTINCT
+      o.NoBJSortir,
+      o.NoReject,
+      ISNULL(rj.HasBeenPrinted, 0) AS HasBeenPrinted
+    FROM dbo.BJSortirRejectOutputLabelReject o WITH (NOLOCK)
+    LEFT JOIN dbo.RejectV2 rj WITH (NOLOCK)
+      ON rj.NoReject = o.NoReject
+    WHERE o.NoBJSortir = @no
+    ORDER BY o.NoReject DESC;
+  `;
+
+  const rs = await req.query(q);
+  return rs.recordset || [];
+}
+
 /**
  * Payload shape (arrays optional):
  * {
@@ -777,6 +798,7 @@ module.exports = {
   updateSortirReject,
   deleteSortirReject,
   fetchInputs,
+  fetchOutputsReject,
   upsertInputs,
   deleteInputs,
 };

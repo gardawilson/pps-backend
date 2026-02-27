@@ -942,6 +942,27 @@ async function fetchInputs(noCrusherProduksi) {
   return out;
 }
 
+async function fetchOutputs(noCrusherProduksi) {
+  const pool = await poolPromise;
+  const req = pool.request();
+  req.input('no', sql.VarChar(50), noCrusherProduksi);
+
+  const q = `
+    SELECT DISTINCT
+      o.NoCrusherProduksi,
+      o.NoCrusher,
+      ISNULL(c.HasBeenPrinted, 0) AS HasBeenPrinted
+    FROM dbo.CrusherProduksiOutput o WITH (NOLOCK)
+    LEFT JOIN dbo.Crusher c WITH (NOLOCK)
+      ON c.NoCrusher = o.NoCrusher
+    WHERE o.NoCrusherProduksi = @no
+    ORDER BY o.NoCrusher DESC;
+  `;
+
+  const rs = await req.query(q);
+  return rs.recordset || [];
+}
+
 
 /**
  * VALIDATE LABEL for Crusher Production
@@ -1161,4 +1182,4 @@ async function deleteInputsAndPartials(noProduksi, payload, ctx) {
 
 
 
-module.exports = { getAllProduksi, getProduksiByDate, getCrusherMasters, createCrusherProduksi, updateCrusherProduksi, deleteCrusherProduksi, fetchInputs, validateLabel, upsertInputsAndPartials, deleteInputsAndPartials };
+module.exports = { getAllProduksi, getProduksiByDate, getCrusherMasters, createCrusherProduksi, updateCrusherProduksi, deleteCrusherProduksi, fetchInputs, fetchOutputs, validateLabel, upsertInputsAndPartials, deleteInputsAndPartials };

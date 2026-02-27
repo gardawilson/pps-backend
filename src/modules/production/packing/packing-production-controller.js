@@ -405,6 +405,29 @@ async function getInputsByNoPacking(req, res) {
   }
 }
 
+async function getOutputsByNoPacking(req, res) {
+  const noPacking = String(req.params.noPacking || "").trim();
+  if (!noPacking) {
+    return res
+      .status(400)
+      .json({ success: false, message: "noPacking is required" });
+  }
+
+  try {
+    const data = await packingService.fetchOutputs(noPacking);
+    return res
+      .status(200)
+      .json({ success: true, message: "Outputs retrieved", data });
+  } catch (e) {
+    console.error("[packing.getOutputsByNoPacking]", e);
+    return res.status(500).json({
+      success: false,
+      message: "Internal Server Error",
+      error: e.message,
+    });
+  }
+}
+
 async function upsertInputsAndPartials(req, res) {
   const noProduksi = String(req.params.noPacking || "").trim();
 
@@ -646,6 +669,7 @@ module.exports = {
   updateProduksi,
   deleteProduksi,
   getInputsByNoPacking,
+  getOutputsByNoPacking,
   upsertInputsAndPartials,
   deleteInputsAndPartials,
 };

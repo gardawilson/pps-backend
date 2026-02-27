@@ -32,6 +32,12 @@ router.put(
   ctrl.update,
 );
 
+router.patch(
+  "/labels/washing/:nowashing/print",
+  requirePermission("label_washing:update"),
+  ctrl.incrementHasBeenPrinted,
+);
+
 router.delete(
   "/labels/washing/:nowashing",
   requirePermission("label_washing:delete"),

@@ -1703,11 +1703,7 @@ async function validateLabelBongkarSusun(labelCode) {
           d.NoBahanBaku,
           d.NoPallet,
           d.NoSak,
-          Berat = CASE
-                    WHEN ISNULL(NULLIF(d.BeratAct, 0), d.Berat) - ISNULL(pa.PartialBerat, 0) < 0
-                      THEN 0
-                    ELSE ISNULL(NULLIF(d.BeratAct, 0), d.Berat) - ISNULL(pa.PartialBerat, 0)
-                  END,
+          d.Berat,
           d.DateUsage,
           CAST(0 AS bit) AS IsPartial,  -- ✅ ALWAYS 0 for Bongkar Susun
           ph.IdJenisPlastik AS idJenis,

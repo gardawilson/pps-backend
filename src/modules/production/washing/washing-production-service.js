@@ -1264,11 +1264,7 @@ async function validateLabel(labelCode) {
           d.NoBahanBaku,
           d.NoPallet,
           d.NoSak,
-          Berat = CASE
-                    WHEN ISNULL(NULLIF(d.BeratAct, 0), d.Berat) - ISNULL(pa.PartialBerat, 0) < 0
-                      THEN 0
-                    ELSE ISNULL(NULLIF(d.BeratAct, 0), d.Berat) - ISNULL(pa.PartialBerat, 0)
-                  END,
+          d.Berat,
           d.DateUsage,
           d.IsPartial,
           ph.IdJenisPlastik      AS idJenis,

@@ -1,7 +1,6 @@
-const { sql, poolPromise } = require('../../core/config/db');
-const { formatDate } = require('../../core/utils/date-helper');
-const { insertLogMappingLokasi } = require('../../core/shared/log'); // sesuaikan path
-
+const { sql, poolPromise } = require("../../core/config/db");
+const { formatDate } = require("../../core/utils/date-helper");
+const { insertLogMappingLokasi } = require("../../core/shared/log"); // sesuaikan path
 
 async function getNoStockOpname() {
   try {
@@ -47,7 +46,7 @@ async function getNoStockOpname() {
        AND soh.IsAscend = 0
     
       -- Join ke master ASCEND hanya bila IsAscend = 1
-      LEFT JOIN [AS_GSU_2022].[dbo].[IC_Warehouses] icw
+      LEFT JOIN [AS_GSU].[dbo].[IC_Warehouses] icw
         ON sohw.IdWarehouse = icw.WarehouseID
        AND soh.IsAscend = 1
     
@@ -71,131 +70,143 @@ async function getNoStockOpname() {
         soh.IsAscend
       ORDER BY soh.NoSO DESC
     `);
-    
+
     if (!result.recordset || result.recordset.length === 0) return null;
 
-    return result.recordset.map(({
-      NoSO, Tanggal, NamaWarehouse, IdWarehouse,
-      IsBahanBaku, IsWashing, IsBonggolan, IsCrusher, IsBroker,
-      IsGilingan, IsMixer, IsFurnitureWIP, IsBarangJadi, IsReject, IsAscend
-    }) => ({
-      NoSO,
-      Tanggal: formatDate(Tanggal),
-      NamaWarehouse: NamaWarehouse || '-',
-      IdWarehouse: IdWarehouse || null,   // ⬅️ di-expose ke frontend
-    
-      IsBahanBaku,
-      IsWashing,
-      IsBonggolan,
-      IsCrusher,
-      IsBroker,
-      IsGilingan,
-      IsMixer,
-      IsFurnitureWIP,
-      IsBarangJadi,
-      IsReject,
-      IsAscend
-    }));
-    
+    return result.recordset.map(
+      ({
+        NoSO,
+        Tanggal,
+        NamaWarehouse,
+        IdWarehouse,
+        IsBahanBaku,
+        IsWashing,
+        IsBonggolan,
+        IsCrusher,
+        IsBroker,
+        IsGilingan,
+        IsMixer,
+        IsFurnitureWIP,
+        IsBarangJadi,
+        IsReject,
+        IsAscend,
+      }) => ({
+        NoSO,
+        Tanggal: formatDate(Tanggal),
+        NamaWarehouse: NamaWarehouse || "-",
+        IdWarehouse: IdWarehouse || null, // ⬅️ di-expose ke frontend
+
+        IsBahanBaku,
+        IsWashing,
+        IsBonggolan,
+        IsCrusher,
+        IsBroker,
+        IsGilingan,
+        IsMixer,
+        IsFurnitureWIP,
+        IsBarangJadi,
+        IsReject,
+        IsAscend,
+      }),
+    );
   } catch (err) {
     throw new Error(`Stock Opname Service Error: ${err.message}`);
   }
 }
 
-
-
 async function getStockOpnameAcuan({
   noso,
   page = 1,
   pageSize = 20,
-  filterBy = 'all',
-  blok,                // ✅ varchar
-  idLokasi,            // ✅ int
-  search = ''
+  filterBy = "all",
+  blok, // ✅ varchar
+  idLokasi, // ✅ int
+  search = "",
 }) {
   const offset = (page - 1) * pageSize;
 
   const filterMap = {
     bahanbaku: {
-      table: 'StockOpnameBahanBaku',
+      table: "StockOpnameBahanBaku",
       labelExpr: "CONCAT(NoBahanBaku, '-', NoPallet)",
-      label: 'Bahan Baku',
-      hasilTable: 'StockOpnameHasilBahanBaku',
-      hasilWhereClause: "CONCAT(hasil.NoBahanBaku, '-', hasil.NoPallet) = CONCAT(src.NoBahanBaku, '-', src.NoPallet)",
-      fields: { jmlhSak: 'JmlhSak', berat: 'ROUND(Berat, 2)' }
+      label: "Bahan Baku",
+      hasilTable: "StockOpnameHasilBahanBaku",
+      hasilWhereClause:
+        "CONCAT(hasil.NoBahanBaku, '-', hasil.NoPallet) = CONCAT(src.NoBahanBaku, '-', src.NoPallet)",
+      fields: { jmlhSak: "JmlhSak", berat: "ROUND(Berat, 2)" },
     },
     washing: {
-      table: 'StockOpnameWashing',
-      labelExpr: 'NoWashing',
-      label: 'Washing',
-      hasilTable: 'StockOpnameHasilWashing',
-      hasilWhereClause: 'hasil.NoWashing = src.NoWashing',
-      fields: { jmlhSak: 'JmlhSak', berat: 'ROUND(Berat, 2)' }
+      table: "StockOpnameWashing",
+      labelExpr: "NoWashing",
+      label: "Washing",
+      hasilTable: "StockOpnameHasilWashing",
+      hasilWhereClause: "hasil.NoWashing = src.NoWashing",
+      fields: { jmlhSak: "JmlhSak", berat: "ROUND(Berat, 2)" },
     },
     broker: {
-      table: 'StockOpnameBroker',
-      labelExpr: 'NoBroker',
-      label: 'Broker',
-      hasilTable: 'StockOpnameHasilBroker',
-      hasilWhereClause: 'hasil.NoBroker = src.NoBroker',
-      fields: { jmlhSak: 'JmlhSak', berat: 'ROUND(Berat, 2)' }
+      table: "StockOpnameBroker",
+      labelExpr: "NoBroker",
+      label: "Broker",
+      hasilTable: "StockOpnameHasilBroker",
+      hasilWhereClause: "hasil.NoBroker = src.NoBroker",
+      fields: { jmlhSak: "JmlhSak", berat: "ROUND(Berat, 2)" },
     },
     crusher: {
-      table: 'StockOpnameCrusher',
-      labelExpr: 'NoCrusher',
-      label: 'Crusher',
-      hasilTable: 'StockOpnameHasilCrusher',
-      hasilWhereClause: 'hasil.NoCrusher = src.NoCrusher',
-      fields: { jmlhSak: 'NULL', berat: 'ROUND(Berat, 2)' }
+      table: "StockOpnameCrusher",
+      labelExpr: "NoCrusher",
+      label: "Crusher",
+      hasilTable: "StockOpnameHasilCrusher",
+      hasilWhereClause: "hasil.NoCrusher = src.NoCrusher",
+      fields: { jmlhSak: "NULL", berat: "ROUND(Berat, 2)" },
     },
     bonggolan: {
-      table: 'StockOpnameBonggolan',
-      labelExpr: 'NoBonggolan',
-      label: 'Bonggolan',
-      hasilTable: 'StockOpnameHasilBonggolan',
-      hasilWhereClause: 'hasil.NoBonggolan = src.NoBonggolan',
-      fields: { jmlhSak: 'NULL', berat: 'ROUND(Berat, 2)' }
+      table: "StockOpnameBonggolan",
+      labelExpr: "NoBonggolan",
+      label: "Bonggolan",
+      hasilTable: "StockOpnameHasilBonggolan",
+      hasilWhereClause: "hasil.NoBonggolan = src.NoBonggolan",
+      fields: { jmlhSak: "NULL", berat: "ROUND(Berat, 2)" },
     },
     gilingan: {
-      table: 'StockOpnameGilingan',
-      labelExpr: 'NoGilingan',
-      label: 'Gilingan',
-      hasilTable: 'StockOpnameHasilGilingan',
-      hasilWhereClause: 'hasil.NoGilingan = src.NoGilingan',
-      fields: { jmlhSak: 'NULL', berat: 'ROUND(Berat, 2)' }
+      table: "StockOpnameGilingan",
+      labelExpr: "NoGilingan",
+      label: "Gilingan",
+      hasilTable: "StockOpnameHasilGilingan",
+      hasilWhereClause: "hasil.NoGilingan = src.NoGilingan",
+      fields: { jmlhSak: "NULL", berat: "ROUND(Berat, 2)" },
     },
     mixer: {
-      table: 'StockOpnameMixer',
-      labelExpr: 'NoMixer',
-      label: 'Mixer',
-      hasilTable: 'StockOpnameHasilMixer',
-      hasilWhereClause: 'hasil.NoMixer = src.NoMixer',
-      fields: { jmlhSak: 'JmlhSak', berat: 'ROUND(Berat, 2)' }
+      table: "StockOpnameMixer",
+      labelExpr: "NoMixer",
+      label: "Mixer",
+      hasilTable: "StockOpnameHasilMixer",
+      hasilWhereClause: "hasil.NoMixer = src.NoMixer",
+      fields: { jmlhSak: "JmlhSak", berat: "ROUND(Berat, 2)" },
     },
     furniturewip: {
-      table: 'StockOpnameFurnitureWIP',
-      labelExpr: 'NoFurnitureWIP',
-      label: 'Furniture WIP',
-      hasilTable: 'StockOpnameHasilFurnitureWIP',
-      hasilWhereClause: 'hasil.NoFurnitureWIP = src.NoFurnitureWIP',
-      fields: { jmlhSak: 'Pcs', berat: 'Berat' }
+      table: "StockOpnameFurnitureWIP",
+      labelExpr: "NoFurnitureWIP",
+      label: "Furniture WIP",
+      hasilTable: "StockOpnameHasilFurnitureWIP",
+      hasilWhereClause: "hasil.NoFurnitureWIP = src.NoFurnitureWIP",
+      fields: { jmlhSak: "Pcs", berat: "Berat" },
     },
     barangjadi: {
-      table: 'StockOpnameBarangJadi',
-      labelExpr: 'NoBJ',
-      label: 'Barang Jadi',
-      hasilTable: 'StockOpnameHasilBarangJadi',
-      hasilWhereClause: 'hasil.NoBJ = src.NoBJ',
-      fields: { jmlhSak: 'Pcs', berat: 'Berat' }
+      table: "StockOpnameBarangJadi",
+      labelExpr: "NoBJ",
+      label: "Barang Jadi",
+      hasilTable: "StockOpnameHasilBarangJadi",
+      hasilWhereClause: "hasil.NoBJ = src.NoBJ",
+      fields: { jmlhSak: "Pcs", berat: "Berat" },
     },
     reject: {
-      table: 'StockOpnameReject',
-      labelExpr: 'NoReject',
-      label: 'Reject',
-      hasilTable: 'StockOpnameHasilReject',
-      hasilWhereClause: 'hasil.NoReject = src.NoReject',
-      fields: { jmlhSak: 'NULL', berat: 'Berat' }
-    }
+      table: "StockOpnameReject",
+      labelExpr: "NoReject",
+      label: "Reject",
+      hasilTable: "StockOpnameHasilReject",
+      hasilWhereClause: "hasil.NoReject = src.NoReject",
+      fields: { jmlhSak: "NULL", berat: "Berat" },
+    },
   };
 
   try {
@@ -203,36 +214,44 @@ async function getStockOpnameAcuan({
     const request = pool.request();
 
     // --- input dasar ---
-    request.input('noso', sql.VarChar, noso);
-    if (blok && blok !== 'all') request.input('blok', sql.VarChar, blok);
-    if (idLokasi && idLokasi !== 'all') request.input('idLokasi', sql.Int, parseInt(idLokasi));
-    if (search) request.input('search', sql.VarChar, `%${search}%`);
+    request.input("noso", sql.VarChar, noso);
+    if (blok && blok !== "all") request.input("blok", sql.VarChar, blok);
+    if (idLokasi && idLokasi !== "all")
+      request.input("idLokasi", sql.Int, parseInt(idLokasi));
+    if (search) request.input("search", sql.VarChar, `%${search}%`);
 
     // === helper untuk filter blok & lokasi ===
     const makeWhereLokasi = () => {
-      if (blok && blok !== 'all' && idLokasi && idLokasi !== 'all') {
-        return 'AND Blok = @blok AND IdLokasi = @idLokasi';
-      } else if (blok && blok !== 'all') {
-        return 'AND Blok = @blok';
-      } else if (idLokasi && idLokasi !== 'all') {
-        return 'AND IdLokasi = @idLokasi';
+      if (blok && blok !== "all" && idLokasi && idLokasi !== "all") {
+        return "AND Blok = @blok AND IdLokasi = @idLokasi";
+      } else if (blok && blok !== "all") {
+        return "AND Blok = @blok";
+      } else if (idLokasi && idLokasi !== "all") {
+        return "AND IdLokasi = @idLokasi";
       }
-      return '';
+      return "";
     };
 
     // === builder ===
-    const makeQuery = (table, labelExpr, labelType, hasilTable, hasilWhereClause, fields = {}) => `
+    const makeQuery = (
+      table,
+      labelExpr,
+      labelType,
+      hasilTable,
+      hasilWhereClause,
+      fields = {},
+    ) => `
       SELECT 
         ${labelExpr} AS NomorLabel, 
         '${labelType}' AS LabelType,
-        ${fields.jmlhSak || 'NULL'} AS JmlhSak,
-        ${fields.berat || 'NULL'} AS Berat,
+        ${fields.jmlhSak || "NULL"} AS JmlhSak,
+        ${fields.berat || "NULL"} AS Berat,
         Blok,
         IdLokasi
       FROM ${table} AS src
       WHERE NoSO = @noso
         ${makeWhereLokasi()}
-        ${search ? `AND ${labelExpr} LIKE @search` : ''}
+        ${search ? `AND ${labelExpr} LIKE @search` : ""}
         AND NOT EXISTS (
           SELECT 1 FROM ${hasilTable} AS hasil
           WHERE hasil.NoSO = src.NoSO AND ${hasilWhereClause}
@@ -244,7 +263,7 @@ async function getStockOpnameAcuan({
       FROM ${table} AS src
       WHERE NoSO = @noso
         ${makeWhereLokasi()}
-        ${search ? `AND ${labelExpr} LIKE @search` : ''}
+        ${search ? `AND ${labelExpr} LIKE @search` : ""}
         AND NOT EXISTS (
           SELECT 1 FROM ${hasilTable} AS hasil
           WHERE hasil.NoSO = src.NoSO AND ${hasilWhereClause}
@@ -253,17 +272,17 @@ async function getStockOpnameAcuan({
 
     // === total global builder ===
     const overallTotalQuery = (() => {
-      if (filterBy !== 'all') {
+      if (filterBy !== "all") {
         const f = filterMap[filterBy.toLowerCase()];
         return `
           SELECT
             COUNT(*) AS TotalLabelGlobal,
-            ROUND(SUM(CAST(${f.fields.berat || '0'} AS FLOAT)), 2) AS TotalBeratGlobal,
-            SUM(CAST(${f.fields.jmlhSak || '0'} AS INT)) AS TotalSakGlobal
+            ROUND(SUM(CAST(${f.fields.berat || "0"} AS FLOAT)), 2) AS TotalBeratGlobal,
+            SUM(CAST(${f.fields.jmlhSak || "0"} AS INT)) AS TotalSakGlobal
           FROM ${f.table} AS src
           WHERE NoSO = @noso
             ${makeWhereLokasi()}
-            ${search ? `AND ${f.labelExpr} LIKE @search` : ''}
+            ${search ? `AND ${f.labelExpr} LIKE @search` : ""}
         `;
       } else {
         return `
@@ -272,25 +291,31 @@ async function getStockOpnameAcuan({
             ROUND(SUM(CAST(beratSum.Berat AS FLOAT)), 2) AS TotalBeratGlobal,
             SUM(CAST(beratSum.JmlhSak AS INT)) AS TotalSakGlobal
           FROM (
-            ${Object.values(filterMap).map(f => `
+            ${Object.values(filterMap)
+              .map(
+                (f) => `
               SELECT
-                ${f.fields.berat || '0'} AS Berat,
-                ${f.fields.jmlhSak || '0'} AS JmlhSak
+                ${f.fields.berat || "0"} AS Berat,
+                ${f.fields.jmlhSak || "0"} AS JmlhSak
               FROM ${f.table} AS src
               WHERE NoSO = @noso
                 ${makeWhereLokasi()}
-                ${search ? `AND ${f.labelExpr} LIKE @search` : ''}
-            `).join(' UNION ALL ')}
+                ${search ? `AND ${f.labelExpr} LIKE @search` : ""}
+            `,
+              )
+              .join(" UNION ALL ")}
           ) AS beratSum
         `;
       }
     })();
 
-    let query = '', totalQuery = '', beratSakQuery = '';
+    let query = "",
+      totalQuery = "",
+      beratSakQuery = "";
 
-    if (filterBy !== 'all') {
+    if (filterBy !== "all") {
       const f = filterMap[filterBy.toLowerCase()];
-      if (!f) throw new Error('Invalid filterBy');
+      if (!f) throw new Error("Invalid filterBy");
 
       query = `
         ${makeQuery(f.table, f.labelExpr, f.label, f.hasilTable, f.hasilWhereClause, f.fields)}
@@ -298,16 +323,21 @@ async function getStockOpnameAcuan({
         OFFSET ${offset} ROWS FETCH NEXT ${pageSize} ROWS ONLY;
       `;
 
-      totalQuery = makeCount(f.table, f.labelExpr, f.hasilTable, f.hasilWhereClause);
+      totalQuery = makeCount(
+        f.table,
+        f.labelExpr,
+        f.hasilTable,
+        f.hasilWhereClause,
+      );
 
       beratSakQuery = `
         SELECT
-          ROUND(SUM(CAST(${f.fields.berat || '0'} AS FLOAT)), 2) AS TotalBerat,
-          SUM(CAST(${f.fields.jmlhSak || '0'} AS INT)) AS TotalSak
+          ROUND(SUM(CAST(${f.fields.berat || "0"} AS FLOAT)), 2) AS TotalBerat,
+          SUM(CAST(${f.fields.jmlhSak || "0"} AS INT)) AS TotalSak
         FROM ${f.table} AS src
         WHERE NoSO = @noso
           ${makeWhereLokasi()}
-          ${search ? `AND ${f.labelExpr} LIKE @search` : ''}
+          ${search ? `AND ${f.labelExpr} LIKE @search` : ""}
           AND NOT EXISTS (
             SELECT 1 FROM ${f.hasilTable} AS hasil
             WHERE hasil.NoSO = src.NoSO AND ${f.hasilWhereClause}
@@ -315,12 +345,23 @@ async function getStockOpnameAcuan({
       `;
     } else {
       const all = Object.values(filterMap);
-      const allQueries = all.map(f => makeQuery(f.table, f.labelExpr, f.label, f.hasilTable, f.hasilWhereClause, f.fields));
-      const allCounts = all.map(f => makeCount(f.table, f.labelExpr, f.hasilTable, f.hasilWhereClause));
+      const allQueries = all.map((f) =>
+        makeQuery(
+          f.table,
+          f.labelExpr,
+          f.label,
+          f.hasilTable,
+          f.hasilWhereClause,
+          f.fields,
+        ),
+      );
+      const allCounts = all.map((f) =>
+        makeCount(f.table, f.labelExpr, f.hasilTable, f.hasilWhereClause),
+      );
 
       query = `
         SELECT * FROM (
-          ${allQueries.join(' UNION ALL ')}
+          ${allQueries.join(" UNION ALL ")}
         ) AS acuan
         ORDER BY NomorLabel
         OFFSET ${offset} ROWS FETCH NEXT ${pageSize} ROWS ONLY;
@@ -328,7 +369,7 @@ async function getStockOpnameAcuan({
 
       totalQuery = `
         SELECT SUM(total) AS total FROM (
-          ${allCounts.join(' UNION ALL ')}
+          ${allCounts.join(" UNION ALL ")}
         ) AS totalData;
       `;
 
@@ -337,19 +378,23 @@ async function getStockOpnameAcuan({
           ROUND(SUM(CAST(beratSum.Berat AS FLOAT)), 2) AS TotalBerat,
           SUM(CAST(beratSum.JmlhSak AS INT)) AS TotalSak
         FROM (
-          ${all.map(f => `
+          ${all
+            .map(
+              (f) => `
             SELECT
-              ${f.fields.berat || '0'} AS Berat,
-              ${f.fields.jmlhSak || '0'} AS JmlhSak
+              ${f.fields.berat || "0"} AS Berat,
+              ${f.fields.jmlhSak || "0"} AS JmlhSak
             FROM ${f.table} AS src
             WHERE NoSO = @noso
               ${makeWhereLokasi()}
-              ${search ? `AND ${f.labelExpr} LIKE @search` : ''}
+              ${search ? `AND ${f.labelExpr} LIKE @search` : ""}
               AND NOT EXISTS (
                 SELECT 1 FROM ${f.hasilTable} AS hasil
                 WHERE hasil.NoSO = src.NoSO AND ${f.hasilWhereClause}
               )
-          `).join(' UNION ALL ')}
+          `,
+            )
+            .join(" UNION ALL ")}
         ) AS beratSum
       `;
     }
@@ -358,12 +403,13 @@ async function getStockOpnameAcuan({
       request.query(query),
       request.query(totalQuery),
       request.query(beratSakQuery),
-      request.query(overallTotalQuery)
+      request.query(overallTotalQuery),
     ]);
 
-    const formattedData = result.recordset.map(item => ({
+    const formattedData = result.recordset.map((item) => ({
       ...item,
-      Berat: item.Berat !== null ? parseFloat(Number(item.Berat).toFixed(2)) : null
+      Berat:
+        item.Berat !== null ? parseFloat(Number(item.Berat).toFixed(2)) : null,
     }));
 
     return {
@@ -377,16 +423,12 @@ async function getStockOpnameAcuan({
       totalSak: totalBeratSak.recordset[0].TotalSak || 0,
       totalLabelGlobal: overallTotal.recordset[0].TotalLabelGlobal || 0,
       totalBeratGlobal: overallTotal.recordset[0].TotalBeratGlobal || 0,
-      totalSakGlobal: overallTotal.recordset[0].TotalSakGlobal || 0
+      totalSakGlobal: overallTotal.recordset[0].TotalSakGlobal || 0,
     };
-
   } catch (err) {
     throw new Error(`Stock Opname Acuan Service Error: ${err.message}`);
   }
 }
-
-
-
 
 // ✅ getStockOpnameHasil.js (versi final, blok dan idLokasi dipisah)
 
@@ -394,20 +436,20 @@ async function getStockOpnameHasil({
   noso,
   page = 1,
   pageSize = 20,
-  filterBy = 'all',
-  blok,                // varchar
-  idLokasi,            // int
-  search = '',
+  filterBy = "all",
+  blok, // varchar
+  idLokasi, // int
+  search = "",
   filterByUser = false,
-  username = ''
+  username = "",
 }) {
   const offset = (page - 1) * pageSize;
 
   const filterMap = {
     bahanbaku: {
-      table: 'StockOpnameHasilBahanBaku',
+      table: "StockOpnameHasilBahanBaku",
       labelExpr: "CONCAT(so.NoBahanBaku, '-', so.NoPallet)",
-      label: 'Bahan Baku',
+      label: "Bahan Baku",
       joinClause: `
         LEFT JOIN (
           SELECT 
@@ -423,15 +465,15 @@ async function getStockOpnameHasil({
           AND so.NoPallet = detail.NoPallet
           AND detail.rn = 1
       `,
-      fields: { 
-        jmlhSak: 'so.JmlhSak', 
-        berat: 'so.Berat' 
-      }
-    },    
+      fields: {
+        jmlhSak: "so.JmlhSak",
+        berat: "so.Berat",
+      },
+    },
     washing: {
-      table: 'StockOpnameHasilWashing',
-      labelExpr: 'so.NoWashing',
-      label: 'Washing',
+      table: "StockOpnameHasilWashing",
+      labelExpr: "so.NoWashing",
+      label: "Washing",
       joinClause: `
         LEFT JOIN (
           SELECT 
@@ -445,15 +487,15 @@ async function getStockOpnameHasil({
                  AND detail.rn = 1
       `,
       fields: {
-        jmlhSak: 'so.JmlhSak',
-        berat: 'so.Berat'
-      }
+        jmlhSak: "so.JmlhSak",
+        berat: "so.Berat",
+      },
     },
 
     broker: {
-      table: 'StockOpnameHasilBroker',
-      labelExpr: 'so.NoBroker',
-      label: 'Broker',
+      table: "StockOpnameHasilBroker",
+      labelExpr: "so.NoBroker",
+      label: "Broker",
       joinClause: `
         LEFT JOIN (
           SELECT 
@@ -467,14 +509,14 @@ async function getStockOpnameHasil({
                  AND detail.rn = 1
       `,
       fields: {
-        jmlhSak: 'so.JmlhSak',
-        berat: 'so.Berat'
-      }
+        jmlhSak: "so.JmlhSak",
+        berat: "so.Berat",
+      },
     },
     crusher: {
-      table: 'StockOpnameHasilCrusher',
-      labelExpr: 'so.NoCrusher',
-      label: 'Crusher',
+      table: "StockOpnameHasilCrusher",
+      labelExpr: "so.NoCrusher",
+      label: "Crusher",
       joinClause: `
         LEFT JOIN (
           SELECT 
@@ -488,14 +530,14 @@ async function getStockOpnameHasil({
                  AND detail.rn = 1
       `,
       fields: {
-        jmlhSak: 'NULL',    // ⚠️ tidak ada kolom JmlhSak di tabel ini
-        berat: 'so.Berat'
-      }
+        jmlhSak: "NULL", // ⚠️ tidak ada kolom JmlhSak di tabel ini
+        berat: "so.Berat",
+      },
     },
     bonggolan: {
-      table: 'StockOpnameHasilBonggolan',
-      labelExpr: 'so.NoBonggolan',
-      label: 'Bonggolan',
+      table: "StockOpnameHasilBonggolan",
+      labelExpr: "so.NoBonggolan",
+      label: "Bonggolan",
       joinClause: `
         LEFT JOIN (
           SELECT 
@@ -509,14 +551,14 @@ async function getStockOpnameHasil({
                  AND detail.rn = 1
       `,
       fields: {
-        jmlhSak: 'NULL',   // ❌ tidak ada jumlah sak
-        berat: 'so.Berat'
-      }
+        jmlhSak: "NULL", // ❌ tidak ada jumlah sak
+        berat: "so.Berat",
+      },
     },
     gilingan: {
-      table: 'StockOpnameHasilGilingan',     // ✅ pakai tabel yang benar
-      labelExpr: 'so.NoGilingan',
-      label: 'Gilingan',
+      table: "StockOpnameHasilGilingan", // ✅ pakai tabel yang benar
+      labelExpr: "so.NoGilingan",
+      label: "Gilingan",
       joinClause: `
         LEFT JOIN (
           SELECT 
@@ -530,14 +572,14 @@ async function getStockOpnameHasil({
                  AND detail.rn = 1
       `,
       fields: {
-        jmlhSak: 'NULL',   // ❌ Gilingan tidak punya jumlah sak, hanya berat
-        berat: 'so.Berat'
-      }
-    },    
+        jmlhSak: "NULL", // ❌ Gilingan tidak punya jumlah sak, hanya berat
+        berat: "so.Berat",
+      },
+    },
     mixer: {
-      table: 'StockOpnameHasilMixer',
-      labelExpr: 'so.NoMixer',
-      label: 'Mixer',
+      table: "StockOpnameHasilMixer",
+      labelExpr: "so.NoMixer",
+      label: "Mixer",
       joinClause: `
         LEFT JOIN (
           SELECT 
@@ -551,14 +593,14 @@ async function getStockOpnameHasil({
                  AND detail.rn = 1
       `,
       fields: {
-        jmlhSak: 'so.JmlhSak',
-        berat: 'so.Berat'
-      }
+        jmlhSak: "so.JmlhSak",
+        berat: "so.Berat",
+      },
     },
     furniturewip: {
-      table: 'StockOpnameHasilFurnitureWIP',
-      labelExpr: 'so.NoFurnitureWIP',
-      label: 'Furniture WIP',
+      table: "StockOpnameHasilFurnitureWIP",
+      labelExpr: "so.NoFurnitureWIP",
+      label: "Furniture WIP",
       joinClause: `
         LEFT JOIN (
           SELECT 
@@ -572,14 +614,14 @@ async function getStockOpnameHasil({
                  AND detail.rn = 1
       `,
       fields: {
-        jmlhSak: 'so.Pcs',     // ⚠️ gunakan Pcs sebagai pengganti jumlah sak
-        berat: 'so.Berat'
-      }
+        jmlhSak: "so.Pcs", // ⚠️ gunakan Pcs sebagai pengganti jumlah sak
+        berat: "so.Berat",
+      },
     },
     barangjadi: {
-      table: 'StockOpnameHasilBarangJadi',
-      labelExpr: 'so.NoBJ',
-      label: 'Barang Jadi',
+      table: "StockOpnameHasilBarangJadi",
+      labelExpr: "so.NoBJ",
+      label: "Barang Jadi",
       joinClause: `
         LEFT JOIN (
           SELECT 
@@ -593,14 +635,14 @@ async function getStockOpnameHasil({
                  AND detail.rn = 1
       `,
       fields: {
-        jmlhSak: 'so.Pcs',     // ✅ gunakan PCS sebagai pengganti jumlah sak
-        berat: 'so.Berat'
-      }
+        jmlhSak: "so.Pcs", // ✅ gunakan PCS sebagai pengganti jumlah sak
+        berat: "so.Berat",
+      },
     },
     reject: {
-      table: 'StockOpnameHasilReject',
-      labelExpr: 'so.NoReject',
-      label: 'Reject',
+      table: "StockOpnameHasilReject",
+      labelExpr: "so.NoReject",
+      label: "Reject",
       joinClause: `
         LEFT JOIN (
           SELECT 
@@ -613,8 +655,8 @@ async function getStockOpnameHasil({
         ) detail ON so.NoReject = detail.NoReject
                  AND detail.rn = 1
       `,
-      fields: { jmlhSak: 'NULL', berat: 'so.Berat' }
-    }
+      fields: { jmlhSak: "NULL", berat: "so.Berat" },
+    },
   };
 
   try {
@@ -622,32 +664,39 @@ async function getStockOpnameHasil({
     const request = pool.request();
 
     // --- input dasar ---
-    request.input('noso', sql.VarChar, noso);
-    if (filterByUser) request.input('username', sql.VarChar, username);
-    if (search) request.input('search', sql.VarChar, `%${search}%`);
+    request.input("noso", sql.VarChar, noso);
+    if (filterByUser) request.input("username", sql.VarChar, username);
+    if (search) request.input("search", sql.VarChar, `%${search}%`);
 
     // --- lokasi & blok dipisah ---
-    if (blok && blok !== 'all') request.input('blok', sql.VarChar, blok);
-    if (idLokasi && idLokasi !== 'all') request.input('idLokasi', sql.Int, parseInt(idLokasi));
+    if (blok && blok !== "all") request.input("blok", sql.VarChar, blok);
+    if (idLokasi && idLokasi !== "all")
+      request.input("idLokasi", sql.Int, parseInt(idLokasi));
 
     const makeWhereLokasi = () => {
-      if (blok && blok !== 'all' && idLokasi && idLokasi !== 'all') {
-        return 'AND detail.Blok = @blok AND detail.IdLokasi = @idLokasi';
-      } else if (blok && blok !== 'all') {
-        return 'AND detail.Blok = @blok';
-      } else if (idLokasi && idLokasi !== 'all') {
-        return 'AND detail.IdLokasi = @idLokasi';
+      if (blok && blok !== "all" && idLokasi && idLokasi !== "all") {
+        return "AND detail.Blok = @blok AND detail.IdLokasi = @idLokasi";
+      } else if (blok && blok !== "all") {
+        return "AND detail.Blok = @blok";
+      } else if (idLokasi && idLokasi !== "all") {
+        return "AND detail.IdLokasi = @idLokasi";
       }
-      return '';
+      return "";
     };
 
     // === query builder ===
-    const makeQuery = (table, labelExpr, labelType, joinClause, fields = {}) => `
+    const makeQuery = (
+      table,
+      labelExpr,
+      labelType,
+      joinClause,
+      fields = {},
+    ) => `
       SELECT 
         ${labelExpr} AS NomorLabel, 
         '${labelType}' AS LabelType, 
-        ${fields.jmlhSak || 'NULL'} AS JmlhSak, 
-        ${fields.berat || 'NULL'} AS Berat,
+        ${fields.jmlhSak || "NULL"} AS JmlhSak, 
+        ${fields.berat || "NULL"} AS Berat,
         ISNULL(so.DateTimeScan, '1900-01-01') AS DateTimeScan,
         detail.Blok,
         detail.IdLokasi,
@@ -655,9 +704,9 @@ async function getStockOpnameHasil({
       FROM ${table} so
       ${joinClause}
       WHERE so.NoSO = @noso
-      ${filterByUser ? 'AND so.Username = @username' : ''}
+      ${filterByUser ? "AND so.Username = @username" : ""}
       ${makeWhereLokasi()}
-      ${search ? `AND ${labelExpr} LIKE @search` : ''}
+      ${search ? `AND ${labelExpr} LIKE @search` : ""}
     `;
 
     const makeCount = (table, labelExpr, joinClause) => `
@@ -665,9 +714,9 @@ async function getStockOpnameHasil({
       FROM ${table} so
       ${joinClause}
       WHERE so.NoSO = @noso
-      ${filterByUser ? 'AND so.Username = @username' : ''}
+      ${filterByUser ? "AND so.Username = @username" : ""}
       ${makeWhereLokasi()}
-      ${search ? `AND ${labelExpr} LIKE @search` : ''}
+      ${search ? `AND ${labelExpr} LIKE @search` : ""}
     `;
 
     const makeTotal = (field, table, joinClause) => `
@@ -675,16 +724,19 @@ async function getStockOpnameHasil({
       FROM ${table} so
       ${joinClause}
       WHERE so.NoSO = @noso
-      ${filterByUser ? 'AND so.Username = @username' : ''}
+      ${filterByUser ? "AND so.Username = @username" : ""}
       ${makeWhereLokasi()}
     `;
 
     // === generate final query ===
-    let query = '', totalQuery = '', totalSakQuery = '', totalBeratQuery = '';
+    let query = "",
+      totalQuery = "",
+      totalSakQuery = "",
+      totalBeratQuery = "";
 
-    if (filterBy !== 'all') {
+    if (filterBy !== "all") {
       const filter = filterMap[filterBy.toLowerCase()];
-      if (!filter) throw new Error('Invalid filterBy');
+      if (!filter) throw new Error("Invalid filterBy");
 
       query = `
         ${makeQuery(filter.table, filter.labelExpr, filter.label, filter.joinClause, filter.fields)}
@@ -692,31 +744,42 @@ async function getStockOpnameHasil({
         OFFSET ${offset} ROWS FETCH NEXT ${pageSize} ROWS ONLY;
       `;
       totalQuery = makeCount(filter.table, filter.labelExpr, filter.joinClause);
-      totalSakQuery = filter.fields.jmlhSak !== 'NULL'
-        ? makeTotal(filter.fields.jmlhSak, filter.table, filter.joinClause)
-        : 'SELECT NULL AS total';
-      totalBeratQuery = makeTotal(filter.fields.berat, filter.table, filter.joinClause);
+      totalSakQuery =
+        filter.fields.jmlhSak !== "NULL"
+          ? makeTotal(filter.fields.jmlhSak, filter.table, filter.joinClause)
+          : "SELECT NULL AS total";
+      totalBeratQuery = makeTotal(
+        filter.fields.berat,
+        filter.table,
+        filter.joinClause,
+      );
     } else {
       const all = Object.values(filterMap);
-      const allQueries = all.map(f => makeQuery(f.table, f.labelExpr, f.label, f.joinClause, f.fields));
-      const allCounts = all.map(f => makeCount(f.table, f.labelExpr, f.joinClause));
-      const allSak = all.map(f =>
-        f.fields.jmlhSak !== 'NULL'
-          ? makeTotal(f.fields.jmlhSak, f.table, f.joinClause)
-          : 'SELECT 0 AS total'
+      const allQueries = all.map((f) =>
+        makeQuery(f.table, f.labelExpr, f.label, f.joinClause, f.fields),
       );
-      const allBerat = all.map(f => makeTotal(f.fields.berat, f.table, f.joinClause));
+      const allCounts = all.map((f) =>
+        makeCount(f.table, f.labelExpr, f.joinClause),
+      );
+      const allSak = all.map((f) =>
+        f.fields.jmlhSak !== "NULL"
+          ? makeTotal(f.fields.jmlhSak, f.table, f.joinClause)
+          : "SELECT 0 AS total",
+      );
+      const allBerat = all.map((f) =>
+        makeTotal(f.fields.berat, f.table, f.joinClause),
+      );
 
       query = `
         SELECT * FROM (
-          ${allQueries.join(' UNION ALL ')}
+          ${allQueries.join(" UNION ALL ")}
         ) AS hasil
         ORDER BY DateTimeScan DESC
         OFFSET ${offset} ROWS FETCH NEXT ${pageSize} ROWS ONLY;
       `;
-      totalQuery = `SELECT SUM(total) AS total FROM (${allCounts.join(' UNION ALL ')}) AS totalData;`;
-      totalSakQuery = `SELECT ROUND(SUM(total), 2) AS total FROM (${allSak.join(' UNION ALL ')}) AS sakData;`;
-      totalBeratQuery = `SELECT ROUND(SUM(total), 2) AS total FROM (${allBerat.join(' UNION ALL ')}) AS beratData;`;
+      totalQuery = `SELECT SUM(total) AS total FROM (${allCounts.join(" UNION ALL ")}) AS totalData;`;
+      totalSakQuery = `SELECT ROUND(SUM(total), 2) AS total FROM (${allSak.join(" UNION ALL ")}) AS sakData;`;
+      totalBeratQuery = `SELECT ROUND(SUM(total), 2) AS total FROM (${allBerat.join(" UNION ALL ")}) AS beratData;`;
     }
 
     // === eksekusi paralel ===
@@ -724,17 +787,17 @@ async function getStockOpnameHasil({
       request.query(query),
       request.query(totalQuery),
       request.query(totalBeratQuery),
-      request.query(totalSakQuery)
+      request.query(totalSakQuery),
     ]);
 
     // === format output ===
-    const formattedData = result.recordset.map(item => ({
+    const formattedData = result.recordset.map((item) => ({
       ...item,
       DateTimeScan:
-        item.DateTimeScan && item.DateTimeScan !== '1900-01-01'
+        item.DateTimeScan && item.DateTimeScan !== "1900-01-01"
           ? formatDate(item.DateTimeScan)
-          : '-',
-      Username: item.Username || '-'
+          : "-",
+      Username: item.Username || "-",
     }));
 
     return {
@@ -745,32 +808,30 @@ async function getStockOpnameHasil({
       totalData: total.recordset[0].total,
       totalBerat: berat.recordset[0].total ?? 0,
       totalSak: sak.recordset[0].total ?? 0,
-      totalPages: Math.ceil(total.recordset[0].total / pageSize)
+      totalPages: Math.ceil(total.recordset[0].total / pageSize),
     };
   } catch (err) {
     throw new Error(`Stock Opname Hasil Service Error: ${err.message}`);
   }
 }
 
-
-
 async function deleteStockOpnameHasil({ noso, nomorLabel }) {
   if (!nomorLabel) {
-    throw new Error('NomorLabel wajib diisi');
+    throw new Error("NomorLabel wajib diisi");
   }
 
   const pool = await poolPromise; // ✅ pakai pool global
   const request = pool.request();
-  request.input('noso', sql.VarChar, noso);
+  request.input("noso", sql.VarChar, noso);
 
-  let deleteQuery = '';
-  let labelTypeDetected = '';
+  let deleteQuery = "";
+  let labelTypeDetected = "";
 
   // === BAHAN BAKU ===
-  const [noBahanBaku, noPallet] = nomorLabel.split('-');
+  const [noBahanBaku, noPallet] = nomorLabel.split("-");
   if (noBahanBaku && noPallet) {
-    request.input('noBahanBaku', sql.VarChar, noBahanBaku);
-    request.input('noPallet', sql.VarChar, noPallet);
+    request.input("noBahanBaku", sql.VarChar, noBahanBaku);
+    request.input("noPallet", sql.VarChar, noPallet);
 
     const checkBBK = await request.query(`
       SELECT 1 
@@ -783,7 +844,7 @@ async function deleteStockOpnameHasil({ noso, nomorLabel }) {
         DELETE FROM StockOpnameHasilBahanBaku 
         WHERE NoSO = @noso AND NoBahanBaku = @noBahanBaku AND NoPallet = @noPallet
       `;
-      labelTypeDetected = 'bahanbaku';
+      labelTypeDetected = "bahanbaku";
     }
   }
 
@@ -806,38 +867,89 @@ async function deleteStockOpnameHasil({ noso, nomorLabel }) {
     }
   };
 
-  await tryDeleteLabel('StockOpnameHasilWashing', 'NoWashing', 'washing', 'noWashing');
-  await tryDeleteLabel('StockOpnameHasilBroker', 'NoBroker', 'broker', 'noBroker');
-  await tryDeleteLabel('StockOpnameHasilCrusher', 'NoCrusher', 'crusher', 'noCrusher');
-  await tryDeleteLabel('StockOpnameHasilBonggolan', 'NoBonggolan', 'bonggolan', 'noBonggolan');
-  await tryDeleteLabel('StockOpnameHasilGilingan', 'NoGilingan', 'gilingan', 'noGilingan');
-  await tryDeleteLabel('StockOpnameHasilMixer', 'NoMixer', 'mixer', 'noMixer');
-  await tryDeleteLabel('StockOpnameHasilFurnitureWIP', 'NoFurnitureWIP', 'furniturewip', 'noFurnitureWIP');
-  await tryDeleteLabel('StockOpnameHasilBarangJadi', 'NoBJ', 'barangjadi', 'noBJ');
-  await tryDeleteLabel('StockOpnameHasilReject', 'NoReject', 'reject', 'noReject');
+  await tryDeleteLabel(
+    "StockOpnameHasilWashing",
+    "NoWashing",
+    "washing",
+    "noWashing",
+  );
+  await tryDeleteLabel(
+    "StockOpnameHasilBroker",
+    "NoBroker",
+    "broker",
+    "noBroker",
+  );
+  await tryDeleteLabel(
+    "StockOpnameHasilCrusher",
+    "NoCrusher",
+    "crusher",
+    "noCrusher",
+  );
+  await tryDeleteLabel(
+    "StockOpnameHasilBonggolan",
+    "NoBonggolan",
+    "bonggolan",
+    "noBonggolan",
+  );
+  await tryDeleteLabel(
+    "StockOpnameHasilGilingan",
+    "NoGilingan",
+    "gilingan",
+    "noGilingan",
+  );
+  await tryDeleteLabel("StockOpnameHasilMixer", "NoMixer", "mixer", "noMixer");
+  await tryDeleteLabel(
+    "StockOpnameHasilFurnitureWIP",
+    "NoFurnitureWIP",
+    "furniturewip",
+    "noFurnitureWIP",
+  );
+  await tryDeleteLabel(
+    "StockOpnameHasilBarangJadi",
+    "NoBJ",
+    "barangjadi",
+    "noBJ",
+  );
+  await tryDeleteLabel(
+    "StockOpnameHasilReject",
+    "NoReject",
+    "reject",
+    "noReject",
+  );
 
   if (!deleteQuery) {
-    return { success: false, message: 'NomorLabel tidak ditemukan dalam data stock opname' };
+    return {
+      success: false,
+      message: "NomorLabel tidak ditemukan dalam data stock opname",
+    };
   }
 
   // Eksekusi query DELETE
   await request.query(deleteQuery);
 
-  return { success: true, message: `Label ${nomorLabel} berhasil dihapus dari tipe '${labelTypeDetected}'` };
+  return {
+    success: true,
+    message: `Label ${nomorLabel} berhasil dihapus dari tipe '${labelTypeDetected}'`,
+  };
 }
 
-
-async function validateStockOpnameLabel({ noso, label, username, blok, idlokasi }) {
+async function validateStockOpnameLabel({
+  noso,
+  label,
+  username,
+  blok,
+  idlokasi,
+}) {
   // Helper response
-  const createResponse = (success, data = {}, message = '') => {
+  const createResponse = (success, data = {}, message = "") => {
     return {
       success,
       message,
-      label: label || '',
-      labelType: data.labelType || '',
+      label: label || "",
+      labelType: data.labelType || "",
       parsed: data.parsed || {},
-      noso: noso || '',
-      username: username || '',
+      noso: noso || "",
+      username: username || "",
       isValidFormat: data.isValidFormat || false,
       isValidCategory: data.isValidCategory || false,
       isValidWarehouse: data.isValidWarehouse || false,
@@ -851,23 +963,29 @@ async function validateStockOpnameLabel({ noso, label, username, blok, idlokasi 
       berat: data.detail?.Berat ?? null,
       blok: data.detail?.Blok ?? null,
       idLokasi: data.detail?.IdLokasi ?? null,
-      mesinInfo: data.mesinInfo || []
+      mesinInfo: data.mesinInfo || [],
     };
   };
 
   // Normalizer & mismatch checker for Blok & IdLokasi
-  const normBlok = (s) => (s ?? '').toString().trim().toUpperCase();
+  const normBlok = (s) => (s ?? "").toString().trim().toUpperCase();
   const ctrlBlok = normBlok(blok);
   const ctrlIdLokasi = (idlokasi ?? idlokasi === 0) ? Number(idlokasi) : null;
 
   const isBlokLokasiMismatch = (dataDetail) => {
     if (!dataDetail) return false;
     const dataBlok = normBlok(dataDetail.Blok);
-    const dataId = (dataDetail.IdLokasi ?? dataDetail.IdLokasi === 0) ? Number(dataDetail.IdLokasi) : null;
+    const dataId =
+      (dataDetail.IdLokasi ?? dataDetail.IdLokasi === 0)
+        ? Number(dataDetail.IdLokasi)
+        : null;
 
     // Jika controller mengirim blok dan/atau idlokasi, bandingkan yang tersedia.
-    const blokMismatch = ctrlBlok ? (ctrlBlok !== dataBlok) : false;
-    const idMismatch = (ctrlIdLokasi !== null && dataId !== null) ? (ctrlIdLokasi !== dataId) : false;
+    const blokMismatch = ctrlBlok ? ctrlBlok !== dataBlok : false;
+    const idMismatch =
+      ctrlIdLokasi !== null && dataId !== null
+        ? ctrlIdLokasi !== dataId
+        : false;
 
     // Anggap "gabungan tidak serupa" jika salah satu beda (blok atau idlokasi)
     return blokMismatch || idMismatch;
@@ -875,47 +993,69 @@ async function validateStockOpnameLabel({ noso, label, username, blok, idlokasi 
 
   // Validasi input dasar
   if (!label) {
-    return createResponse(false, {}, 'Label wajib diisi');
+    return createResponse(false, {}, "Label wajib diisi");
   }
 
   // 1) Validasi format label
-  const isBahanBaku = label.startsWith('A.') && label.includes('-');
-  const isWashing = label.startsWith('B.') && !label.includes('-');
-  const isBroker = label.startsWith('D.') && !label.includes('-');
-  const isCrusher = label.startsWith('F.') && !label.includes('-');
-  const isBonggolan = label.startsWith('M.') && !label.includes('-');
-  const isGilingan = label.startsWith('V.') && !label.includes('-');
-  const isMixer = label.startsWith('H.') && !label.includes('-');
-  const isFurnitureWIP = label.startsWith('BB.') && !label.includes('-');
-  const isBarangJadi = label.startsWith('BA.') && !label.includes('-');
-  const isReject = label.startsWith('BF.') && !label.includes('-');
+  const isBahanBaku = label.startsWith("A.") && label.includes("-");
+  const isWashing = label.startsWith("B.") && !label.includes("-");
+  const isBroker = label.startsWith("D.") && !label.includes("-");
+  const isCrusher = label.startsWith("F.") && !label.includes("-");
+  const isBonggolan = label.startsWith("M.") && !label.includes("-");
+  const isGilingan = label.startsWith("V.") && !label.includes("-");
+  const isMixer = label.startsWith("H.") && !label.includes("-");
+  const isFurnitureWIP = label.startsWith("BB.") && !label.includes("-");
+  const isBarangJadi = label.startsWith("BA.") && !label.includes("-");
+  const isReject = label.startsWith("BF.") && !label.includes("-");
 
-  if (!isBahanBaku && !isWashing && !isBroker && !isCrusher && !isBonggolan && !isGilingan && !isMixer && !isFurnitureWIP && !isBarangJadi && !isReject) {
-    return createResponse(false, { isValidFormat: false }, 'Kode label tidak dikenali. Hanya A., B., F., M., V., H., BB., BA., BF., atau D. yang valid.');
+  if (
+    !isBahanBaku &&
+    !isWashing &&
+    !isBroker &&
+    !isCrusher &&
+    !isBonggolan &&
+    !isGilingan &&
+    !isMixer &&
+    !isFurnitureWIP &&
+    !isBarangJadi &&
+    !isReject
+  ) {
+    return createResponse(
+      false,
+      { isValidFormat: false },
+      "Kode label tidak dikenali. Hanya A., B., F., M., V., H., BB., BA., BF., atau D. yang valid.",
+    );
   }
 
   const pool = await poolPromise;
   const request = pool.request();
-  request.input('noso', sql.VarChar, noso);
-  request.input('username', sql.VarChar, username);
+  request.input("noso", sql.VarChar, noso);
+  request.input("username", sql.VarChar, username);
 
-  let checkQuery = '', detailQuery = '', parsed = {}, labelType = '';
+  let checkQuery = "",
+    detailQuery = "",
+    parsed = {},
+    labelType = "";
   let idWarehouse = null;
-  let fallbackQuery = '';
-  let originalDataQuery = '';
-  let warehouseQuery = '';
+  let fallbackQuery = "";
+  let originalDataQuery = "";
+  let warehouseQuery = "";
   var mesinInfo = []; // function-scoped agar aman diakses di return
 
   // 2) Setup queries per tipe
   if (isBahanBaku) {
-    labelType = 'Bahan Baku';
-    const [noBahanBaku, noPallet] = label.split('-');
+    labelType = "Bahan Baku";
+    const [noBahanBaku, noPallet] = label.split("-");
     if (!noBahanBaku || !noPallet) {
-      return createResponse(false, { isValidFormat: false, labelType }, 'Format label bahan baku tidak valid. Contoh: A.0001-1');
+      return createResponse(
+        false,
+        { isValidFormat: false, labelType },
+        "Format label bahan baku tidak valid. Contoh: A.0001-1",
+      );
     }
     parsed = { NoBahanBaku: noBahanBaku, NoPallet: noPallet };
-    request.input('NoBahanBaku', sql.VarChar, noBahanBaku);
-    request.input('NoPallet', sql.VarChar, noPallet);
+    request.input("NoBahanBaku", sql.VarChar, noBahanBaku);
+    request.input("NoPallet", sql.VarChar, noPallet);
 
     checkQuery = `
       SELECT COUNT(*) AS count FROM StockOpnameHasilBahanBaku
@@ -1070,11 +1210,10 @@ GROUP BY
     bbh.Blok,
     bbh.IdLokasi;
     `;
-
   } else if (isWashing) {
-    labelType = 'Washing';
+    labelType = "Washing";
     parsed = { NoWashing: label };
-    request.input('NoWashing', sql.VarChar, label);
+    request.input("NoWashing", sql.VarChar, label);
 
     checkQuery = `
       SELECT COUNT(*) AS count FROM StockOpnameHasilWashing
@@ -1148,11 +1287,10 @@ LEFT JOIN (
     ON dstats.NoWashing = h.NoWashing
 WHERE h.NoWashing = @NoWashing;
     `;
-
   } else if (isBroker) {
-    labelType = 'Broker';
+    labelType = "Broker";
     parsed = { NoBroker: label };
-    request.input('NoBroker', sql.VarChar, label);
+    request.input("NoBroker", sql.VarChar, label);
 
     checkQuery = `
       SELECT COUNT(*) AS count FROM StockOpnameHasilBroker
@@ -1304,11 +1442,10 @@ LEFT JOIN agg
     ON agg.NoBroker = h.NoBroker
 WHERE h.NoBroker = @NoBroker;
     `;
-
   } else if (isCrusher) {
-    labelType = 'Crusher';
+    labelType = "Crusher";
     parsed = { NoCrusher: label };
-    request.input('NoCrusher', sql.VarChar, label);
+    request.input("NoCrusher", sql.VarChar, label);
 
     checkQuery = `
       SELECT COUNT(*) AS count FROM StockOpnameHasilCrusher
@@ -1351,11 +1488,10 @@ WHERE c.NoCrusher = @NoCrusher
   AND c.DateUsage IS NULL
 ORDER BY c.DateCreate DESC, c.DateTimeCreate DESC;
     `;
-
   } else if (isBonggolan) {
-    labelType = 'Bonggolan';
+    labelType = "Bonggolan";
     parsed = { NoBonggolan: label };
-    request.input('NoBonggolan', sql.VarChar, label);
+    request.input("NoBonggolan", sql.VarChar, label);
 
     checkQuery = `
       SELECT COUNT(*) AS count FROM StockOpnameHasilBonggolan
@@ -1452,11 +1588,10 @@ ORDER BY b.DateCreate DESC, b.DateTimeCreate DESC;
     `;
     const mesinInfoResult = await request.query(mesinInfoQuery);
     mesinInfo = mesinInfoResult.recordset || [];
-
   } else if (isGilingan) {
-    labelType = 'Gilingan';
+    labelType = "Gilingan";
     parsed = { NoGilingan: label };
-    request.input('NoGilingan', sql.VarChar, label);
+    request.input("NoGilingan", sql.VarChar, label);
 
     checkQuery = `
       SELECT COUNT(*) AS count FROM StockOpnameHasilGilingan
@@ -1589,11 +1724,10 @@ ORDER BY b.DateCreate DESC, b.DateTimeCreate DESC;
         ORDER BY g.DateCreate DESC
       ) AS h;
     `;
-
   } else if (isMixer) {
-    labelType = 'Mixer';
+    labelType = "Mixer";
     parsed = { NoMixer: label };
-    request.input('NoMixer', sql.VarChar, label);
+    request.input("NoMixer", sql.VarChar, label);
 
     checkQuery = `
       SELECT COUNT(*) AS count FROM StockOpnameHasilMixer
@@ -1746,11 +1880,10 @@ LEFT JOIN agg
     ON agg.NoMixer = h.NoMixer
 WHERE h.NoMixer = @NoMixer;
     `;
-
   } else if (isFurnitureWIP) {
-    labelType = 'Furniture WIP';
+    labelType = "Furniture WIP";
     parsed = { NoFurnitureWIP: label };
-    request.input('NoFurnitureWIP', sql.VarChar, label);
+    request.input("NoFurnitureWIP", sql.VarChar, label);
 
     checkQuery = `
       SELECT COUNT(*) AS count FROM StockOpnameHasilFurnitureWIP
@@ -1908,11 +2041,10 @@ CROSS APPLY (
     ORDER BY fh.DateCreate DESC, fh.DateTimeCreate DESC
 ) AS h;
     `;
-
   } else if (isBarangJadi) {
-    labelType = 'Barang Jadi';
+    labelType = "Barang Jadi";
     parsed = { NoBJ: label };
-    request.input('NoBJ', sql.VarChar, label);
+    request.input("NoBJ", sql.VarChar, label);
 
     checkQuery = `
       SELECT COUNT(*) AS count FROM StockOpnameHasilBarangJadi
@@ -2070,11 +2202,10 @@ CROSS APPLY (
     ORDER BY bh.DateCreate DESC, bh.DateTimeCreate DESC
 ) AS h;
     `;
-
   } else if (isReject) {
-    labelType = 'Reject';
+    labelType = "Reject";
     parsed = { NoReject: label };
-    request.input('NoReject', sql.VarChar, label);
+    request.input("NoReject", sql.VarChar, label);
 
     checkQuery = `
       SELECT COUNT(*) AS count FROM StockOpnameHasilReject
@@ -2175,7 +2306,7 @@ CROSS APPLY (
           ORDER BY rv.DateCreate DESC, rv.DateTimeCreate DESC
       ) AS h;
     `;
-    // FIX: originalData dari RejectV2 
+    // FIX: originalData dari RejectV2
     originalDataQuery = `
     ;WITH base AS (
         SELECT
@@ -2226,18 +2357,22 @@ CROSS APPLY (
   const checkResult = await request.query(checkQuery);
   const isDuplicate = checkResult.recordset[0].count > 0;
   if (isDuplicate) {
-    return createResponse(false, {
-      isValidFormat: true,
-      isValidCategory: true,
-      isValidWarehouse: true,
-      isDuplicate: true,
-      foundInStockOpname: true,
-      idDiscrepancy: null,
-      labelType,
-      parsed,
-      idWarehouse,
-      mesinInfo: isBonggolan ? mesinInfo : []
-    }, 'Label telah discan!');
+    return createResponse(
+      false,
+      {
+        isValidFormat: true,
+        isValidCategory: true,
+        isValidWarehouse: true,
+        isDuplicate: true,
+        foundInStockOpname: true,
+        idDiscrepancy: null,
+        labelType,
+        parsed,
+        idWarehouse,
+        mesinInfo: isBonggolan ? mesinInfo : [],
+      },
+      "Label telah discan!",
+    );
   }
 
   // 4) Kualifikasi NoSO
@@ -2247,27 +2382,52 @@ CROSS APPLY (
     WHERE NoSO = @noso
   `);
   if (nosoQualificationCheck.recordset.length === 0) {
-    return createResponse(false, {
-      isValidFormat: true,
-      isDuplicate: false,
-      labelType,
-      parsed
-    }, 'NoSO tidak ditemukan dalam sistem.');
+    return createResponse(
+      false,
+      {
+        isValidFormat: true,
+        isDuplicate: false,
+        labelType,
+        parsed,
+      },
+      "NoSO tidak ditemukan dalam sistem.",
+    );
   }
   const qualifications = nosoQualificationCheck.recordset[0];
 
   let isValidCategory = true;
-  let categoryMessage = '';
-  if (isBahanBaku && !qualifications.IsBahanBaku) { isValidCategory = false; categoryMessage = 'Kategori Bahan Baku tidak sesuai dengan SO ini.'; }
-  else if (isWashing && !qualifications.IsWashing) { isValidCategory = false; categoryMessage = 'Kategori Washing tidak sesuai dengan SO ini.'; }
-  else if (isBroker && !qualifications.IsBroker) { isValidCategory = false; categoryMessage = 'Kategori Broker tidak sesuai dengan SO ini.'; }
-  else if (isCrusher && !qualifications.IsCrusher) { isValidCategory = false; categoryMessage = 'Kategori Crusher tidak sesuai dengan SO ini.'; }
-  else if (isBonggolan && !qualifications.IsBonggolan) { isValidCategory = false; categoryMessage = 'Kategori Bonggolan tidak sesuai dengan SO ini.'; }
-  else if (isGilingan && !qualifications.IsGilingan) { isValidCategory = false; categoryMessage = 'Kategori Gilingan tidak sesuai dengan SO ini.'; }
-  else if (isMixer && !qualifications.IsMixer) { isValidCategory = false; categoryMessage = 'Kategori Mixer tidak sesuai dengan SO ini.'; }
-  else if (isFurnitureWIP && !qualifications.IsFurnitureWIP) { isValidCategory = false; categoryMessage = 'Kategori Furniture WIP tidak sesuai dengan SO ini.'; }
-  else if (isBarangJadi && !qualifications.IsBarangJadi) { isValidCategory = false; categoryMessage = 'Kategori Barang Jadi tidak sesuai dengan SO ini.'; }
-  else if (isReject && !qualifications.IsReject) { isValidCategory = false; categoryMessage = 'Kategori Reject tidak sesuai dengan SO ini.'; }
+  let categoryMessage = "";
+  if (isBahanBaku && !qualifications.IsBahanBaku) {
+    isValidCategory = false;
+    categoryMessage = "Kategori Bahan Baku tidak sesuai dengan SO ini.";
+  } else if (isWashing && !qualifications.IsWashing) {
+    isValidCategory = false;
+    categoryMessage = "Kategori Washing tidak sesuai dengan SO ini.";
+  } else if (isBroker && !qualifications.IsBroker) {
+    isValidCategory = false;
+    categoryMessage = "Kategori Broker tidak sesuai dengan SO ini.";
+  } else if (isCrusher && !qualifications.IsCrusher) {
+    isValidCategory = false;
+    categoryMessage = "Kategori Crusher tidak sesuai dengan SO ini.";
+  } else if (isBonggolan && !qualifications.IsBonggolan) {
+    isValidCategory = false;
+    categoryMessage = "Kategori Bonggolan tidak sesuai dengan SO ini.";
+  } else if (isGilingan && !qualifications.IsGilingan) {
+    isValidCategory = false;
+    categoryMessage = "Kategori Gilingan tidak sesuai dengan SO ini.";
+  } else if (isMixer && !qualifications.IsMixer) {
+    isValidCategory = false;
+    categoryMessage = "Kategori Mixer tidak sesuai dengan SO ini.";
+  } else if (isFurnitureWIP && !qualifications.IsFurnitureWIP) {
+    isValidCategory = false;
+    categoryMessage = "Kategori Furniture WIP tidak sesuai dengan SO ini.";
+  } else if (isBarangJadi && !qualifications.IsBarangJadi) {
+    isValidCategory = false;
+    categoryMessage = "Kategori Barang Jadi tidak sesuai dengan SO ini.";
+  } else if (isReject && !qualifications.IsReject) {
+    isValidCategory = false;
+    categoryMessage = "Kategori Reject tidak sesuai dengan SO ini.";
+  }
 
   // 5) Ambil IdWarehouse
   const whResult = await request.query(warehouseQuery);
@@ -2278,26 +2438,35 @@ CROSS APPLY (
     const originalDataResult = await request.query(originalDataQuery);
     const originalData = originalDataResult.recordset[0];
 
-    return createResponse(false, {
-      isValidFormat: true,
-      isValidCategory: false,
-      isValidWarehouse: false,
-      isDuplicate: false,
-      foundInStockOpname: false,
-      idDiscrepancy: null,
-      labelType,
-      parsed,
-      idWarehouse,
-      detail: originalData ? {
-        JmlhSak: originalData.JmlhSak ?? null,
-        Berat: originalData?.Berat != null ? Number(Number(originalData.Berat).toFixed(2)) : null,
-        Blok: originalData.Blok,
-        IdLokasi: originalData.IdLokasi
-      } : null,
-      mesinInfo: isBonggolan ? mesinInfo : []
-    }, categoryMessage);
+    return createResponse(
+      false,
+      {
+        isValidFormat: true,
+        isValidCategory: false,
+        isValidWarehouse: false,
+        isDuplicate: false,
+        foundInStockOpname: false,
+        idDiscrepancy: null,
+        labelType,
+        parsed,
+        idWarehouse,
+        detail: originalData
+          ? {
+              JmlhSak: originalData.JmlhSak ?? null,
+              Berat:
+                originalData?.Berat != null
+                  ? Number(Number(originalData.Berat).toFixed(2))
+                  : null,
+              Blok: originalData.Blok,
+              IdLokasi: originalData.IdLokasi,
+            }
+          : null,
+        mesinInfo: isBonggolan ? mesinInfo : [],
+      },
+      categoryMessage,
+    );
   }
-  
+
   // 7) Validasi warehouse terhadap NoSO
   const soWarehouseCheck = await request.query(`
     SELECT COUNT(*) AS count
@@ -2312,32 +2481,66 @@ CROSS APPLY (
 
   // Ditemukan pada sumber utama
   if (detailData) {
-
     if (!isValidWarehouse) {
-      return createResponse(false, {
-        isValidFormat: true,
-        isValidCategory: true,
-        isValidWarehouse: false,
-        isDuplicate: false,
-        foundInStockOpname: true,
-        idDiscrepancy: 2,
-        labelType,
-        parsed,
-        idWarehouse,
-        detail: {
-          ...detailData,
-          Berat: detailData?.Berat != null ? Number(Number(detailData.Berat).toFixed(2)) : null
+      return createResponse(
+        false,
+        {
+          isValidFormat: true,
+          isValidCategory: true,
+          isValidWarehouse: false,
+          isDuplicate: false,
+          foundInStockOpname: true,
+          idDiscrepancy: 2,
+          labelType,
+          parsed,
+          idWarehouse,
+          detail: {
+            ...detailData,
+            Berat:
+              detailData?.Berat != null
+                ? Number(Number(detailData.Berat).toFixed(2))
+                : null,
+          },
+          mesinInfo: isBonggolan ? mesinInfo : [],
         },
-        mesinInfo: isBonggolan ? mesinInfo : []
-      }, `Warehouse tidak sesuai!`);
+        `Warehouse tidak sesuai!`,
+      );
     }
 
     // Cek mismatch Blok/IdLokasi
     if (isBlokLokasiMismatch(detailData)) {
-      return createResponse(true, {
+      return createResponse(
+        true,
+        {
+          isValidFormat: true,
+          isValidCategory: true,
+          isValidWarehouse: isValidWarehouse,
+          isDuplicate: false,
+          foundInStockOpname: true,
+          idDiscrepancy: null,
+          labelType,
+          parsed,
+          idWarehouse,
+          detail: {
+            ...detailData,
+            // jaga-jaga format angka
+            Berat:
+              detailData?.Berat != null
+                ? Number(Number(detailData.Berat).toFixed(2))
+                : null,
+          },
+          mesinInfo: isBonggolan ? mesinInfo : [],
+        },
+        `Lokasi dipindahkan dari ${detailData.Blok}${detailData.IdLokasi}`,
+      );
+    }
+
+    return createResponse(
+      true,
+      {
         isValidFormat: true,
         isValidCategory: true,
-        isValidWarehouse: isValidWarehouse,
+        isValidWarehouse: true,
         isDuplicate: false,
         foundInStockOpname: true,
         idDiscrepancy: null,
@@ -2346,56 +2549,47 @@ CROSS APPLY (
         idWarehouse,
         detail: {
           ...detailData,
-          // jaga-jaga format angka
-          Berat: detailData?.Berat != null ? Number(Number(detailData.Berat).toFixed(2)) : null
+          Berat:
+            detailData?.Berat != null
+              ? Number(Number(detailData.Berat).toFixed(2))
+              : null,
         },
-        mesinInfo: isBonggolan ? mesinInfo : []
-      }, `Lokasi dipindahkan dari ${detailData.Blok}${detailData.IdLokasi}`);
-    }
-
-    return createResponse(true, {
-      isValidFormat: true,
-      isValidCategory: true,
-      isValidWarehouse: true,
-      isDuplicate: false,
-      foundInStockOpname: true,
-      idDiscrepancy: null,
-      labelType,
-      parsed,
-      idWarehouse,
-      detail: {
-        ...detailData,
-        Berat: detailData?.Berat != null ? Number(Number(detailData.Berat).toFixed(2)) : null
+        mesinInfo: isBonggolan ? mesinInfo : [],
       },
-      mesinInfo: isBonggolan ? mesinInfo : []
-    }, 'Label Valid');
+      "Label Valid",
+    );
   }
-
-
 
   // 9) Fallback (tidak ditemukan di query utama)
   const fallbackResult = await request.query(fallbackQuery);
   const fallbackData = fallbackResult.recordset[0];
 
   if (fallbackData && (fallbackData.JmlhSak > 0 || fallbackData.Berat > 0)) {
-    return createResponse(true, {
-      isValidFormat: true,
-      isValidCategory: true,
-      isValidWarehouse,
-      isDuplicate: false,
-      foundInStockOpname: false,
-      idDiscrepancy: 2,
-      labelType,
-      parsed,
-      idWarehouse: fallbackData.IdWarehouse || idWarehouse,
-      detail: {
-        JmlhSak: fallbackData.JmlhSak ?? null,
-        Berat: fallbackData?.Berat != null ? Number(Number(fallbackData.Berat).toFixed(2)) : null,
-        Blok: fallbackData.Blok,
-        IdLokasi: fallbackData.IdLokasi
+    return createResponse(
+      true,
+      {
+        isValidFormat: true,
+        isValidCategory: true,
+        isValidWarehouse,
+        isDuplicate: false,
+        foundInStockOpname: false,
+        idDiscrepancy: 2,
+        labelType,
+        parsed,
+        idWarehouse: fallbackData.IdWarehouse || idWarehouse,
+        detail: {
+          JmlhSak: fallbackData.JmlhSak ?? null,
+          Berat:
+            fallbackData?.Berat != null
+              ? Number(Number(fallbackData.Berat).toFixed(2))
+              : null,
+          Blok: fallbackData.Blok,
+          IdLokasi: fallbackData.IdLokasi,
+        },
+        mesinInfo: isBonggolan ? mesinInfo : [],
       },
-      mesinInfo: isBonggolan ? mesinInfo : []
-    }, 'Label tidak masuk dalam daftar Stock Opname');
+      "Label tidak masuk dalam daftar Stock Opname",
+    );
   }
 
   // 10) Original (semua sudah diproses / truly not found)
@@ -2403,7 +2597,33 @@ CROSS APPLY (
   const originalData = originalDataResult.recordset[0];
 
   if (originalData && (originalData.JumlahSak > 0 || originalData.Berat > 0)) {
-    return createResponse(false, {
+    return createResponse(
+      false,
+      {
+        isValidFormat: true,
+        isValidCategory: true,
+        isValidWarehouse,
+        isDuplicate: false,
+        foundInStockOpname: false,
+        idDiscrepancy: 1,
+        labelType,
+        parsed,
+        idWarehouse: originalData.IdWarehouse || idWarehouse,
+        detail: {
+          JmlhSak: 0,
+          Berat: 0,
+          Blok: "-",
+          IdLokasi: "-",
+        },
+        mesinInfo: isBonggolan ? mesinInfo : [],
+      },
+      "Item telah diproses!",
+    );
+  }
+
+  return createResponse(
+    false,
+    {
       isValidFormat: true,
       isValidCategory: true,
       isValidWarehouse,
@@ -2412,31 +2632,11 @@ CROSS APPLY (
       idDiscrepancy: 1,
       labelType,
       parsed,
-      idWarehouse: originalData.IdWarehouse || idWarehouse,
-      detail: {
-        JmlhSak: 0,
-        Berat: 0,
-        Blok: '-',
-        IdLokasi: '-'
-      },
-      mesinInfo: isBonggolan ? mesinInfo : []
-    }, 'Item telah diproses!');
-  }
-
-  return createResponse(false, {
-    isValidFormat: true,
-    isValidCategory: true,
-    isValidWarehouse,
-    isDuplicate: false,
-    foundInStockOpname: false,
-    idDiscrepancy: 1,
-    labelType,
-    parsed,
-    idWarehouse
-  }, 'Item tidak ditemukan dalam sistem.');
+      idWarehouse,
+    },
+    "Item tidak ditemukan dalam sistem.",
+  );
 }
-
-
 
 /**
  * Insert hasil scan stock-opname + update lokasi + tulis log mapping lokasi.
@@ -2453,21 +2653,29 @@ CROSS APPLY (
  * @param {number} p.idUsername           // INT, untuk log (wajib jika ingin log berisi user id)
  */
 async function insertStockOpnameLabel({
-  noso, label, jmlhSak = 0, berat = 0, idlokasi, blok, username, idUsername, idDiscrepancy
+  noso,
+  label,
+  jmlhSak = 0,
+  berat = 0,
+  idlokasi,
+  blok,
+  username,
+  idUsername,
+  idDiscrepancy,
 }) {
-  if (!label) throw new Error('Label wajib diisi');
+  if (!label) throw new Error("Label wajib diisi");
 
   // deteksi tipe label
-  const isBahanBaku    = label.startsWith('A.')  && label.includes('-');
-  const isWashing      = label.startsWith('B.')  && !label.includes('-');
-  const isBroker       = label.startsWith('D.')  && !label.includes('-');
-  const isCrusher      = label.startsWith('F.')  && !label.includes('-');
-  const isBonggolan    = label.startsWith('M.')  && !label.includes('-');
-  const isGilingan     = label.startsWith('V.')  && !label.includes('-');
-  const isMixer        = label.startsWith('H.')  && !label.includes('-');
-  const isFurnitureWIP = label.startsWith('BB.') && !label.includes('-');
-  const isBarangJadi   = label.startsWith('BA.') && !label.includes('-');
-  const isReject       = label.startsWith('BF.') && !label.includes('-');
+  const isBahanBaku = label.startsWith("A.") && label.includes("-");
+  const isWashing = label.startsWith("B.") && !label.includes("-");
+  const isBroker = label.startsWith("D.") && !label.includes("-");
+  const isCrusher = label.startsWith("F.") && !label.includes("-");
+  const isBonggolan = label.startsWith("M.") && !label.includes("-");
+  const isGilingan = label.startsWith("V.") && !label.includes("-");
+  const isMixer = label.startsWith("H.") && !label.includes("-");
+  const isFurnitureWIP = label.startsWith("BB.") && !label.includes("-");
+  const isBarangJadi = label.startsWith("BA.") && !label.includes("-");
+  const isReject = label.startsWith("BF.") && !label.includes("-");
 
   const pool = await poolPromise;
   const tx = new sql.Transaction(pool);
@@ -2477,24 +2685,27 @@ async function insertStockOpnameLabel({
     const request = new sql.Request(tx);
 
     // common bindings
-    request.input('noso',         sql.VarChar, noso);
-    request.input('username',     sql.VarChar, username);
-    request.input('jmlhSak',      sql.Int,     jmlhSak);
-    request.input('berat',        sql.Float,   berat);
-    request.input('DateTimeScan', sql.DateTime, new Date());
-    request.input('idlokasi',     sql.Int,     idlokasi);  // INT
-    request.input('blok',         sql.VarChar(3), blok);   // char(3)
-    request.input('IdDiscrepancy',         sql.Int, idDiscrepancy);   // INT
+    request.input("noso", sql.VarChar, noso);
+    request.input("username", sql.VarChar, username);
+    request.input("jmlhSak", sql.Int, jmlhSak);
+    request.input("berat", sql.Float, berat);
+    request.input("DateTimeScan", sql.DateTime, new Date());
+    request.input("idlokasi", sql.Int, idlokasi); // INT
+    request.input("blok", sql.VarChar(3), blok); // char(3)
+    request.input("IdDiscrepancy", sql.Int, idDiscrepancy); // INT
 
     let insertedData = null;
 
     // ======= BAHAN BAKU =======
     if (isBahanBaku) {
-      const [noBahanBaku, noPallet] = label.split('-');
-      if (!noBahanBaku || !noPallet) throw new Error('Format label bahan baku tidak valid. Contoh: A.0001-1');
+      const [noBahanBaku, noPallet] = label.split("-");
+      if (!noBahanBaku || !noPallet)
+        throw new Error(
+          "Format label bahan baku tidak valid. Contoh: A.0001-1",
+        );
 
-      request.input('NoBahanBaku', sql.VarChar, noBahanBaku);
-      request.input('NoPallet',    sql.VarChar, noPallet);
+      request.input("NoBahanBaku", sql.VarChar, noBahanBaku);
+      request.input("NoPallet", sql.VarChar, noPallet);
 
       // BEFORE
       const before = await request.query(`
@@ -2503,7 +2714,7 @@ async function insertStockOpnameLabel({
         WHERE NoBahanBaku=@NoBahanBaku AND NoPallet=@NoPallet
       `);
       const beforeBlok = before.recordset?.[0]?.BeforeBlok ?? null;
-      const beforeId   = before.recordset?.[0]?.BeforeIdLokasi ?? null;
+      const beforeId = before.recordset?.[0]?.BeforeIdLokasi ?? null;
 
       // INSERT hasil
       await request.query(`
@@ -2518,34 +2729,46 @@ async function insertStockOpnameLabel({
         SET Blok=@blok, IdLokasi=@idlokasi
         WHERE NoBahanBaku=@NoBahanBaku AND NoPallet=@NoPallet
       `);
-      if (upd.rowsAffected?.[0] === 0) throw new Error('Pallet tidak ditemukan di BahanBakuPallet_h');
+      if (upd.rowsAffected?.[0] === 0)
+        throw new Error("Pallet tidak ditemukan di BahanBakuPallet_h");
 
       // LOG (hanya kalau berubah)
       if (beforeBlok !== blok || Number(beforeId) !== Number(idlokasi)) {
         await insertLogMappingLokasi({
-          runner: tx, noLabel: label,
-          beforeBlok, beforeIdLokasi: beforeId,
-          afterBlok: blok, afterIdLokasi: idlokasi,
+          runner: tx,
+          noLabel: label,
+          beforeBlok,
+          beforeIdLokasi: beforeId,
+          afterBlok: blok,
+          afterIdLokasi: idlokasi,
           idUsername: idUsername ?? null,
           isSO: 1,
         });
       }
 
       insertedData = {
-        noso, nomorLabel: label, labelType: 'Bahan Baku', labelTypeCode: 'bahanbaku',
-        jmlhSak, berat, idlokasi, blok, username, timestamp: new Date()
+        noso,
+        nomorLabel: label,
+        labelType: "Bahan Baku",
+        labelTypeCode: "bahanbaku",
+        jmlhSak,
+        berat,
+        idlokasi,
+        blok,
+        username,
+        timestamp: new Date(),
       };
 
-    // ======= WASHING =======
+      // ======= WASHING =======
     } else if (isWashing) {
-      request.input('NoWashing', sql.VarChar, label);
+      request.input("NoWashing", sql.VarChar, label);
 
       const before = await request.query(`
         SELECT TOP 1 Blok AS BeforeBlok, IdLokasi AS BeforeIdLokasi
         FROM Washing_h WHERE NoWashing=@NoWashing
       `);
       const beforeBlok = before.recordset?.[0]?.BeforeBlok ?? null;
-      const beforeId   = before.recordset?.[0]?.BeforeIdLokasi ?? null;
+      const beforeId = before.recordset?.[0]?.BeforeIdLokasi ?? null;
 
       await request.query(`
         INSERT INTO StockOpnameHasilWashing
@@ -2558,33 +2781,45 @@ async function insertStockOpnameLabel({
         SET Blok=@blok, IdLokasi=@idlokasi
         WHERE NoWashing=@NoWashing
       `);
-      if (upd.rowsAffected?.[0] === 0) throw new Error('NoWashing tidak ditemukan di Washing_h');
+      if (upd.rowsAffected?.[0] === 0)
+        throw new Error("NoWashing tidak ditemukan di Washing_h");
 
       if (beforeBlok !== blok || Number(beforeId) !== Number(idlokasi)) {
         await insertLogMappingLokasi({
-          runner: tx, noLabel: label,
-          beforeBlok, beforeIdLokasi: beforeId,
-          afterBlok: blok, afterIdLokasi: idlokasi,
+          runner: tx,
+          noLabel: label,
+          beforeBlok,
+          beforeIdLokasi: beforeId,
+          afterBlok: blok,
+          afterIdLokasi: idlokasi,
           idUsername: idUsername ?? null,
           isSO: 1,
         });
       }
 
       insertedData = {
-        noso, nomorLabel: label, labelType: 'Washing', labelTypeCode: 'washing',
-        jmlhSak, berat, idlokasi, blok, username, timestamp: new Date()
+        noso,
+        nomorLabel: label,
+        labelType: "Washing",
+        labelTypeCode: "washing",
+        jmlhSak,
+        berat,
+        idlokasi,
+        blok,
+        username,
+        timestamp: new Date(),
       };
 
-    // ======= BROKER =======
+      // ======= BROKER =======
     } else if (isBroker) {
-      request.input('NoBroker', sql.VarChar, label);
+      request.input("NoBroker", sql.VarChar, label);
 
       const before = await request.query(`
         SELECT TOP 1 Blok AS BeforeBlok, IdLokasi AS BeforeIdLokasi
         FROM Broker_h WHERE NoBroker=@NoBroker
       `);
       const beforeBlok = before.recordset?.[0]?.BeforeBlok ?? null;
-      const beforeId   = before.recordset?.[0]?.BeforeIdLokasi ?? null;
+      const beforeId = before.recordset?.[0]?.BeforeIdLokasi ?? null;
 
       await request.query(`
         INSERT INTO StockOpnameHasilBroker
@@ -2597,33 +2832,45 @@ async function insertStockOpnameLabel({
         SET Blok=@blok, IdLokasi=@idlokasi
         WHERE NoBroker=@NoBroker
       `);
-      if (upd.rowsAffected?.[0] === 0) throw new Error('NoBroker tidak ditemukan di Broker_h');
+      if (upd.rowsAffected?.[0] === 0)
+        throw new Error("NoBroker tidak ditemukan di Broker_h");
 
       if (beforeBlok !== blok || Number(beforeId) !== Number(idlokasi)) {
         await insertLogMappingLokasi({
-          runner: tx, noLabel: label,
-          beforeBlok, beforeIdLokasi: beforeId,
-          afterBlok: blok, afterIdLokasi: idlokasi,
+          runner: tx,
+          noLabel: label,
+          beforeBlok,
+          beforeIdLokasi: beforeId,
+          afterBlok: blok,
+          afterIdLokasi: idlokasi,
           idUsername: idUsername ?? null,
           isSO: 1,
         });
       }
 
       insertedData = {
-        noso, nomorLabel: label, labelType: 'Broker', labelTypeCode: 'broker',
-        jmlhSak, berat, idlokasi, blok, username, timestamp: new Date()
+        noso,
+        nomorLabel: label,
+        labelType: "Broker",
+        labelTypeCode: "broker",
+        jmlhSak,
+        berat,
+        idlokasi,
+        blok,
+        username,
+        timestamp: new Date(),
       };
 
-    // ======= CRUSHER =======
+      // ======= CRUSHER =======
     } else if (isCrusher) {
-      request.input('NoCrusher', sql.VarChar, label);
+      request.input("NoCrusher", sql.VarChar, label);
 
       const before = await request.query(`
         SELECT TOP 1 Blok AS BeforeBlok, IdLokasi AS BeforeIdLokasi
         FROM Crusher WHERE NoCrusher=@NoCrusher
       `);
       const beforeBlok = before.recordset?.[0]?.BeforeBlok ?? null;
-      const beforeId   = before.recordset?.[0]?.BeforeIdLokasi ?? null;
+      const beforeId = before.recordset?.[0]?.BeforeIdLokasi ?? null;
 
       await request.query(`
         INSERT INTO StockOpnameHasilCrusher
@@ -2636,33 +2883,45 @@ async function insertStockOpnameLabel({
         SET Blok=@blok, IdLokasi=@idlokasi
         WHERE NoCrusher=@NoCrusher
       `);
-      if (upd.rowsAffected?.[0] === 0) throw new Error('NoCrusher tidak ditemukan di tabel Crusher');
+      if (upd.rowsAffected?.[0] === 0)
+        throw new Error("NoCrusher tidak ditemukan di tabel Crusher");
 
       if (beforeBlok !== blok || Number(beforeId) !== Number(idlokasi)) {
         await insertLogMappingLokasi({
-          runner: tx, noLabel: label,
-          beforeBlok, beforeIdLokasi: beforeId,
-          afterBlok: blok, afterIdLokasi: idlokasi,
+          runner: tx,
+          noLabel: label,
+          beforeBlok,
+          beforeIdLokasi: beforeId,
+          afterBlok: blok,
+          afterIdLokasi: idlokasi,
           idUsername: idUsername ?? null,
           isSO: 1,
         });
       }
 
       insertedData = {
-        noso, nomorLabel: label, labelType: 'Crusher', labelTypeCode: 'crusher',
-        jmlhSak, berat, idlokasi, blok, username, timestamp: new Date()
+        noso,
+        nomorLabel: label,
+        labelType: "Crusher",
+        labelTypeCode: "crusher",
+        jmlhSak,
+        berat,
+        idlokasi,
+        blok,
+        username,
+        timestamp: new Date(),
       };
 
-    // ======= BONGGOLAN =======
+      // ======= BONGGOLAN =======
     } else if (isBonggolan) {
-      request.input('NoBonggolan', sql.VarChar, label);
+      request.input("NoBonggolan", sql.VarChar, label);
 
       const before = await request.query(`
         SELECT TOP 1 Blok AS BeforeBlok, IdLokasi AS BeforeIdLokasi
         FROM Bonggolan WHERE NoBonggolan=@NoBonggolan
       `);
       const beforeBlok = before.recordset?.[0]?.BeforeBlok ?? null;
-      const beforeId   = before.recordset?.[0]?.BeforeIdLokasi ?? null;
+      const beforeId = before.recordset?.[0]?.BeforeIdLokasi ?? null;
 
       await request.query(`
         INSERT INTO StockOpnameHasilBonggolan
@@ -2675,33 +2934,45 @@ async function insertStockOpnameLabel({
         SET Blok=@blok, IdLokasi=@idlokasi
         WHERE NoBonggolan=@NoBonggolan
       `);
-      if (upd.rowsAffected?.[0] === 0) throw new Error('NoBonggolan tidak ditemukan di tabel Bonggolan');
+      if (upd.rowsAffected?.[0] === 0)
+        throw new Error("NoBonggolan tidak ditemukan di tabel Bonggolan");
 
       if (beforeBlok !== blok || Number(beforeId) !== Number(idlokasi)) {
         await insertLogMappingLokasi({
-          runner: tx, noLabel: label,
-          beforeBlok, beforeIdLokasi: beforeId,
-          afterBlok: blok, afterIdLokasi: idlokasi,
+          runner: tx,
+          noLabel: label,
+          beforeBlok,
+          beforeIdLokasi: beforeId,
+          afterBlok: blok,
+          afterIdLokasi: idlokasi,
           idUsername: idUsername ?? null,
           isSO: 1,
         });
       }
 
       insertedData = {
-        noso, nomorLabel: label, labelType: 'Bonggolan', labelTypeCode: 'bonggolan',
-        jmlhSak, berat, idlokasi, blok, username, timestamp: new Date()
+        noso,
+        nomorLabel: label,
+        labelType: "Bonggolan",
+        labelTypeCode: "bonggolan",
+        jmlhSak,
+        berat,
+        idlokasi,
+        blok,
+        username,
+        timestamp: new Date(),
       };
 
-    // ======= GILINGAN =======
+      // ======= GILINGAN =======
     } else if (isGilingan) {
-      request.input('NoGilingan', sql.VarChar, label);
+      request.input("NoGilingan", sql.VarChar, label);
 
       const before = await request.query(`
         SELECT TOP 1 Blok AS BeforeBlok, IdLokasi AS BeforeIdLokasi
         FROM Gilingan WHERE NoGilingan=@NoGilingan
       `);
       const beforeBlok = before.recordset?.[0]?.BeforeBlok ?? null;
-      const beforeId   = before.recordset?.[0]?.BeforeIdLokasi ?? null;
+      const beforeId = before.recordset?.[0]?.BeforeIdLokasi ?? null;
 
       await request.query(`
         INSERT INTO StockOpnameHasilGilingan
@@ -2714,33 +2985,45 @@ async function insertStockOpnameLabel({
         SET Blok=@blok, IdLokasi=@idlokasi
         WHERE NoGilingan=@NoGilingan
       `);
-      if (upd.rowsAffected?.[0] === 0) throw new Error('NoGilingan tidak ditemukan di tabel Gilingan');
+      if (upd.rowsAffected?.[0] === 0)
+        throw new Error("NoGilingan tidak ditemukan di tabel Gilingan");
 
       if (beforeBlok !== blok || Number(beforeId) !== Number(idlokasi)) {
         await insertLogMappingLokasi({
-          runner: tx, noLabel: label,
-          beforeBlok, beforeIdLokasi: beforeId,
-          afterBlok: blok, afterIdLokasi: idlokasi,
+          runner: tx,
+          noLabel: label,
+          beforeBlok,
+          beforeIdLokasi: beforeId,
+          afterBlok: blok,
+          afterIdLokasi: idlokasi,
           idUsername: idUsername ?? null,
           isSO: 1,
         });
       }
 
       insertedData = {
-        noso, nomorLabel: label, labelType: 'Gilingan', labelTypeCode: 'gilingan',
-        jmlhSak, berat, idlokasi, blok, username, timestamp: new Date()
+        noso,
+        nomorLabel: label,
+        labelType: "Gilingan",
+        labelTypeCode: "gilingan",
+        jmlhSak,
+        berat,
+        idlokasi,
+        blok,
+        username,
+        timestamp: new Date(),
       };
 
-    // ======= MIXER =======
+      // ======= MIXER =======
     } else if (isMixer) {
-      request.input('NoMixer', sql.VarChar, label);
+      request.input("NoMixer", sql.VarChar, label);
 
       const before = await request.query(`
         SELECT TOP 1 Blok AS BeforeBlok, IdLokasi AS BeforeIdLokasi
         FROM Mixer_h WHERE NoMixer=@NoMixer
       `);
       const beforeBlok = before.recordset?.[0]?.BeforeBlok ?? null;
-      const beforeId   = before.recordset?.[0]?.BeforeIdLokasi ?? null;
+      const beforeId = before.recordset?.[0]?.BeforeIdLokasi ?? null;
 
       await request.query(`
         INSERT INTO StockOpnameHasilMixer
@@ -2753,33 +3036,45 @@ async function insertStockOpnameLabel({
         SET Blok=@blok, IdLokasi=@idlokasi
         WHERE NoMixer=@NoMixer
       `);
-      if (upd.rowsAffected?.[0] === 0) throw new Error('NoMixer tidak ditemukan di Mixer_h');
+      if (upd.rowsAffected?.[0] === 0)
+        throw new Error("NoMixer tidak ditemukan di Mixer_h");
 
       if (beforeBlok !== blok || Number(beforeId) !== Number(idlokasi)) {
         await insertLogMappingLokasi({
-          runner: tx, noLabel: label,
-          beforeBlok, beforeIdLokasi: beforeId,
-          afterBlok: blok, afterIdLokasi: idlokasi,
+          runner: tx,
+          noLabel: label,
+          beforeBlok,
+          beforeIdLokasi: beforeId,
+          afterBlok: blok,
+          afterIdLokasi: idlokasi,
           idUsername: idUsername ?? null,
           isSO: 1,
         });
       }
 
       insertedData = {
-        noso, nomorLabel: label, labelType: 'Mixer', labelTypeCode: 'mixer',
-        jmlhSak, berat, idlokasi, blok, username, timestamp: new Date()
+        noso,
+        nomorLabel: label,
+        labelType: "Mixer",
+        labelTypeCode: "mixer",
+        jmlhSak,
+        berat,
+        idlokasi,
+        blok,
+        username,
+        timestamp: new Date(),
       };
 
-    // ======= FURNITURE WIP =======
+      // ======= FURNITURE WIP =======
     } else if (isFurnitureWIP) {
-      request.input('NoFurnitureWIP', sql.VarChar, label);
+      request.input("NoFurnitureWIP", sql.VarChar, label);
 
       const before = await request.query(`
         SELECT TOP 1 Blok AS BeforeBlok, IdLokasi AS BeforeIdLokasi
         FROM FurnitureWIP WHERE NoFurnitureWIP=@NoFurnitureWIP
       `);
       const beforeBlok = before.recordset?.[0]?.BeforeBlok ?? null;
-      const beforeId   = before.recordset?.[0]?.BeforeIdLokasi ?? null;
+      const beforeId = before.recordset?.[0]?.BeforeIdLokasi ?? null;
 
       await request.query(`
         INSERT INTO StockOpnameHasilFurnitureWIP
@@ -2792,33 +3087,45 @@ async function insertStockOpnameLabel({
         SET Blok=@blok, IdLokasi=@idlokasi
         WHERE NoFurnitureWIP=@NoFurnitureWIP
       `);
-      if (upd.rowsAffected?.[0] === 0) throw new Error('NoFurnitureWIP tidak ditemukan di tabel FurnitureWIP');
+      if (upd.rowsAffected?.[0] === 0)
+        throw new Error("NoFurnitureWIP tidak ditemukan di tabel FurnitureWIP");
 
       if (beforeBlok !== blok || Number(beforeId) !== Number(idlokasi)) {
         await insertLogMappingLokasi({
-          runner: tx, noLabel: label,
-          beforeBlok, beforeIdLokasi: beforeId,
-          afterBlok: blok, afterIdLokasi: idlokasi,
+          runner: tx,
+          noLabel: label,
+          beforeBlok,
+          beforeIdLokasi: beforeId,
+          afterBlok: blok,
+          afterIdLokasi: idlokasi,
           idUsername: idUsername ?? null,
           isSO: 1,
         });
       }
 
       insertedData = {
-        noso, nomorLabel: label, labelType: 'Furniture WIP', labelTypeCode: 'furniturewip',
-        jmlhSak, berat, idlokasi, blok, username, timestamp: new Date()
+        noso,
+        nomorLabel: label,
+        labelType: "Furniture WIP",
+        labelTypeCode: "furniturewip",
+        jmlhSak,
+        berat,
+        idlokasi,
+        blok,
+        username,
+        timestamp: new Date(),
       };
 
-    // ======= BARANG JADI =======
+      // ======= BARANG JADI =======
     } else if (isBarangJadi) {
-      request.input('NoBJ', sql.VarChar, label);
+      request.input("NoBJ", sql.VarChar, label);
 
       const before = await request.query(`
         SELECT TOP 1 Blok AS BeforeBlok, IdLokasi AS BeforeIdLokasi
         FROM BarangJadi WHERE NoBJ=@NoBJ
       `);
       const beforeBlok = before.recordset?.[0]?.BeforeBlok ?? null;
-      const beforeId   = before.recordset?.[0]?.BeforeIdLokasi ?? null;
+      const beforeId = before.recordset?.[0]?.BeforeIdLokasi ?? null;
 
       await request.query(`
         INSERT INTO StockOpnameHasilBarangJadi
@@ -2831,33 +3138,45 @@ async function insertStockOpnameLabel({
         SET Blok=@blok, IdLokasi=@idlokasi
         WHERE NoBJ=@NoBJ
       `);
-      if (upd.rowsAffected?.[0] === 0) throw new Error('NoBJ tidak ditemukan di tabel BarangJadi');
+      if (upd.rowsAffected?.[0] === 0)
+        throw new Error("NoBJ tidak ditemukan di tabel BarangJadi");
 
       if (beforeBlok !== blok || Number(beforeId) !== Number(idlokasi)) {
         await insertLogMappingLokasi({
-          runner: tx, noLabel: label,
-          beforeBlok, beforeIdLokasi: beforeId,
-          afterBlok: blok, afterIdLokasi: idlokasi,
+          runner: tx,
+          noLabel: label,
+          beforeBlok,
+          beforeIdLokasi: beforeId,
+          afterBlok: blok,
+          afterIdLokasi: idlokasi,
           idUsername: idUsername ?? null,
           isSO: 1,
         });
       }
 
       insertedData = {
-        noso, nomorLabel: label, labelType: 'Barang Jadi', labelTypeCode: 'barangjadi',
-        jmlhSak, berat, idlokasi, blok, username, timestamp: new Date()
+        noso,
+        nomorLabel: label,
+        labelType: "Barang Jadi",
+        labelTypeCode: "barangjadi",
+        jmlhSak,
+        berat,
+        idlokasi,
+        blok,
+        username,
+        timestamp: new Date(),
       };
 
-    // ======= REJECT =======
+      // ======= REJECT =======
     } else if (isReject) {
-      request.input('NoReject', sql.VarChar, label);
+      request.input("NoReject", sql.VarChar, label);
 
       const before = await request.query(`
         SELECT TOP 1 Blok AS BeforeBlok, IdLokasi AS BeforeIdLokasi
         FROM RejectV2 WHERE NoReject=@NoReject
       `);
       const beforeBlok = before.recordset?.[0]?.BeforeBlok ?? null;
-      const beforeId   = before.recordset?.[0]?.BeforeIdLokasi ?? null;
+      const beforeId = before.recordset?.[0]?.BeforeIdLokasi ?? null;
 
       await request.query(`
         INSERT INTO StockOpnameHasilReject
@@ -2870,25 +3189,38 @@ async function insertStockOpnameLabel({
         SET Blok=@blok, IdLokasi=@idlokasi
         WHERE NoReject=@NoReject
       `);
-      if (upd.rowsAffected?.[0] === 0) throw new Error('NoReject tidak ditemukan di tabel RejectV2');
+      if (upd.rowsAffected?.[0] === 0)
+        throw new Error("NoReject tidak ditemukan di tabel RejectV2");
 
       if (beforeBlok !== blok || Number(beforeId) !== Number(idlokasi)) {
         await insertLogMappingLokasi({
-          runner: tx, noLabel: label,
-          beforeBlok, beforeIdLokasi: beforeId,
-          afterBlok: blok, afterIdLokasi: idlokasi,
+          runner: tx,
+          noLabel: label,
+          beforeBlok,
+          beforeIdLokasi: beforeId,
+          afterBlok: blok,
+          afterIdLokasi: idlokasi,
           idUsername: idUsername ?? null,
           isSO: 1,
         });
       }
 
       insertedData = {
-        noso, nomorLabel: label, labelType: 'Reject', labelTypeCode: 'reject',
-        jmlhSak, berat, idlokasi, blok, username, timestamp: new Date()
+        noso,
+        nomorLabel: label,
+        labelType: "Reject",
+        labelTypeCode: "reject",
+        jmlhSak,
+        berat,
+        idlokasi,
+        blok,
+        username,
+        timestamp: new Date(),
       };
-
     } else {
-      throw new Error('Kode label tidak dikenali. Valid: A., B., D., F., M., V., H., BB., BA., BF.');
+      throw new Error(
+        "Kode label tidak dikenali. Valid: A., B., D., F., M., V., H., BB., BA., BF.",
+      );
     }
 
     // selesai OK → commit
@@ -2896,30 +3228,27 @@ async function insertStockOpnameLabel({
 
     // broadcast (di luar trx)
     if (global.io) {
-      global.io.emit('label_inserted', insertedData);
+      global.io.emit("label_inserted", insertedData);
     }
 
-    return { success: true, message: 'Label berhasil disimpan dan lokasi diperbarui' };
-
+    return {
+      success: true,
+      message: "Label berhasil disimpan dan lokasi diperbarui",
+    };
   } catch (err) {
     await tx.rollback();
     throw err;
   }
 }
 
-
-
 //////////////////////////
 ////ASCEND SERVICES//////
 ////////////////////////
 
-
 async function getStockOpnameFamilies(noSO) {
   try {
     const pool = await poolPromise;
-    const result = await pool.request()
-      .input('noSO', sql.VarChar, noSO)
-      .query(`
+    const result = await pool.request().input("noSO", sql.VarChar, noSO).query(`
         SELECT 
           f.NoSO,
           f.CategoryID,
@@ -2928,7 +3257,7 @@ async function getStockOpnameFamilies(noSO) {
           COUNT(s.ItemID) AS TotalItem,
           COUNT(DISTINCT sh.ItemID) AS CompleteItem
         FROM [dbo].[StockOpnameAscend_dFamily] f
-        LEFT JOIN [AS_GSU_2022].[dbo].[IC_StockFamily] sf 
+        LEFT JOIN [AS_GSU].[dbo].[IC_StockFamily] sf 
                ON f.FamilyID = sf.FamilyID
         LEFT JOIN [dbo].[StockOpnameAscend] s 
                ON f.NoSO = s.NoSO 
@@ -2946,41 +3275,42 @@ async function getStockOpnameFamilies(noSO) {
       return null;
     }
 
-    return result.recordset.map(({ 
-      NoSO, 
-      CategoryID, 
-      FamilyID, 
-      FamilyName, 
-      TotalItem, 
-      CompleteItem 
-    }) => ({
-      NoSO,
-      CategoryID,
-      FamilyID,
-      FamilyName,
-      TotalItem,
-      CompleteItem
-    }));
+    return result.recordset.map(
+      ({
+        NoSO,
+        CategoryID,
+        FamilyID,
+        FamilyName,
+        TotalItem,
+        CompleteItem,
+      }) => ({
+        NoSO,
+        CategoryID,
+        FamilyID,
+        FamilyName,
+        TotalItem,
+        CompleteItem,
+      }),
+    );
   } catch (err) {
     throw new Error(`Stock Opname Family Service Error: ${err.message}`);
   }
 }
 
-
 async function getStockOpnameAscendData({ noSO, familyID, keyword }) {
   try {
     const pool = await poolPromise;
-    const result = await pool.request()
-      .input('noSO', sql.VarChar, noSO)
-      .input('familyID', sql.VarChar, familyID)
-      .input('keyword', sql.VarChar, `%${keyword || ''}%`)
-      .query(`
+    const result = await pool
+      .request()
+      .input("noSO", sql.VarChar, noSO)
+      .input("familyID", sql.VarChar, familyID)
+      .input("keyword", sql.VarChar, `%${keyword || ""}%`).query(`
         -- Agregasi shelf per ItemID agar tidak menduplikasi baris
         WITH ShelfPerItem AS (
           SELECT
             iwd.ItemID,
             STRING_AGG(LTRIM(RTRIM(iwd.ShelfCode)), ', ') WITHIN GROUP (ORDER BY LTRIM(RTRIM(iwd.ShelfCode))) AS ShelfCodes
-          FROM [AS_GSU_2022].[dbo].[IC_ItemWarehouseDetails] iwd
+          FROM [AS_GSU].[dbo].[IC_ItemWarehouseDetails] iwd
           WHERE iwd.ShelfCode IS NOT NULL AND LTRIM(RTRIM(iwd.ShelfCode)) <> ''
           GROUP BY iwd.ItemID
         )
@@ -2996,7 +3326,7 @@ async function getStockOpnameAscendData({ noSO, familyID, keyword }) {
           sh.IsUpdateUsage,
           spi.ShelfCodes AS ShelfCode
         FROM [dbo].[StockOpnameAscend] so
-        LEFT JOIN [AS_GSU_2022].[dbo].[IC_Items] it 
+        LEFT JOIN [AS_GSU].[dbo].[IC_Items] it 
                ON so.ItemID = it.ItemID
         LEFT JOIN [dbo].[StockOpnameAscendHasil] sh 
                ON so.NoSO = sh.NoSO 
@@ -3013,7 +3343,7 @@ async function getStockOpnameAscendData({ noSO, familyID, keyword }) {
       return [];
     }
 
-    return result.recordset.map(row => ({
+    return result.recordset.map((row) => ({
       NoSO: row.NoSO,
       ItemID: row.ItemID,
       ItemCode: row.ItemCode,
@@ -3023,44 +3353,42 @@ async function getStockOpnameAscendData({ noSO, familyID, keyword }) {
       QtyFisik: row.QtyFisik !== null ? row.QtyFisik : null,
       QtyUsage: row.QtyUsage !== null ? row.QtyUsage : -1.0,
       UsageRemark: row.UsageRemark,
-      IsUpdateUsage: row.IsUpdateUsage
+      IsUpdateUsage: row.IsUpdateUsage,
     }));
   } catch (err) {
     throw new Error(`Stock Opname Ascend Service Error: ${err.message}`);
   }
 }
 
-
 async function saveStockOpnameAscendHasil(noSO, dataList) {
   let transaction;
   try {
-    console.log('🟢 Start saveStockOpnameAscendHasil');
-    console.log('➡️ noSO:', noSO);
-    console.log('➡️ dataList length:', dataList?.length);
+    console.log("🟢 Start saveStockOpnameAscendHasil");
+    console.log("➡️ noSO:", noSO);
+    console.log("➡️ dataList length:", dataList?.length);
 
     const pool = await poolPromise;
     transaction = new sql.Transaction(pool);
     await transaction.begin();
-    console.log('✅ Transaction started');
+    console.log("✅ Transaction started");
 
     for (const [index, data] of dataList.entries()) {
       console.log(`\n🔹 Processing item ${index + 1}:`, data);
 
       // Skip kalau qtyFound kosong
       if (data.qtyFound === null || data.qtyFound === undefined) {
-        console.log('⏭️ Skipped karena qtyFound null/undefined');
+        console.log("⏭️ Skipped karena qtyFound null/undefined");
         continue;
       }
 
       const request = new sql.Request(transaction);
       const result = await request
-        .input('NoSO', sql.VarChar, noSO)
-        .input('ItemID', sql.Int, data.itemId)
-        .input('QtyFisik', sql.Decimal(18, 6), data.qtyFound)
-        .input('QtyUsage', sql.Decimal(18, 6), data.qtyUsage)
-        .input('UsageRemark', sql.VarChar, data.usageRemark || '')
-        .input('IsUpdateUsage', sql.Bit, 1)
-        .query(`
+        .input("NoSO", sql.VarChar, noSO)
+        .input("ItemID", sql.Int, data.itemId)
+        .input("QtyFisik", sql.Decimal(18, 6), data.qtyFound)
+        .input("QtyUsage", sql.Decimal(18, 6), data.qtyUsage)
+        .input("UsageRemark", sql.VarChar, data.usageRemark || "")
+        .input("IsUpdateUsage", sql.Bit, 1).query(`
           MERGE [dbo].[StockOpnameAscendHasil] AS target
           USING (SELECT 
                     @NoSO AS NoSO, 
@@ -3080,27 +3408,31 @@ async function saveStockOpnameAscendHasil(noSO, dataList) {
             VALUES (source.NoSO, source.ItemID, source.QtyFisik, source.QtyUsage, source.UsageRemark, source.IsUpdateUsage);
         `);
 
-      console.log(`✅ Query executed for itemId=${data.itemId}, rowsAffected:`, result.rowsAffected);
+      console.log(
+        `✅ Query executed for itemId=${data.itemId}, rowsAffected:`,
+        result.rowsAffected,
+      );
     }
 
     await transaction.commit();
-    console.log('💾 Transaction committed');
-    return { success: true, message: 'Data StockOpnameAscendHasil berhasil disimpan/diupdate' };
+    console.log("💾 Transaction committed");
+    return {
+      success: true,
+      message: "Data StockOpnameAscendHasil berhasil disimpan/diupdate",
+    };
   } catch (err) {
     if (transaction) {
       try {
         await transaction.rollback();
-        console.error('↩️ Transaction rolled back');
+        console.error("↩️ Transaction rolled back");
       } catch (rollbackErr) {
-        console.error('❌ Rollback gagal:', rollbackErr.message);
+        console.error("❌ Rollback gagal:", rollbackErr.message);
       }
     }
-    console.error('❌ Error saat saveStockOpnameAscendHasil:', err.message);
+    console.error("❌ Error saat saveStockOpnameAscendHasil:", err.message);
     throw new Error(`Stock Opname Ascend Save Service Error: ${err.message}`);
   }
 }
-
-
 
 /**
  * Mengambil hasil kalkulasi stok lengkap untuk suatu ItemID, tanggal, dan daftar Warehouse.
@@ -3113,7 +3445,7 @@ async function saveStockOpnameAscendHasil(noSO, dataList) {
 async function fetchQtyUsage(itemId, tglSO, widsCsv) {
   try {
     // Pastikan widsCsv disediakan dan bukan string kosong
-    if (!widsCsv || typeof widsCsv !== 'string') {
+    if (!widsCsv || typeof widsCsv !== "string") {
       throw new Error("Parameter widsCsv (Daftar ID Gudang) harus disediakan.");
     }
 
@@ -3122,9 +3454,9 @@ async function fetchQtyUsage(itemId, tglSO, widsCsv) {
 
     // 1. Menambahkan input untuk WIDsCsv (Warehouse IDs)
     const result = await request
-      .input('ItemID', sql.Int, itemId)       // Target Item ID
-      .input('StartDate', sql.Date, tglSO)    // Tanggal awal (>=)
-      .input('WIDsCsv', sql.VarChar, widsCsv) // Daftar Warehouse ID (CSV string)
+      .input("ItemID", sql.Int, itemId) // Target Item ID
+      .input("StartDate", sql.Date, tglSO) // Tanggal awal (>=)
+      .input("WIDsCsv", sql.VarChar, widsCsv) // Daftar Warehouse ID (CSV string)
       .query(`
         -- Query SQL Lengkap (Sudah Termasuk Filter Gudang dan Perbaikan PackingX)
         SELECT
@@ -3155,16 +3487,16 @@ async function fetchQtyUsage(itemId, tglSO, widsCsv) {
                    ISNULL(KK.QtySls, 0) AS GDN
             FROM (
                 SELECT I.ItemID, I.ItemCode
-                FROM [AS_GSU_2022].[dbo].[IC_Items] I
+                FROM [AS_GSU].[dbo].[IC_Items] I
                 WHERE I.Disabled = 0 AND I.ItemType = 0
             ) AA
             -- Subquery BB: QtyPrcIn (Pembelian Masuk)
             LEFT JOIN (
                 SELECT D.ItemID,
-                       SUM([AS_GSU_2022].[dbo].[UDF_Common_ConvertToSmallestUOMEx](I.Packing2, I.Packing3, I.Packing4, Quantity, UOMLevel)) AS QtyPrcIn
-                FROM [AS_GSU_2022].[dbo].[AP_PurchaseDetails] D
-                JOIN [AS_GSU_2022].[dbo].[AP_Purchases] P ON P.PurchaseID = D.PurchaseID
-                INNER JOIN [AS_GSU_2022].[dbo].[IC_Items] I ON I.ItemID = D.ItemID
+                       SUM([AS_GSU].[dbo].[UDF_Common_ConvertToSmallestUOMEx](I.Packing2, I.Packing3, I.Packing4, Quantity, UOMLevel)) AS QtyPrcIn
+                FROM [AS_GSU].[dbo].[AP_PurchaseDetails] D
+                JOIN [AS_GSU].[dbo].[AP_Purchases] P ON P.PurchaseID = D.PurchaseID
+                INNER JOIN [AS_GSU].[dbo].[IC_Items] I ON I.ItemID = D.ItemID
                 WHERE P.PurchaseDate >= @StartDate AND P.Void = 0 AND IsPurchase = 1
                   AND D.WAREHOUSEID IN (SELECT CAST([value] AS INT) FROM STRING_SPLIT(@WIDsCsv, ',')) -- FILTER GUDANG
                 GROUP BY D.ItemID
@@ -3172,10 +3504,10 @@ async function fetchQtyUsage(itemId, tglSO, widsCsv) {
             -- Subquery CC: QtyUsg (Penggunaan)
             LEFT JOIN (
                 SELECT U.ItemID,
-                       SUM([AS_GSU_2022].[dbo].[UDF_Common_ConvertToSmallestUOMEx](I.Packing2, I.Packing3, I.Packing4, Quantity, UOMLevel)) AS QtyUsg
-                FROM [AS_GSU_2022].[dbo].[IC_UsageDetails] U
-                JOIN [AS_GSU_2022].[dbo].[IC_Usages] UH ON UH.UsageID = U.UsageID
-                INNER JOIN [AS_GSU_2022].[dbo].[IC_Items] I ON I.ItemID = U.ItemID
+                       SUM([AS_GSU].[dbo].[UDF_Common_ConvertToSmallestUOMEx](I.Packing2, I.Packing3, I.Packing4, Quantity, UOMLevel)) AS QtyUsg
+                FROM [AS_GSU].[dbo].[IC_UsageDetails] U
+                JOIN [AS_GSU].[dbo].[IC_Usages] UH ON UH.UsageID = U.UsageID
+                INNER JOIN [AS_GSU].[dbo].[IC_Items] I ON I.ItemID = U.ItemID
                 WHERE UH.UsageDate >= @StartDate AND UH.Void = 0 AND UH.Approved = 1
                   AND U.WAREHOUSEID IN (SELECT CAST([value] AS INT) FROM STRING_SPLIT(@WIDsCsv, ',')) -- FILTER GUDANG
                 GROUP BY U.ItemID
@@ -3183,10 +3515,10 @@ async function fetchQtyUsage(itemId, tglSO, widsCsv) {
             -- Subquery DD: QtyUbb (Penyesuaian)
             LEFT JOIN (
                 SELECT U.ItemID,
-                       SUM([AS_GSU_2022].[dbo].[UDF_Common_ConvertToSmallestUOMEx](I.Packing2, I.Packing3, I.Packing4, QtyAdjustBy, UOMLevel)) AS QtyUsg
-                FROM [AS_GSU_2022].[dbo].[IC_AdjustmentDetails] U
-                JOIN [AS_GSU_2022].[dbo].[IC_Adjustments] UH ON UH.AdjustmentID = U.AdjustmentID
-                INNER JOIN [AS_GSU_2022].[dbo].[IC_Items] I ON I.ItemID = U.ItemID
+                       SUM([AS_GSU].[dbo].[UDF_Common_ConvertToSmallestUOMEx](I.Packing2, I.Packing3, I.Packing4, QtyAdjustBy, UOMLevel)) AS QtyUsg
+                FROM [AS_GSU].[dbo].[IC_AdjustmentDetails] U
+                JOIN [AS_GSU].[dbo].[IC_Adjustments] UH ON UH.AdjustmentID = U.AdjustmentID
+                INNER JOIN [AS_GSU].[dbo].[IC_Items] I ON I.ItemID = U.ItemID
                 WHERE UH.AdjustmentDate >= @StartDate AND UH.Void = 0 AND UH.Approved = 1
                   AND U.WAREHOUSEID IN (SELECT CAST([value] AS INT) FROM STRING_SPLIT(@WIDsCsv, ',')) -- FILTER GUDANG
                 GROUP BY U.ItemID
@@ -3194,10 +3526,10 @@ async function fetchQtyUsage(itemId, tglSO, widsCsv) {
             -- Subquery EE: QtySls (Penjualan - AR Invoice)
             LEFT JOIN (
                 SELECT U.ItemID,
-                       SUM([AS_GSU_2022].[dbo].[UDF_Common_ConvertToSmallestUOMEx](I.Packing2, I.Packing3, I.Packing4, Quantity, UOMLevel)) AS QtySls
-                FROM [AS_GSU_2022].[dbo].[AR_InvoiceDetails] U
-                JOIN [AS_GSU_2022].[dbo].[AR_Invoices] UH ON UH.InvoiceID = U.InvoiceID
-                INNER JOIN [AS_GSU_2022].[dbo].[IC_Items] I ON I.ItemID = U.ItemID
+                       SUM([AS_GSU].[dbo].[UDF_Common_ConvertToSmallestUOMEx](I.Packing2, I.Packing3, I.Packing4, Quantity, UOMLevel)) AS QtySls
+                FROM [AS_GSU].[dbo].[AR_InvoiceDetails] U
+                JOIN [AS_GSU].[dbo].[AR_Invoices] UH ON UH.InvoiceID = U.InvoiceID
+                INNER JOIN [AS_GSU].[dbo].[IC_Items] I ON I.ItemID = U.ItemID
                 WHERE UH.InvoiceDate >= @StartDate AND UH.Void = 0 AND IsInvoice = 1 AND IsDO = 0
                   AND U.WAREHOUSEID IN (SELECT CAST([value] AS INT) FROM STRING_SPLIT(@WIDsCsv, ',')) -- FILTER GUDANG
                 GROUP BY U.ItemID
@@ -3205,10 +3537,10 @@ async function fetchQtyUsage(itemId, tglSO, widsCsv) {
             -- Subquery FF: QtyPR (Return Pembelian / Non-Purchase)
             LEFT JOIN (
                 SELECT D.ItemID,
-                       SUM([AS_GSU_2022].[dbo].[UDF_Common_ConvertToSmallestUOMEx](I.Packing2, I.Packing3, I.Packing4, Quantity, UOMLevel)) AS QtyPrcOut
-                FROM [AS_GSU_2022].[dbo].[AP_PurchaseDetails] D
-                JOIN [AS_GSU_2022].[dbo].[AP_Purchases] P ON P.PurchaseID = D.PurchaseID
-                INNER JOIN [AS_GSU_2022].[dbo].[IC_Items] I ON I.ItemID = D.ItemID
+                       SUM([AS_GSU].[dbo].[UDF_Common_ConvertToSmallestUOMEx](I.Packing2, I.Packing3, I.Packing4, Quantity, UOMLevel)) AS QtyPrcOut
+                FROM [AS_GSU].[dbo].[AP_PurchaseDetails] D
+                JOIN [AS_GSU].[dbo].[AP_Purchases] P ON P.PurchaseID = D.PurchaseID
+                INNER JOIN [AS_GSU].[dbo].[IC_Items] I ON I.ItemID = D.ItemID
                 WHERE P.PurchaseDate >= @StartDate AND P.Void = 0 AND IsPurchase = 0
                   AND D.WAREHOUSEID IN (SELECT CAST([value] AS INT) FROM STRING_SPLIT(@WIDsCsv, ',')) -- FILTER GUDANG
                 GROUP BY D.ItemID
@@ -3216,10 +3548,10 @@ async function fetchQtyUsage(itemId, tglSO, widsCsv) {
             -- Subquery GG: QtyRTR (Return Penjualan / Non-Invoice)
             LEFT JOIN (
                 SELECT U.ItemID,
-                       SUM([AS_GSU_2022].[dbo].[UDF_Common_ConvertToSmallestUOMEx](I.Packing2, I.Packing3, I.Packing4, Quantity, UOMLevel)) AS QtySlsRT
-                FROM [AS_GSU_2022].[dbo].[AR_InvoiceDetails] U
-                inner JOIN [AS_GSU_2022].[dbo].[AR_Invoices] UH ON UH.InvoiceID = U.InvoiceID
-                INNER JOIN [AS_GSU_2022].[dbo].[IC_Items] I ON I.ItemID = U.ItemID
+                       SUM([AS_GSU].[dbo].[UDF_Common_ConvertToSmallestUOMEx](I.Packing2, I.Packing3, I.Packing4, Quantity, UOMLevel)) AS QtySlsRT
+                FROM [AS_GSU].[dbo].[AR_InvoiceDetails] U
+                inner JOIN [AS_GSU].[dbo].[AR_Invoices] UH ON UH.InvoiceID = U.InvoiceID
+                INNER JOIN [AS_GSU].[dbo].[IC_Items] I ON I.ItemID = U.ItemID
                 WHERE UH.InvoiceDate >= @StartDate AND UH.Void = 0 AND IsInvoice = 0
                   AND WAREHOUSEID IN (SELECT CAST([value] AS INT) FROM STRING_SPLIT(@WIDsCsv, ',')) -- FILTER GUDANG
                 GROUP BY U.ItemID
@@ -3227,10 +3559,10 @@ async function fetchQtyUsage(itemId, tglSO, widsCsv) {
             -- Subquery HH: QtyAssm (Assembly Material)
             LEFT JOIN (
                 SELECT U.MaterialItemID,
-                       SUM([AS_GSU_2022].[dbo].[UDF_Common_ConvertToSmallestUOMEx](I.Packing2, I.Packing3, I.Packing4, Quantity, UOMLevel)) AS QtySlsRT
-                FROM [AS_GSU_2022].[dbo].[IC_AssemblyDetails] U
-                inner JOIN [AS_GSU_2022].[dbo].[IC_Assembly] UH ON UH.AssemblyID = U.AssemblyID
-                INNER JOIN [AS_GSU_2022].[dbo].[IC_Items] I ON I.ItemID = U.MaterialItemID
+                       SUM([AS_GSU].[dbo].[UDF_Common_ConvertToSmallestUOMEx](I.Packing2, I.Packing3, I.Packing4, Quantity, UOMLevel)) AS QtySlsRT
+                FROM [AS_GSU].[dbo].[IC_AssemblyDetails] U
+                inner JOIN [AS_GSU].[dbo].[IC_Assembly] UH ON UH.AssemblyID = U.AssemblyID
+                INNER JOIN [AS_GSU].[dbo].[IC_Items] I ON I.ItemID = U.MaterialItemID
                 WHERE UH.AssemblyDate >= @StartDate AND UH.Void = 0
                   AND WAREHOUSEID IN (SELECT CAST([value] AS INT) FROM STRING_SPLIT(@WIDsCsv, ',')) -- FILTER GUDANG
                 GROUP BY U.MaterialItemID
@@ -3238,10 +3570,10 @@ async function fetchQtyUsage(itemId, tglSO, widsCsv) {
             -- Subquery II: TRFIN (Transfer In)
             LEFT JOIN (
                 SELECT D.ItemID,
-                       SUM([AS_GSU_2022].[dbo].[UDF_Common_ConvertToSmallestUOMEx](I.Packing2, I.Packing3, I.Packing4, Quantity, UOMLevel)) AS TRFIN
-                FROM [AS_GSU_2022].[dbo].[IC_MutationDetails] D
-                JOIN [AS_GSU_2022].[dbo].[IC_Mutations] P ON P.MutationID = D.MutationID
-                INNER JOIN [AS_GSU_2022].[dbo].[IC_Items] I ON I.ItemID = D.ItemID
+                       SUM([AS_GSU].[dbo].[UDF_Common_ConvertToSmallestUOMEx](I.Packing2, I.Packing3, I.Packing4, Quantity, UOMLevel)) AS TRFIN
+                FROM [AS_GSU].[dbo].[IC_MutationDetails] D
+                JOIN [AS_GSU].[dbo].[IC_Mutations] P ON P.MutationID = D.MutationID
+                INNER JOIN [AS_GSU].[dbo].[IC_Items] I ON I.ItemID = D.ItemID
                 WHERE P.MutationDate >= @StartDate AND P.Void = 0
                   AND DestinationWarehouseID IN (SELECT CAST([value] AS INT) FROM STRING_SPLIT(@WIDsCsv, ',')) -- FILTER GUDANG
                 GROUP BY D.ItemID
@@ -3249,10 +3581,10 @@ async function fetchQtyUsage(itemId, tglSO, widsCsv) {
             -- Subquery JJ: TRFOUT (Transfer Out)
             LEFT JOIN (
                 SELECT D.ItemID,
-                       SUM([AS_GSU_2022].[dbo].[UDF_Common_ConvertToSmallestUOMEx](I.Packing2, I.Packing3, I.Packing4, Quantity, UOMLevel)) AS TRFOUT
-                FROM [AS_GSU_2022].[dbo].[IC_MutationDetails] D
-                JOIN [AS_GSU_2022].[dbo].[IC_Mutations] P ON P.MutationID = D.MutationID
-                INNER JOIN [AS_GSU_2022].[dbo].[IC_Items] I ON I.ItemID = D.ItemID
+                       SUM([AS_GSU].[dbo].[UDF_Common_ConvertToSmallestUOMEx](I.Packing2, I.Packing3, I.Packing4, Quantity, UOMLevel)) AS TRFOUT
+                FROM [AS_GSU].[dbo].[IC_MutationDetails] D
+                JOIN [AS_GSU].[dbo].[IC_Mutations] P ON P.MutationID = D.MutationID
+                INNER JOIN [AS_GSU].[dbo].[IC_Items] I ON I.ItemID = D.ItemID
                 WHERE P.MutationDate >= @StartDate AND P.Void = 0
                   AND SourceWarehouseID IN (SELECT CAST([value] AS INT) FROM STRING_SPLIT(@WIDsCsv, ',')) -- FILTER GUDANG
                 GROUP BY D.ItemID
@@ -3260,10 +3592,10 @@ async function fetchQtyUsage(itemId, tglSO, widsCsv) {
             -- Subquery KK: GDN (Goods Delivery Note)
             LEFT JOIN (
                 SELECT U.ItemID,
-                       SUM([AS_GSU_2022].[dbo].[UDF_Common_ConvertToSmallestUOMEx](I.Packing2, I.Packing3, I.Packing4, u.Quantity, UOMLevel)) AS QtySls
-                FROM [AS_GSU_2022].[dbo].[AR_GoodsDeliveryNoteDetails] U
-                inner JOIN [AS_GSU_2022].[dbo].[AR_GoodsDeliveryNotes] UH ON UH.GoodsDeliveryNoteID = U.GoodsDeliveryNoteID
-                INNER JOIN [AS_GSU_2022].[dbo].[IC_Items] I ON I.ItemID = U.ItemID
+                       SUM([AS_GSU].[dbo].[UDF_Common_ConvertToSmallestUOMEx](I.Packing2, I.Packing3, I.Packing4, u.Quantity, UOMLevel)) AS QtySls
+                FROM [AS_GSU].[dbo].[AR_GoodsDeliveryNoteDetails] U
+                inner JOIN [AS_GSU].[dbo].[AR_GoodsDeliveryNotes] UH ON UH.GoodsDeliveryNoteID = U.GoodsDeliveryNoteID
+                INNER JOIN [AS_GSU].[dbo].[IC_Items] I ON I.ItemID = U.ItemID
                 WHERE UH.GoodsDeliveryNoteDate >= @StartDate AND UH.Void = 0 AND cog <> 0
                   AND WAREHOUSEID IN (SELECT CAST([value] AS INT) FROM STRING_SPLIT(@WIDsCsv, ',')) -- FILTER GUDANG
                 GROUP BY U.ItemID
@@ -3278,15 +3610,13 @@ async function fetchQtyUsage(itemId, tglSO, widsCsv) {
   }
 }
 
-
-
 async function deleteStockOpnameHasilAscend(noso, itemId) {
   try {
     const pool = await poolPromise;
     const request = pool.request();
 
-    request.input('NoSO', sql.VarChar(50), noso);
-    request.input('ItemID', sql.Int, itemId);
+    request.input("NoSO", sql.VarChar(50), noso);
+    request.input("ItemID", sql.Int, itemId);
 
     const result = await request.query(`
       DELETE FROM [dbo].[StockOpnameAscendHasil]
@@ -3295,10 +3625,11 @@ async function deleteStockOpnameHasilAscend(noso, itemId) {
 
     return { deletedCount: result.rowsAffected?.[0] ?? 0 };
   } catch (err) {
-    throw new Error(`deleteStockOpnameHasilAscend Service Error: ${err.message}`);
+    throw new Error(
+      `deleteStockOpnameHasilAscend Service Error: ${err.message}`,
+    );
   }
 }
-
 
 module.exports = {
   getNoStockOpname,
@@ -3311,5 +3642,5 @@ module.exports = {
   getStockOpnameAscendData,
   saveStockOpnameAscendHasil,
   fetchQtyUsage,
-  deleteStockOpnameHasilAscend   
+  deleteStockOpnameHasilAscend,
 };

@@ -34,7 +34,29 @@ router.post(
 // UPDATE broker header + details (+ optional outputs)
 router.put(
   "/labels/broker/:nobroker",
-  requirePermission("label_broker:update"),
+  (req, res, next) => {
+    const perms = req.userPermissions;
+
+    if (!perms) {
+      return res
+        .status(500)
+        .json({ success: false, message: "Permissions not attached" });
+    }
+
+    if (
+      perms.has("*") ||
+      perms.has("qc_label:update") ||
+      perms.has("label_broker:update")
+    ) {
+      return next();
+    }
+
+    return res.status(403).json({
+      success: false,
+      message: "Forbidden: insufficient permission",
+      requiredAnyOf: ["qc_label:update", "label_broker:update"],
+    });
+  },
   ctrl.update,
 );
 

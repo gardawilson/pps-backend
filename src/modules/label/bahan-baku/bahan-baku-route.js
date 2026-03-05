@@ -33,7 +33,29 @@ router.get(
 // PUT update pallet header by NoBahanBaku and NoPallet
 router.put(
   "/labels/bahan-baku/:nobahanbaku/pallet/:nopallet",
-  requirePermission("label_crusher:read"),
+  (req, res, next) => {
+    const perms = req.userPermissions;
+
+    if (!perms) {
+      return res
+        .status(500)
+        .json({ success: false, message: "Permissions not attached" });
+    }
+
+    if (
+      perms.has("*") ||
+      perms.has("qc_label:update") ||
+      perms.has("label_crusher:update")
+    ) {
+      return next();
+    }
+
+    return res.status(403).json({
+      success: false,
+      message: "Forbidden: insufficient permission",
+      requiredAnyOf: ["qc_label:update", "label_crusher:update"],
+    });
+  },
   ctrl.updateByNoBahanBakuAndNoPallet,
 );
 

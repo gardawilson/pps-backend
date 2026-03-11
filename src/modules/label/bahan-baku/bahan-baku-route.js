@@ -13,20 +13,20 @@ router.use(verifyToken, attachPermissions);
 // GET all (pagination + search ?page=&limit=&search=)
 router.get(
   "/labels/bahan-baku",
-  requirePermission("label_crusher:read"), // sesuaikan permission-mu
+  requirePermission("penerimaanbahanbaku:read"), // sesuaikan permission-mu
   ctrl.getAll,
 );
 
 // GET pallet list by NoBahanBaku
 router.get(
   "/labels/bahan-baku/:nobahanbaku/pallet",
-  requirePermission("label_crusher:read"),
+  requirePermission("penerimaanbahanbaku:read"),
   ctrl.getPalletByNoBahanBaku,
 );
 
 router.get(
   "/labels/bahan-baku/:nobahanbaku/pallet/:nopallet",
-  requirePermission("label_crusher:read"),
+  requirePermission("penerimaanbahanbaku:read"),
   ctrl.getDetailByNoBahanBakuAndNoPallet,
 );
 
@@ -45,7 +45,7 @@ router.put(
     if (
       perms.has("*") ||
       perms.has("qc_label:update") ||
-      perms.has("label_crusher:update")
+      perms.has("penerimaanbahanbaku:update")
     ) {
       return next();
     }
@@ -53,7 +53,7 @@ router.put(
     return res.status(403).json({
       success: false,
       message: "Forbidden: insufficient permission",
-      requiredAnyOf: ["qc_label:update", "label_crusher:update"],
+      requiredAnyOf: ["qc_label:update", "penerimaanbahanbaku:update"],
     });
   },
   ctrl.updateByNoBahanBakuAndNoPallet,
@@ -61,7 +61,7 @@ router.put(
 
 router.patch(
   "/labels/bahan-baku/:nobahanbaku/pallet/:nopallet/print",
-  requirePermission("label_crusher:update"),
+  requirePermission("penerimaanbahanbaku:update"),
   ctrl.incrementHasBeenPrinted,
 );
 

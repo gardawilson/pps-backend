@@ -6,6 +6,7 @@ const {
   getActorUsername,
   makeRequestId,
 } = require("../../../core/utils/http-context");
+const { getIo } = require("../../../core/utils/socket-instance");
 
 // GET all header broker
 exports.getAll = async (req, res) => {
@@ -268,6 +269,13 @@ exports.incrementHasBeenPrinted = async (req, res) => {
       actorId,
       requestId: makeRequestId(req),
     });
+
+    const io = getIo();
+    if (io)
+      io.emit("print_confirmed", {
+        noLabel: NoBroker,
+        hasBeenPrinted: result.HasBeenPrinted,
+      });
 
     return res.status(200).json({
       success: true,

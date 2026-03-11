@@ -5,6 +5,7 @@ const {
   getActorUsername,
   makeRequestId,
 } = require("../../../core/utils/http-context");
+const { getIo } = require("../../../core/utils/socket-instance");
 
 exports.getAll = async (req, res) => {
   try {
@@ -180,6 +181,13 @@ exports.incrementHasBeenPrinted = async (req, res) => {
       actorId,
       requestId: makeRequestId(req),
     });
+
+    const io = getIo();
+    if (io)
+      io.emit("print_confirmed", {
+        noLabel: NoBahanBaku,
+        hasBeenPrinted: result.HasBeenPrinted,
+      });
 
     return res.status(200).json({
       success: true,

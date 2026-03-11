@@ -1,7 +1,13 @@
-const { sql, poolPromise } = require('../../../core/config/db');
-const { formatDate } = require('../../../core/utils/date-helper');
+const { sql, poolPromise } = require("../../../core/config/db");
+const { formatDate } = require("../../../core/utils/date-helper");
 
-async function getAllLabels(page = 1, limit = 50, kategori = null, idlokasi = null, blok = null) {
+async function getAllLabels(
+  page = 1,
+  limit = 50,
+  kategori = null,
+  idlokasi = null,
+  blok = null,
+) {
   const pool = await poolPromise;
   const offset = (page - 1) * limit;
 
@@ -306,30 +312,50 @@ BF AS ( -- Reject (header only)
 
   let filterUnion = allUnion;
   if (kategori) {
-    switch ((kategori || '').toLowerCase()) {
-      case 'bahanbaku':    filterUnion = 'SELECT * FROM A'; break;
-      case 'washing':      filterUnion = 'SELECT * FROM B'; break;
-      case 'broker':       filterUnion = 'SELECT * FROM D'; break;
-      case 'crusher':      filterUnion = 'SELECT * FROM F'; break;
-      case 'bonggolan':    filterUnion = 'SELECT * FROM M'; break;
-      case 'gilingan':     filterUnion = 'SELECT * FROM V'; break;
-      case 'mixer':        filterUnion = 'SELECT * FROM H'; break;
-      case 'furniturewip': filterUnion = 'SELECT * FROM BB'; break;
-      case 'barangjadi':   filterUnion = 'SELECT * FROM BA'; break;
-      case 'reject':       filterUnion = 'SELECT * FROM BF'; break;
+    switch ((kategori || "").toLowerCase()) {
+      case "bahanbaku":
+        filterUnion = "SELECT * FROM A";
+        break;
+      case "washing":
+        filterUnion = "SELECT * FROM B";
+        break;
+      case "broker":
+        filterUnion = "SELECT * FROM D";
+        break;
+      case "crusher":
+        filterUnion = "SELECT * FROM F";
+        break;
+      case "bonggolan":
+        filterUnion = "SELECT * FROM M";
+        break;
+      case "gilingan":
+        filterUnion = "SELECT * FROM V";
+        break;
+      case "mixer":
+        filterUnion = "SELECT * FROM H";
+        break;
+      case "furniturewip":
+        filterUnion = "SELECT * FROM BB";
+        break;
+      case "barangjadi":
+        filterUnion = "SELECT * FROM BA";
+        break;
+      case "reject":
+        filterUnion = "SELECT * FROM BF";
+        break;
     }
   }
 
   // filter lokasi (pakai parameter agar aman)
-  let lokasiWhere = '';
+  let lokasiWhere = "";
   if (idlokasi && blok) {
-    lokasiWhere = 'WHERE IdLokasi = @IdLokasi AND Blok = @Blok';
+    lokasiWhere = "WHERE IdLokasi = @IdLokasi AND Blok = @Blok";
   } else if (idlokasi) {
-    lokasiWhere = 'WHERE IdLokasi = @IdLokasi';
+    lokasiWhere = "WHERE IdLokasi = @IdLokasi";
   } else if (blok) {
-    lokasiWhere = 'WHERE Blok = @Blok';
+    lokasiWhere = "WHERE Blok = @Blok";
   }
-  
+
   // DATA (paged)
   const dataQuery = `
 ${cte}
@@ -360,81 +386,89 @@ FROM (${filterUnion}) AS AllData
 ${lokasiWhere};
 `;
 
-  const dataReq  = pool.request();
+  const dataReq = pool.request();
   const countReq = pool.request();
-  const sumReq   = pool.request();
+  const sumReq = pool.request();
   if (idlokasi) {
-    dataReq.input('IdLokasi', sql.NVarChar, idlokasi);
-    countReq.input('IdLokasi', sql.NVarChar, idlokasi);
-    sumReq.input('IdLokasi', sql.NVarChar, idlokasi);
+    dataReq.input("IdLokasi", sql.NVarChar, idlokasi);
+    countReq.input("IdLokasi", sql.NVarChar, idlokasi);
+    sumReq.input("IdLokasi", sql.NVarChar, idlokasi);
   }
 
   if (blok) {
-    dataReq.input('Blok', sql.NVarChar(3), blok);
-    countReq.input('Blok', sql.NVarChar(3), blok);
-    sumReq.input('Blok', sql.NVarChar(3), blok);
+    dataReq.input("Blok", sql.NVarChar(3), blok);
+    countReq.input("Blok", sql.NVarChar(3), blok);
+    sumReq.input("Blok", sql.NVarChar(3), blok);
   }
 
   const [dataResult, countResult, sumResult] = await Promise.all([
     dataReq.query(dataQuery),
     countReq.query(countQuery),
-    sumReq.query(sumQuery)
+    sumReq.query(sumQuery),
   ]);
 
-  const data = dataResult.recordset.map(r => ({
+  const data = dataResult.recordset.map((r) => ({
     ...r,
-    ...(r.DateCreate && { DateCreate: formatDate(r.DateCreate) })
+    ...(r.DateCreate && { DateCreate: formatDate(r.DateCreate) }),
   }));
 
-  const total       = countResult.recordset[0]?.TotalCount || 0;
-  const totalQty    = sumResult.recordset[0]?.TotalQty || 0;
-  const totalBerat  = sumResult.recordset[0]?.TotalBerat || 0;
+  const total = countResult.recordset[0]?.TotalCount || 0;
+  const totalQty = sumResult.recordset[0]?.TotalQty || 0;
+  const totalBerat = sumResult.recordset[0]?.TotalBerat || 0;
 
   return {
     // ✅ metadata baru (lebih ramah UI)
     success: true,
-    message: `Data label${kategori ? ` (${kategori})` : ''} berhasil diambil`,
-    kategori: kategori || 'semua',
-    blok: blok || 'semua',
-    idlokasi: idlokasi || 'semua',
-    totalData: total,                 // alias dari total
-    currentPage: page,                // alias dari page
+    message: `Data label${kategori ? ` (${kategori})` : ""} berhasil diambil`,
+    kategori: kategori || "semua",
+    blok: blok || "semua",
+    idlokasi: idlokasi || "semua",
+    totalData: total, // alias dari total
+    currentPage: page, // alias dari page
     totalPages: Math.ceil(total / limit),
-    perPage: limit,                   // alias dari limit
-  
+    perPage: limit, // alias dari limit
+
     // ✅ agregat baru
     totalQty,
     totalBerat,
-  
+
     // ✅ payload data
     data,
-  
-    // ✅ field legacy (biar backward-compatible)
-    total,                            // = totalData
-    page,                             // = currentPage
-    limit                             // = perPage
-  };
-  
-}
 
+    // ✅ field legacy (biar backward-compatible)
+    total, // = totalData
+    page, // = currentPage
+    limit, // = perPage
+  };
+}
 
 // =====================
 // Helper: mapping kolom nomor label per prefix
 // =====================
 function getLabelColumn(prefix) {
   switch (prefix) {
-    case 'A': // handled khusus (gabungan NoBahanBaku-NoPallet)
+    case "A": // handled khusus (gabungan NoBahanBaku-NoPallet)
       return null;
-    case 'B': return 'NoWashing';
-    case 'D': return 'NoBroker';
-    case 'F': return 'NoCrusher';
-    case 'M': return 'NoBonggolan';
-    case 'V': return 'NoGilingan';
-    case 'H': return 'NoMixer';
-    case 'BB': return 'NoFurnitureWIP';
-    case 'BA': return 'NoBJ';
-    case 'BF': return 'NoReject';
-    default:  return 'NoLabel';
+    case "B":
+      return "NoWashing";
+    case "D":
+      return "NoBroker";
+    case "F":
+      return "NoCrusher";
+    case "M":
+      return "NoBonggolan";
+    case "V":
+      return "NoGilingan";
+    case "H":
+      return "NoMixer";
+    case "BB":
+      return "NoFurnitureWIP";
+    case "BA":
+      return "NoBJ";
+    case "BF":
+      return "NoReject";
+    default:
+      return "NoLabel";
   }
 }
 
@@ -445,7 +479,7 @@ function getLabelColumn(prefix) {
 function getAvailabilityCheckSQL(prefix, tableName) {
   switch (prefix) {
     // DETAIL-BASED: valid bila MASIH ADA detail DateUsage IS NULL
-    case 'A': // BahanBakuPallet_h + BahanBaku_d
+    case "A": // BahanBakuPallet_h + BahanBaku_d
       return `
         SELECT TOP 1 
           p.Blok, p.IdLokasi,
@@ -460,7 +494,7 @@ function getAvailabilityCheckSQL(prefix, tableName) {
         FROM dbo.BahanBakuPallet_h p
         WHERE (CAST(p.NoBahanBaku AS NVARCHAR(50)) + '-' + CAST(p.NoPallet AS NVARCHAR(10))) = @LabelCode
       `;
-    case 'B': // Washing_h + Washing_d
+    case "B": // Washing_h + Washing_d
       return `
         SELECT TOP 1 
           h.Blok, h.IdLokasi,
@@ -474,7 +508,7 @@ function getAvailabilityCheckSQL(prefix, tableName) {
         FROM dbo.Washing_h h
         WHERE h.NoWashing = @LabelCode
       `;
-    case 'D': // Broker_h + Broker_d
+    case "D": // Broker_h + Broker_d
       return `
         SELECT TOP 1 
           h.Blok, h.IdLokasi,
@@ -488,7 +522,7 @@ function getAvailabilityCheckSQL(prefix, tableName) {
         FROM dbo.Broker_h h
         WHERE h.NoBroker = @LabelCode
       `;
-    case 'H': // Mixer_h + Mixer_d
+    case "H": // Mixer_h + Mixer_d
       return `
         SELECT TOP 1 
           h.Blok, h.IdLokasi,
@@ -504,7 +538,7 @@ function getAvailabilityCheckSQL(prefix, tableName) {
       `;
 
     // HEADER-ONLY: valid bila header.DateUsage IS NULL
-    case 'F': // Crusher
+    case "F": // Crusher
       return `
         SELECT TOP 1 
           c.Blok, c.IdLokasi,
@@ -513,7 +547,7 @@ function getAvailabilityCheckSQL(prefix, tableName) {
         FROM dbo.Crusher c
         WHERE c.NoCrusher = @LabelCode
       `;
-    case 'M': // Bonggolan
+    case "M": // Bonggolan
       return `
         SELECT TOP 1 
           b.Blok, b.IdLokasi,
@@ -522,7 +556,7 @@ function getAvailabilityCheckSQL(prefix, tableName) {
         FROM dbo.Bonggolan b
         WHERE b.NoBonggolan = @LabelCode
       `;
-    case 'V': // Gilingan (dipakai sebagai header di implementasi kamu)
+    case "V": // Gilingan (dipakai sebagai header di implementasi kamu)
       return `
         SELECT TOP 1 
           g.Blok, g.IdLokasi,
@@ -531,7 +565,7 @@ function getAvailabilityCheckSQL(prefix, tableName) {
         FROM dbo.Gilingan g
         WHERE g.NoGilingan = @LabelCode
       `;
-    case 'BB': // FurnitureWIP (header)
+    case "BB": // FurnitureWIP (header)
       return `
         SELECT TOP 1 
           fw.Blok, fw.IdLokasi,
@@ -540,7 +574,7 @@ function getAvailabilityCheckSQL(prefix, tableName) {
         FROM dbo.FurnitureWIP fw
         WHERE fw.NoFurnitureWIP = @LabelCode
       `;
-    case 'BA': // BarangJadi (header)
+    case "BA": // BarangJadi (header)
       return `
         SELECT TOP 1 
           bj.Blok, bj.IdLokasi,
@@ -549,7 +583,7 @@ function getAvailabilityCheckSQL(prefix, tableName) {
         FROM dbo.BarangJadi bj
         WHERE bj.NoBJ = @LabelCode
       `;
-    case 'BF': // RejectV2 (header)
+    case "BF": // RejectV2 (header)
       return `
         SELECT TOP 1 
           r.Blok, r.IdLokasi,
@@ -560,7 +594,7 @@ function getAvailabilityCheckSQL(prefix, tableName) {
       `;
     default:
       // fallback generic (anggap header-only punya kolom DateUsage & labelCol)
-      const labelCol = getLabelColumn(prefix) || 'NoLabel';
+      const labelCol = getLabelColumn(prefix) || "NoLabel";
       return `
         SELECT TOP 1 
           h.Blok, h.IdLokasi,
@@ -572,7 +606,6 @@ function getAvailabilityCheckSQL(prefix, tableName) {
   }
 }
 
-
 // =====================
 // UPDATE lokasi + validasi ketersediaan (DateUsage)
 // =====================
@@ -581,55 +614,80 @@ async function updateLabelLocation(labelCode, idLokasi, blok, idUsername) {
 
   // helper
   const toIntOrNull = (v) =>
-    (v === null || v === undefined || Number.isNaN(Number(v))) ? null : Number(v);
-  const normBlok = (v) => (v ?? '').toString().trim().toUpperCase();
+    v === null || v === undefined || Number.isNaN(Number(v)) ? null : Number(v);
+  const normBlok = (v) => (v ?? "").toString().trim().toUpperCase();
 
   // Validasi minimal
   const idLokasiInt = toIntOrNull(idLokasi);
   if (idLokasiInt === null) {
-    return { success: false, message: 'idLokasi wajib angka (INT)' };
+    return { success: false, message: "idLokasi wajib angka (INT)" };
   }
   const blokNorm = normBlok(blok);
   if (!blokNorm) {
-    return { success: false, message: 'blok wajib diisi' };
+    return { success: false, message: "blok wajib diisi" };
   }
 
   // Normalisasi prefix
-  const parts = String(labelCode).split('.');
-  const prefix = (parts[0] || '').toUpperCase();
+  const parts = String(labelCode).split(".");
+  const prefix = (parts[0] || "").toUpperCase();
 
   // Mapping tabel berdasarkan prefix
-  let tableName = '';
+  let tableName = "";
   switch (prefix) {
-    case 'A': tableName = 'dbo.BahanBakuPallet_h'; break;
-    case 'B': tableName = 'dbo.Washing_h'; break;
-    case 'D': tableName = 'dbo.Broker_h'; break;
-    case 'F': tableName = 'dbo.Crusher'; break;
-    case 'M': tableName = 'dbo.Bonggolan'; break;
-    case 'V': tableName = 'dbo.Gilingan'; break;
-    case 'H': tableName = 'dbo.Mixer_h'; break;
-    case 'BB': tableName = 'dbo.FurnitureWIP'; break;
-    case 'BA': tableName = 'dbo.BarangJadi'; break;
-    case 'BF': tableName = 'dbo.RejectV2'; break;
+    case "A":
+      tableName = "dbo.BahanBakuPallet_h";
+      break;
+    case "B":
+      tableName = "dbo.Washing_h";
+      break;
+    case "D":
+      tableName = "dbo.Broker_h";
+      break;
+    case "F":
+      tableName = "dbo.Crusher";
+      break;
+    case "M":
+      tableName = "dbo.Bonggolan";
+      break;
+    case "V":
+      tableName = "dbo.Gilingan";
+      break;
+    case "H":
+      tableName = "dbo.Mixer_h";
+      break;
+    case "BB":
+      tableName = "dbo.FurnitureWIP";
+      break;
+    case "BA":
+      tableName = "dbo.BarangJadi";
+      break;
+    case "BF":
+      tableName = "dbo.RejectV2";
+      break;
     default:
-      return { success: false, message: `Prefix ${prefix} tidak dikenali untuk nomor label ${labelCode}` };
+      return {
+        success: false,
+        message: `Prefix ${prefix} tidak dikenali untuk nomor label ${labelCode}`,
+      };
   }
 
-  const labelCol = prefix === 'A'
-    ? "(CAST(NoBahanBaku AS NVARCHAR(50)) + '-' + CAST(NoPallet AS NVARCHAR(10)))"
-    : getLabelColumn(prefix); // pastikan helper ini ada
+  const labelCol =
+    prefix === "A"
+      ? "(CAST(NoBahanBaku AS NVARCHAR(50)) + '-' + CAST(NoPallet AS NVARCHAR(10)))"
+      : getLabelColumn(prefix); // pastikan helper ini ada
 
   // ========= 1) CEK: label ada + status Available (berdasarkan DateUsage) =========
   const availabilitySQL = getAvailabilityCheckSQL(prefix, tableName); // pastikan helper ini ada
 
-  const availRes = await pool.request()
-    .input('LabelCode', sql.NVarChar(50), labelCode)
+  const availRes = await pool
+    .request()
+    .input("LabelCode", sql.NVarChar(50), labelCode)
     .query(availabilitySQL);
 
   if (availRes.recordset.length === 0) {
     return {
       success: false,
-      message: `Nomor label ${labelCode} tidak ditemukan di tabel ${tableName}`
+      message: `Nomor label ${labelCode} tidak ditemukan di tabel ${tableName}`,
     };
   }
 
@@ -643,12 +701,13 @@ async function updateLabelLocation(labelCode, idLokasi, blok, idUsername) {
 
   // ========= 1.5) GUARD: jika tidak ada perubahan, hentikan di sini =========
   const sameBlok = normBlok(beforeBlok) === blokNorm;
-  const sameLokasi = Number(beforeIdLokasi ?? null) === Number(idLokasiInt ?? null);
+  const sameLokasi =
+    Number(beforeIdLokasi ?? null) === Number(idLokasiInt ?? null);
 
   if (sameBlok && sameLokasi) {
     return {
       success: true,
-      code: 'NO_CHANGE',
+      code: "NO_CHANGE",
       message: `Label ini telah di ${blokNorm}${idLokasiInt}`,
       updated: {
         labelCode,
@@ -656,8 +715,8 @@ async function updateLabelLocation(labelCode, idLokasi, blok, idUsername) {
         beforeIdLokasi,
         afterBlok: blokNorm,
         afterIdLokasi: idLokasiInt,
-        idUsername
-      }
+        idUsername,
+      },
     };
   }
 
@@ -670,25 +729,19 @@ async function updateLabelLocation(labelCode, idLokasi, blok, idUsername) {
     WHERE ${labelCol} = @LabelCode
   `;
 
-  const updateRes = await pool.request()
-    .input('LabelCode', sql.NVarChar(50), labelCode)
-    .input('IdLokasi', sql.Int, idLokasiInt)
-    .input('Blok',     sql.NVarChar(10), blokNorm) // naikkan ke 10 jika blok >3 char
+  const updateRes = await pool
+    .request()
+    .input("LabelCode", sql.NVarChar(50), labelCode)
+    .input("IdLokasi", sql.Int, idLokasiInt)
+    .input("Blok", sql.NVarChar(10), blokNorm) // naikkan ke 10 jika blok >3 char
     .query(updateQuery);
 
   if ((updateRes.rowsAffected?.[0] || 0) === 0) {
-    return { success: false, message: `Gagal update lokasi label ${labelCode}` };
+    return {
+      success: false,
+      message: `Gagal update lokasi label ${labelCode}`,
+    };
   }
-
-  // ========= 3) LOG (karena pasti berubah) =========
-  await insertLogMappingLokasi(
-    labelCode,
-    beforeBlok,
-    beforeIdLokasi,
-    blokNorm,
-    idLokasiInt,
-    idUsername
-  );
 
   return {
     success: true,
@@ -699,75 +752,9 @@ async function updateLabelLocation(labelCode, idLokasi, blok, idUsername) {
       beforeIdLokasi,
       afterBlok: blokNorm,
       afterIdLokasi: idLokasiInt,
-      idUsername
-    }
+      idUsername,
+    },
   };
 }
-
-
-async function insertLogMappingLokasi(noLabel, beforeBlok, beforeIdLokasi, afterBlok, afterIdLokasi, idUsername) {
-  const pool = await poolPromise;
-  const request = pool.request();
-
-  // ⚠️ pastikan INT dikirim sebagai INT (atau NULL)
-  const _beforeId = (beforeIdLokasi === null || beforeIdLokasi === undefined || isNaN(Number(beforeIdLokasi)))
-    ? null : Number(beforeIdLokasi);
-  const _afterId  = (afterIdLokasi  === null || afterIdLokasi  === undefined || isNaN(Number(afterIdLokasi)))
-    ? null : Number(afterIdLokasi);
-
-  const query = `
-    INSERT INTO dbo.LogMappingLokasi (
-      IdUsername,
-      Tgl,
-      NoLabel,
-      BeforeBlok,
-      BeforeIdLokasi,
-      AfterBlok,
-      AfterIdLokasi
-    )
-    OUTPUT INSERTED.IdLog, INSERTED.Tgl
-    VALUES (
-      @IdUsername,
-      GETDATE(),
-      @NoLabel,
-      @BeforeBlok,
-      @BeforeIdLokasi,
-      @AfterBlok,
-      @AfterIdLokasi
-    )
-  `;
-
-  try {
-    request.input('IdUsername', sql.Int, idUsername ?? null);
-    request.input('NoLabel', sql.VarChar(50), noLabel ?? null);
-    request.input('BeforeBlok', sql.VarChar(3), beforeBlok ?? null);
-    request.input('BeforeIdLokasi', sql.Int, _beforeId);
-    request.input('AfterBlok', sql.VarChar(3), afterBlok ?? null);
-    request.input('AfterIdLokasi', sql.Int, _afterId);
-
-    const result = await request.query(query);
-
-    const inserted = result.recordset?.[0] || {};
-    const idLog = inserted.IdLog ?? null;
-    const tglInserted = inserted.Tgl ?? null;
-
-    console.info(`✅ Mapping ${idUsername}: ${beforeBlok}:${_beforeId} -> ${afterBlok}:${_afterId} (${idLog})`);
-    return {
-      success: true,
-      message: 'Log mapping lokasi berhasil ditambahkan',
-      idLog,
-      tgl: tglInserted,
-    };
-  } catch (err) {
-    // ❌ LOG error
-    console.error('❌ Failed to insert LogMappingLokasi', {
-      err: err.message,
-      idUsername, noLabel, beforeBlok, beforeIdLokasi, afterBlok, afterIdLokasi
-    });
-    return { success: false, message: err.message };
-  }
-}
-
-
 
 module.exports = { getAllLabels, updateLabelLocation };

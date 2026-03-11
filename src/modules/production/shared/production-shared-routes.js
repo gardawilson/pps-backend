@@ -1,13 +1,13 @@
-const express = require('express');
+const express = require("express");
 const router = express.Router();
 
-const verifyToken = require('../../../core/middleware/verify-token');
-const sharedController = require('./production-shared-controller');
+const verifyToken = require("../../../core/middleware/verify-token");
+const sharedController = require("./production-shared-controller");
 
 router.get(
-  '/lookup-label/:labelCode',
+  "/lookup-label/:labelCode",
   verifyToken,
-  sharedController.lookupLabel
+  sharedController.lookupLabel,
 );
 
 module.exports = router;

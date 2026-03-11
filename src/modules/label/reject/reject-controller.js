@@ -1,13 +1,18 @@
 // routes/labels/reject-controller.js
-const service = require('./reject-service');
-const { getActorId, getActorUsername, makeRequestId } = require('../../../core/utils/http-context');
+const service = require("./reject-service");
+const {
+  getActorId,
+  getActorUsername,
+  makeRequestId,
+} = require("../../../core/utils/http-context");
+const { getIo } = require("../../../core/utils/socket-instance");
 
 // GET /labels/reject?page=&limit=&search=
 exports.getAll = async (req, res) => {
   try {
     const page = parseInt(req.query.page, 10) || 1;
     const limit = parseInt(req.query.limit, 10) || 20;
-    const search = (req.query.search || '').trim();
+    const search = (req.query.search || "").trim();
 
     const { data, total } = await service.getAll({ page, limit, search });
     const totalPages = Math.max(Math.ceil(total / limit), 1);
@@ -18,8 +23,10 @@ exports.getAll = async (req, res) => {
       meta: { page, limit, total, totalPages },
     });
   } catch (err) {
-    console.error('Get Reject List Error:', err);
-    return res.status(500).json({ success: false, message: 'Terjadi kesalahan server' });
+    console.error("Get Reject List Error:", err);
+    return res
+      .status(500)
+      .json({ success: false, message: "Terjadi kesalahan server" });
   }
 };
 
@@ -41,11 +48,13 @@ exports.getAll = async (req, res) => {
  */
 exports.create = async (req, res) => {
   try {
-    const payload = req.body && typeof req.body === 'object' ? req.body : {};
+    const payload = req.body && typeof req.body === "object" ? req.body : {};
 
     const actorId = getActorId(req);
     if (!actorId) {
-      return res.status(401).json({ success: false, message: 'Unauthorized (idUsername missing)' });
+      return res
+        .status(401)
+        .json({ success: false, message: "Unauthorized (idUsername missing)" });
     }
 
     // ✅ audit fields
@@ -53,19 +62,24 @@ exports.create = async (req, res) => {
     payload.requestId = makeRequestId(req);
 
     // ✅ business field CreateBy — overwrite dari token
-    payload.header = payload.header && typeof payload.header === 'object' ? payload.header : {};
-    payload.header.CreateBy = getActorUsername(req) || 'system';
+    payload.header =
+      payload.header && typeof payload.header === "object"
+        ? payload.header
+        : {};
+    payload.header.CreateBy = getActorUsername(req) || "system";
 
     const result = await service.createReject(payload);
 
     const headers = Array.isArray(result?.headers) ? result.headers : [];
     const count =
-      typeof result?.output?.count === 'number'
+      typeof result?.output?.count === "number"
         ? result.output.count
-        : (headers.length || 1);
+        : headers.length || 1;
 
     const msg =
-      count > 1 ? `${count} Reject labels created successfully` : 'Reject created successfully';
+      count > 1
+        ? `${count} Reject labels created successfully`
+        : "Reject created successfully";
 
     return res.status(201).json({
       success: true,
@@ -73,11 +87,11 @@ exports.create = async (req, res) => {
       data: result,
     });
   } catch (err) {
-    console.error('Create Reject Error:', err);
+    console.error("Create Reject Error:", err);
     const status = err.statusCode || 500;
     return res.status(status).json({
       success: false,
-      message: err.message || 'Terjadi kesalahan server',
+      message: err.message || "Terjadi kesalahan server",
     });
   }
 };
@@ -95,23 +109,31 @@ exports.update = async (req, res) => {
   const { noReject, noreject } = req.params;
 
   try {
-    const NoReject = String(noReject || noreject || '').trim();
+    const NoReject = String(noReject || noreject || "").trim();
     if (!NoReject) {
-      return res.status(400).json({ success: false, message: 'noReject wajib diisi' });
+      return res
+        .status(400)
+        .json({ success: false, message: "noReject wajib diisi" });
     }
 
     const actorId = getActorId(req);
     if (!actorId) {
-      return res.status(401).json({ success: false, message: 'Unauthorized (idUsername missing)' });
+      return res
+        .status(401)
+        .json({ success: false, message: "Unauthorized (idUsername missing)" });
     }
 
-    const actorUsername = getActorUsername(req) || 'system';
+    const actorUsername = getActorUsername(req) || "system";
 
     // ✅ pastikan body object
-    const body = req.body && typeof req.body === 'object' ? req.body : {};
+    const body = req.body && typeof req.body === "object" ? req.body : {};
 
     // ✅ jangan percaya audit fields dari client
-    const { actorId: _clientActorId, requestId: _clientRequestId, ...safeBody } = body;
+    const {
+      actorId: _clientActorId,
+      requestId: _clientRequestId,
+      ...safeBody
+    } = body;
 
     const payload = {
       ...safeBody,
@@ -121,22 +143,28 @@ exports.update = async (req, res) => {
 
     // backward compatibility:
     // kalau client lama kirim field flat (IdReject, Berat, DateCreate, dll), angkat ke payload.header
-    payload.header = payload.header && typeof payload.header === 'object' ? payload.header : {};
+    payload.header =
+      payload.header && typeof payload.header === "object"
+        ? payload.header
+        : {};
 
     const liftKeys = [
-      'IdReject',
-      'IdWarehouse',
-      'Berat',
-      'Jam',
-      'IsPartial',
-      'Blok',
-      'IdLokasi',
-      'DateCreate',
-      'CreateBy',
+      "IdReject",
+      "IdWarehouse",
+      "Berat",
+      "Jam",
+      "IsPartial",
+      "Blok",
+      "IdLokasi",
+      "DateCreate",
+      "CreateBy",
     ];
 
     for (const k of liftKeys) {
-      if (Object.prototype.hasOwnProperty.call(payload, k) && payload.header[k] === undefined) {
+      if (
+        Object.prototype.hasOwnProperty.call(payload, k) &&
+        payload.header[k] === undefined
+      ) {
         payload.header[k] = payload[k];
         delete payload[k];
       }
@@ -149,15 +177,15 @@ exports.update = async (req, res) => {
 
     return res.status(200).json({
       success: true,
-      message: 'Reject berhasil diupdate',
+      message: "Reject berhasil diupdate",
       data: result,
     });
   } catch (err) {
-    console.error('Update Reject Error:', err);
+    console.error("Update Reject Error:", err);
     const status = err.statusCode || 500;
     return res.status(status).json({
       success: false,
-      message: err.message || 'Terjadi kesalahan server',
+      message: err.message || "Terjadi kesalahan server",
     });
   }
 };
@@ -167,14 +195,18 @@ exports.delete = async (req, res) => {
   const { noReject, noreject } = req.params;
 
   try {
-    const NoReject = String(noReject || noreject || '').trim();
+    const NoReject = String(noReject || noreject || "").trim();
     if (!NoReject) {
-      return res.status(400).json({ success: false, message: 'noReject wajib diisi' });
+      return res
+        .status(400)
+        .json({ success: false, message: "noReject wajib diisi" });
     }
 
     const actorId = getActorId(req);
     if (!actorId) {
-      return res.status(401).json({ success: false, message: 'Unauthorized (idUsername missing)' });
+      return res
+        .status(401)
+        .json({ success: false, message: "Unauthorized (idUsername missing)" });
     }
 
     // ✅ audit payload untuk delete (service delete butuh actorId/requestId)
@@ -191,11 +223,11 @@ exports.delete = async (req, res) => {
       data: result,
     });
   } catch (err) {
-    console.error('Delete Reject Error:', err);
+    console.error("Delete Reject Error:", err);
     const status = err.statusCode || 500;
     return res.status(status).json({
       success: false,
-      message: err.message || 'Terjadi kesalahan server',
+      message: err.message || "Terjadi kesalahan server",
     });
   }
 };
@@ -205,11 +237,11 @@ exports.getRejectPartialInfo = async (req, res) => {
   const { noreject, noReject } = req.params;
 
   try {
-    const NoReject = String(noreject || noReject || '').trim();
+    const NoReject = String(noreject || noReject || "").trim();
     if (!NoReject) {
       return res.status(400).json({
         success: false,
-        message: 'NoReject is required.',
+        message: "NoReject is required.",
       });
     }
 
@@ -228,17 +260,17 @@ exports.getRejectPartialInfo = async (req, res) => {
 
     return res.status(200).json({
       success: true,
-      message: 'Reject partial info retrieved successfully',
+      message: "Reject partial info retrieved successfully",
       totalRows: data.rows.length,
       totalPartialBerat: data.totalPartialBerat,
       data: data.rows,
       meta: { NoReject },
     });
   } catch (err) {
-    console.error('Get Reject Partial Info Error:', err);
+    console.error("Get Reject Partial Info Error:", err);
     return res.status(500).json({
       success: false,
-      message: 'Internal Server Error',
+      message: "Internal Server Error",
       error: err.message,
     });
   }
@@ -248,14 +280,18 @@ exports.incrementHasBeenPrinted = async (req, res) => {
   const { noreject, noReject } = req.params;
 
   try {
-    const NoReject = String(noreject || noReject || '').trim();
+    const NoReject = String(noreject || noReject || "").trim();
     if (!NoReject) {
-      return res.status(400).json({ success: false, message: 'noReject wajib diisi' });
+      return res
+        .status(400)
+        .json({ success: false, message: "noReject wajib diisi" });
     }
 
     const actorId = getActorId(req);
     if (!actorId) {
-      return res.status(401).json({ success: false, message: 'Unauthorized (idUsername missing)' });
+      return res
+        .status(401)
+        .json({ success: false, message: "Unauthorized (idUsername missing)" });
     }
 
     const result = await service.incrementHasBeenPrinted({
@@ -264,17 +300,24 @@ exports.incrementHasBeenPrinted = async (req, res) => {
       requestId: makeRequestId(req),
     });
 
+    const io = getIo();
+    if (io)
+      io.emit("print_confirmed", {
+        noLabel: NoReject,
+        hasBeenPrinted: result.HasBeenPrinted,
+      });
+
     return res.status(200).json({
       success: true,
-      message: 'HasBeenPrinted berhasil ditambah',
+      message: "HasBeenPrinted berhasil ditambah",
       data: result,
     });
   } catch (err) {
-    console.error('Increment Reject HasBeenPrinted Error:', err);
+    console.error("Increment Reject HasBeenPrinted Error:", err);
     const status = err.statusCode || 500;
     return res.status(status).json({
       success: false,
-      message: err.message || 'Terjadi kesalahan server',
+      message: err.message || "Terjadi kesalahan server",
     });
   }
 };

@@ -431,7 +431,7 @@ const INPUT_CONFIGS = {
     furnitureWip: {
       sourceTable: "FurnitureWIP",
       keys: ["NoFurnitureWIP"],
-      mappingTable: "BJSortirRejectInputLabelFurnitureWIP",
+      mappingTable: "BJJual_dLabelFurnitureWIP",
       dateUsageColumn: "DateUsage",
     },
     barangJadi: {
@@ -610,7 +610,7 @@ const UPSERT_INPUT_CONFIGS = {
   },
   bjJual: {
     cabinetMaterial: {
-      mappingTable: "PackingProduksiInputMaterial",
+      mappingTable: "BJJualCabinetMaterial_d  ",
       sourceTable: "MstCabinetMaterial",
       keyColumn: "IdCabinetMaterial",
       quantityColumn: "Pcs",

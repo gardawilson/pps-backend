@@ -1,5 +1,5 @@
 // production-shared-service.js
-const { sql, poolPromise } = require('../../../core/config/db');
+const { sql, poolPromise } = require("../../../core/config/db");
 
 /**
  * Lookup label codes for production items (FWIP & BJ).
@@ -22,7 +22,7 @@ async function lookupLabel(labelCode) {
 
   const camelize = (val) => {
     if (Array.isArray(val)) return val.map(camelize);
-    if (val && typeof val === 'object') {
+    if (val && typeof val === "object") {
       const o = {};
       for (const [k, v] of Object.entries(val)) {
         o[toCamel(k)] = camelize(v);
@@ -33,25 +33,25 @@ async function lookupLabel(labelCode) {
   };
 
   // ---------- normalize label ----------
-  const raw = String(labelCode || '').trim();
-  if (!raw) throw new Error('Label code is required');
+  const raw = String(labelCode || "").trim();
+  if (!raw) throw new Error("Label code is required");
 
-  let prefix = '';
-  if (raw.substring(0, 3).toUpperCase() === 'BB.') {
-    prefix = 'BB.';
-  } else if (raw.substring(0, 3).toUpperCase() === 'BA.') {
-    prefix = 'BA.';
+  let prefix = "";
+  if (raw.substring(0, 3).toUpperCase() === "BB.") {
+    prefix = "BB.";
+  } else if (raw.substring(0, 3).toUpperCase() === "BA.") {
+    prefix = "BA.";
   } else {
     prefix = raw.substring(0, 2).toUpperCase();
   }
 
-  let query = '';
-  let tableName = '';
+  let query = "";
+  let tableName = "";
 
   // Helper eksekusi single-query
   async function run(label) {
     const req = pool.request();
-    req.input('labelCode', sql.VarChar(50), label);
+    req.input("labelCode", sql.VarChar(50), label);
     const rs = await req.query(query);
     const rows = rs.recordset || [];
     return camelize({
@@ -67,8 +67,8 @@ async function lookupLabel(labelCode) {
     // =========================
     // BB. FurnitureWIP
     // =========================
-    case 'BB.':
-      tableName = 'FurnitureWIP';
+    case "BB.":
+      tableName = "FurnitureWIP";
       query = `
         ;WITH PartialAgg AS (
           SELECT
@@ -110,8 +110,8 @@ async function lookupLabel(labelCode) {
     // =========================
     // BA. BarangJadi
     // =========================
-    case 'BA.':
-      tableName = 'BarangJadi';
+    case "BA.":
+      tableName = "BarangJadi";
       query = `
         ;WITH PartialAgg AS (
           SELECT

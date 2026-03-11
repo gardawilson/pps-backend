@@ -12,9 +12,8 @@ const server = http.createServer(app);
 // Konfigurasi Socket.IO
 const io = socketIO(server, {
   cors: {
-    origin: process.env.FRONTEND_URL || '*',
+    origin: '*',
     methods: ['GET', 'POST'],
-    credentials: true
   }
 });
 initSocket(io);

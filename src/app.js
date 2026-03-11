@@ -54,6 +54,7 @@ const mstPembeliRoutes = require("./modules/master/pembeli/master-pembeli-route"
 const mstWarehouseRoutes = require("./modules/master/warehouse/master-warehouse-route");
 const auditRoutes = require("./modules/audit/audit-route");
 const updateRoutes = require("./modules/update/update-routes");
+const printLockRoutes = require("./modules/label/print-lock/print-lock-routes");
 
 const app = express();
 
@@ -73,6 +74,7 @@ app.use("/api/update", updateRoutes);
 
 // 📌 API Routes
 app.use("/api/auth", authRoutes);
+app.use("/api/", printLockRoutes);
 app.use("/api/", stockOpnameRoutes);
 app.use("/api/", profileRoutes);
 app.use("/api/", mstLokasiRoutes);

@@ -1,6 +1,6 @@
 const { sql, poolPromise } = require("../../core/config/db");
 const { formatDate } = require("../../core/utils/date-helper");
-const { insertLogMappingLokasi } = require("../../core/shared/log"); // sesuaikan path
+// const { insertLogMappingLokasi } = require("../../core/shared/log"); // sesuaikan path
 
 async function getNoStockOpname() {
   try {
@@ -2732,20 +2732,6 @@ async function insertStockOpnameLabel({
       if (upd.rowsAffected?.[0] === 0)
         throw new Error("Pallet tidak ditemukan di BahanBakuPallet_h");
 
-      // LOG (hanya kalau berubah)
-      if (beforeBlok !== blok || Number(beforeId) !== Number(idlokasi)) {
-        await insertLogMappingLokasi({
-          runner: tx,
-          noLabel: label,
-          beforeBlok,
-          beforeIdLokasi: beforeId,
-          afterBlok: blok,
-          afterIdLokasi: idlokasi,
-          idUsername: idUsername ?? null,
-          isSO: 1,
-        });
-      }
-
       insertedData = {
         noso,
         nomorLabel: label,
@@ -2783,19 +2769,6 @@ async function insertStockOpnameLabel({
       `);
       if (upd.rowsAffected?.[0] === 0)
         throw new Error("NoWashing tidak ditemukan di Washing_h");
-
-      if (beforeBlok !== blok || Number(beforeId) !== Number(idlokasi)) {
-        await insertLogMappingLokasi({
-          runner: tx,
-          noLabel: label,
-          beforeBlok,
-          beforeIdLokasi: beforeId,
-          afterBlok: blok,
-          afterIdLokasi: idlokasi,
-          idUsername: idUsername ?? null,
-          isSO: 1,
-        });
-      }
 
       insertedData = {
         noso,
@@ -2835,19 +2808,6 @@ async function insertStockOpnameLabel({
       if (upd.rowsAffected?.[0] === 0)
         throw new Error("NoBroker tidak ditemukan di Broker_h");
 
-      if (beforeBlok !== blok || Number(beforeId) !== Number(idlokasi)) {
-        await insertLogMappingLokasi({
-          runner: tx,
-          noLabel: label,
-          beforeBlok,
-          beforeIdLokasi: beforeId,
-          afterBlok: blok,
-          afterIdLokasi: idlokasi,
-          idUsername: idUsername ?? null,
-          isSO: 1,
-        });
-      }
-
       insertedData = {
         noso,
         nomorLabel: label,
@@ -2885,19 +2845,6 @@ async function insertStockOpnameLabel({
       `);
       if (upd.rowsAffected?.[0] === 0)
         throw new Error("NoCrusher tidak ditemukan di tabel Crusher");
-
-      if (beforeBlok !== blok || Number(beforeId) !== Number(idlokasi)) {
-        await insertLogMappingLokasi({
-          runner: tx,
-          noLabel: label,
-          beforeBlok,
-          beforeIdLokasi: beforeId,
-          afterBlok: blok,
-          afterIdLokasi: idlokasi,
-          idUsername: idUsername ?? null,
-          isSO: 1,
-        });
-      }
 
       insertedData = {
         noso,
@@ -2937,19 +2884,6 @@ async function insertStockOpnameLabel({
       if (upd.rowsAffected?.[0] === 0)
         throw new Error("NoBonggolan tidak ditemukan di tabel Bonggolan");
 
-      if (beforeBlok !== blok || Number(beforeId) !== Number(idlokasi)) {
-        await insertLogMappingLokasi({
-          runner: tx,
-          noLabel: label,
-          beforeBlok,
-          beforeIdLokasi: beforeId,
-          afterBlok: blok,
-          afterIdLokasi: idlokasi,
-          idUsername: idUsername ?? null,
-          isSO: 1,
-        });
-      }
-
       insertedData = {
         noso,
         nomorLabel: label,
@@ -2987,19 +2921,6 @@ async function insertStockOpnameLabel({
       `);
       if (upd.rowsAffected?.[0] === 0)
         throw new Error("NoGilingan tidak ditemukan di tabel Gilingan");
-
-      if (beforeBlok !== blok || Number(beforeId) !== Number(idlokasi)) {
-        await insertLogMappingLokasi({
-          runner: tx,
-          noLabel: label,
-          beforeBlok,
-          beforeIdLokasi: beforeId,
-          afterBlok: blok,
-          afterIdLokasi: idlokasi,
-          idUsername: idUsername ?? null,
-          isSO: 1,
-        });
-      }
 
       insertedData = {
         noso,
@@ -3039,19 +2960,6 @@ async function insertStockOpnameLabel({
       if (upd.rowsAffected?.[0] === 0)
         throw new Error("NoMixer tidak ditemukan di Mixer_h");
 
-      if (beforeBlok !== blok || Number(beforeId) !== Number(idlokasi)) {
-        await insertLogMappingLokasi({
-          runner: tx,
-          noLabel: label,
-          beforeBlok,
-          beforeIdLokasi: beforeId,
-          afterBlok: blok,
-          afterIdLokasi: idlokasi,
-          idUsername: idUsername ?? null,
-          isSO: 1,
-        });
-      }
-
       insertedData = {
         noso,
         nomorLabel: label,
@@ -3089,19 +2997,6 @@ async function insertStockOpnameLabel({
       `);
       if (upd.rowsAffected?.[0] === 0)
         throw new Error("NoFurnitureWIP tidak ditemukan di tabel FurnitureWIP");
-
-      if (beforeBlok !== blok || Number(beforeId) !== Number(idlokasi)) {
-        await insertLogMappingLokasi({
-          runner: tx,
-          noLabel: label,
-          beforeBlok,
-          beforeIdLokasi: beforeId,
-          afterBlok: blok,
-          afterIdLokasi: idlokasi,
-          idUsername: idUsername ?? null,
-          isSO: 1,
-        });
-      }
 
       insertedData = {
         noso,
@@ -3141,19 +3036,6 @@ async function insertStockOpnameLabel({
       if (upd.rowsAffected?.[0] === 0)
         throw new Error("NoBJ tidak ditemukan di tabel BarangJadi");
 
-      if (beforeBlok !== blok || Number(beforeId) !== Number(idlokasi)) {
-        await insertLogMappingLokasi({
-          runner: tx,
-          noLabel: label,
-          beforeBlok,
-          beforeIdLokasi: beforeId,
-          afterBlok: blok,
-          afterIdLokasi: idlokasi,
-          idUsername: idUsername ?? null,
-          isSO: 1,
-        });
-      }
-
       insertedData = {
         noso,
         nomorLabel: label,
@@ -3191,19 +3073,6 @@ async function insertStockOpnameLabel({
       `);
       if (upd.rowsAffected?.[0] === 0)
         throw new Error("NoReject tidak ditemukan di tabel RejectV2");
-
-      if (beforeBlok !== blok || Number(beforeId) !== Number(idlokasi)) {
-        await insertLogMappingLokasi({
-          runner: tx,
-          noLabel: label,
-          beforeBlok,
-          beforeIdLokasi: beforeId,
-          afterBlok: blok,
-          afterIdLokasi: idlokasi,
-          idUsername: idUsername ?? null,
-          isSO: 1,
-        });
-      }
 
       insertedData = {
         noso,

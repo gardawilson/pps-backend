@@ -18,11 +18,14 @@ const { badReq, conflict } = require("../../../core/utils/http-error");
 const { normalizeDecimalField } = require("../../../core/utils/number-utils");
 
 // GET all header Broker with pagination & search (mirror of Washing.getAll)
-exports.getAll = async ({ page, limit, search }) => {
+exports.getAll = async ({ page, limit, search, includeUsed = false }) => {
   const pool = await poolPromise;
   const request = pool.request();
 
   const offset = (page - 1) * limit;
+  const dateUsageFilter = includeUsed
+    ? ""
+    : "AND EXISTS (SELECT 1 FROM Broker_d d2 WHERE d2.NoBroker = h.NoBroker AND d2.DateUsage IS NULL)";
 
   const baseQuery = `
     SELECT
@@ -51,6 +54,15 @@ exports.getAll = async ({ page, limit, search }) => {
       h.Density3,
       h.Moisture2,
       h.Moisture3,
+      CASE
+        WHEN EXISTS (
+          SELECT 1
+          FROM Broker_d d3
+          WHERE d3.NoBroker = h.NoBroker
+            AND d3.DateUsage IS NULL
+        ) THEN CAST(0 AS bit)
+        ELSE CAST(1 AS bit)
+      END AS Used,
       MAX(ISNULL(CAST(h.HasBeenPrinted AS int), 0)) AS HasBeenPrinted,
 
       -- 🔎 Tambahan sesuai permintaan
@@ -88,12 +100,7 @@ exports.getAll = async ({ page, limit, search }) => {
              )`
           : ""
       }
-      AND EXISTS (
-        SELECT 1 
-        FROM Broker_d d2 
-        WHERE d2.NoBroker = h.NoBroker 
-          AND d2.DateUsage IS NULL
-      )
+      ${dateUsageFilter}
     GROUP BY
       h.NoBroker, h.DateCreate, h.IdJenisPlastik, jp.Jenis,
       h.IdWarehouse, w.NamaWarehouse, h.IdStatus,
@@ -130,12 +137,7 @@ exports.getAll = async ({ page, limit, search }) => {
              )`
           : ""
       }
-      AND EXISTS (
-        SELECT 1 
-        FROM Broker_d d2 
-        WHERE d2.NoBroker = h.NoBroker 
-          AND d2.DateUsage IS NULL
-      )
+      ${dateUsageFilter}
   `;
 
   request.input("offset", sql.Int, offset).input("limit", sql.Int, limit);

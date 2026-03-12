@@ -19,10 +19,11 @@ const { badReq, conflict } = require("../../../core/utils/http-error");
 const hasOwn = (obj, key) =>
   Object.prototype.hasOwnProperty.call(obj || {}, key);
 
-exports.getAll = async ({ page, limit, search }) => {
+exports.getAll = async ({ page, limit, search, includeUsed = false }) => {
   const pool = await poolPromise;
   const request = pool.request();
   const offset = (page - 1) * limit;
+  const dateUsageFilter = includeUsed ? "" : "AND f.DateUsage IS NULL";
 
   const baseQuery = `
     SELECT
@@ -45,6 +46,10 @@ exports.getAll = async ({ page, limit, search }) => {
       ISNULL(f.Berat, 0) AS Berat,
 
       f.IsPartial,
+      CASE
+        WHEN MAX(f.DateUsage) IS NULL THEN CAST(0 AS bit)
+        ELSE CAST(1 AS bit)
+      END AS Used,
       MAX(ISNULL(CAST(f.HasBeenPrinted AS int), 0)) AS HasBeenPrinted,
       f.IdWarna,
       f.Blok,
@@ -159,7 +164,7 @@ exports.getAll = async ({ page, limit, search }) => {
            ON mInj.IdMesin = injh.IdMesin
 
     WHERE 1=1
-      AND f.DateUsage IS NULL
+      ${dateUsageFilter}
       ${
         search
           ? `AND (
@@ -246,7 +251,7 @@ exports.getAll = async ({ page, limit, search }) => {
            ON mInj.IdMesin = injh.IdMesin
 
     WHERE 1=1
-      AND f.DateUsage IS NULL
+      ${dateUsageFilter}
       ${
         search
           ? `AND (

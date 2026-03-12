@@ -20,10 +20,11 @@ function hasOwn(obj, key) {
   return Object.prototype.hasOwnProperty.call(obj || {}, key);
 }
 
-exports.getAll = async ({ page, limit, search }) => {
+exports.getAll = async ({ page, limit, search, includeUsed = false }) => {
   const pool = await poolPromise;
   const request = pool.request();
   const offset = (page - 1) * limit;
+  const dateUsageFilter = includeUsed ? "" : "AND r.DateUsage IS NULL";
 
   const baseQuery = `
     WITH RejectPartialAgg AS (
@@ -51,6 +52,10 @@ exports.getAll = async ({ page, limit, search }) => {
       -- ISNULL(rp.TotalPartialBerat, 0) AS TotalPartialBerat,
 
       r.IsPartial,
+      CASE
+        WHEN MAX(r.DateUsage) IS NULL THEN CAST(0 AS bit)
+        ELSE CAST(1 AS bit)
+      END AS Used,
       MAX(ISNULL(CAST(r.HasBeenPrinted AS int), 0)) AS HasBeenPrinted,
       r.Blok,
       r.IdLokasi,
@@ -151,7 +156,7 @@ exports.getAll = async ({ page, limit, search }) => {
       ON bjr.NoReject = r.NoReject
 
     WHERE 1 = 1
-      AND r.DateUsage IS NULL
+      ${dateUsageFilter}
       ${
         search
           ? `AND (
@@ -223,7 +228,7 @@ exports.getAll = async ({ page, limit, search }) => {
       ON bjr.NoReject = r.NoReject
 
     WHERE 1 = 1
-      AND r.DateUsage IS NULL
+      ${dateUsageFilter}
       ${
         search
           ? `AND (

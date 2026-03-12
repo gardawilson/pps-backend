@@ -17,9 +17,17 @@ const {
 const { badReq, conflict } = require("../../../core/utils/http-error");
 
 // GET all header Mixer dengan pagination & search (mirror of Broker.getAll)
-exports.getAll = async ({ page, limit, search }) => {
+exports.getAll = async ({ page, limit, search, includeUsed = false }) => {
   const pool = await poolPromise;
   const offset = (page - 1) * limit;
+  const dateUsageFilter = includeUsed
+    ? ""
+    : `AND EXISTS (
+        SELECT 1
+        FROM dbo.Mixer_d d2
+        WHERE d2.NoMixer = h.NoMixer
+          AND d2.DateUsage IS NULL
+      )`;
 
   // ==== optional search clause ====
   // Cari di:
@@ -97,6 +105,15 @@ exports.getAll = async ({ page, limit, search }) => {
       h.MFI,
       h.Moisture2,
       h.Moisture3,
+      CASE
+        WHEN EXISTS (
+          SELECT 1
+          FROM dbo.Mixer_d d3
+          WHERE d3.NoMixer = h.NoMixer
+            AND d3.DateUsage IS NULL
+        ) THEN CAST(0 AS bit)
+        ELSE CAST(1 AS bit)
+      END AS Used,
       ISNULL(CAST(h.HasBeenPrinted AS int), 0) AS HasBeenPrinted,
       h.Blok,
       h.IdLokasi,
@@ -161,12 +178,7 @@ exports.getAll = async ({ page, limit, search }) => {
 
     WHERE 1 = 1
       ${searchClause}
-      AND EXISTS (
-        SELECT 1
-        FROM dbo.Mixer_d d2
-        WHERE d2.NoMixer = h.NoMixer
-          AND d2.DateUsage IS NULL
-      )
+      ${dateUsageFilter}
 
     ORDER BY h.NoMixer DESC
     OFFSET @offset ROWS FETCH NEXT @limit ROWS ONLY;
@@ -179,12 +191,7 @@ exports.getAll = async ({ page, limit, search }) => {
       ON mx.IdMixer = h.IdMixer
     WHERE 1 = 1
       ${searchClause}
-      AND EXISTS (
-        SELECT 1
-        FROM dbo.Mixer_d d2
-        WHERE d2.NoMixer = h.NoMixer
-          AND d2.DateUsage IS NULL
-      );
+      ${dateUsageFilter};
   `;
 
   // ==== eksekusi query data ====

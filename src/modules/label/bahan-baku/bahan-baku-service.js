@@ -5,11 +5,19 @@ const { normalizeDecimalField } = require("../../../core/utils/number-utils");
 const { createSetIf } = require("../../../core/utils/update-diff-helper");
 
 // GET all header BahanBaku with pagination & search
-exports.getAll = async ({ page, limit, search }) => {
+exports.getAll = async ({ page, limit, search, includeUsed = false }) => {
   const pool = await poolPromise;
   const request = pool.request();
 
   const offset = (page - 1) * limit;
+  const dateUsageFilter = includeUsed
+    ? ""
+    : `AND EXISTS (
+         SELECT 1
+         FROM dbo.BahanBaku_d d
+         WHERE d.NoBahanBaku = h.NoBahanBaku
+           AND d.DateUsage IS NULL
+       )`;
 
   const baseQuery = `
     SELECT
@@ -19,11 +27,21 @@ exports.getAll = async ({ page, limit, search }) => {
       h.NoPlat,
       h.DateCreate,
       h.CreateBy,
-      h.DateTimeCreate
+      h.DateTimeCreate,
+      CASE
+        WHEN EXISTS (
+          SELECT 1
+          FROM dbo.BahanBaku_d d2
+          WHERE d2.NoBahanBaku = h.NoBahanBaku
+            AND d2.DateUsage IS NULL
+        ) THEN CAST(0 AS bit)
+        ELSE CAST(1 AS bit)
+      END AS Used
     FROM dbo.BahanBaku_h h
     LEFT JOIN dbo.MstSupplier s
       ON s.IdSupplier = h.IdSupplier
     WHERE 1=1
+      ${dateUsageFilter}
       ${
         search
           ? `AND (
@@ -45,6 +63,7 @@ exports.getAll = async ({ page, limit, search }) => {
     LEFT JOIN dbo.MstSupplier s
       ON s.IdSupplier = h.IdSupplier
     WHERE 1=1
+      ${dateUsageFilter}
       ${
         search
           ? `AND (

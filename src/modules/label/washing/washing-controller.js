@@ -12,18 +12,21 @@ exports.getAll = async (req, res) => {
     const page = parseInt(req.query.page, 10) || 1;
     const limit = parseInt(req.query.limit, 10) || 20;
     const search = (req.query.search || "").trim();
+    const includeUsed =
+      String(req.query.includeUsed || "").toLowerCase() === "true";
 
     const { data, total } = await labelWashingService.getAll({
       page,
       limit,
       search,
+      includeUsed,
     });
     const totalPages = Math.ceil(total / limit);
 
     return res.status(200).json({
       success: true,
       data,
-      meta: { page, limit, total, totalPages },
+      meta: { page, limit, total, totalPages, includeUsed },
     });
   } catch (err) {
     console.error("Get Washing List Error:", err);

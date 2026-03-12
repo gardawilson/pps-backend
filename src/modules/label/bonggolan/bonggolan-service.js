@@ -16,10 +16,11 @@ const {
 } = require("../../../core/utils/sequence-code-helper");
 const { badReq, conflict } = require("../../../core/utils/http-error");
 
-exports.getAll = async ({ page, limit, search }) => {
+exports.getAll = async ({ page, limit, search, includeUsed = false }) => {
   const pool = await poolPromise;
   const request = pool.request();
   const offset = (page - 1) * limit;
+  const dateUsageFilter = includeUsed ? "" : "AND b.DateUsage IS NULL";
 
   const baseQuery = `
     SELECT
@@ -32,6 +33,10 @@ exports.getAll = async ({ page, limit, search }) => {
       b.Blok,
       b.IdLokasi,
       b.Berat,
+      CASE
+        WHEN MAX(b.DateUsage) IS NULL THEN CAST(0 AS bit)
+        ELSE CAST(1 AS bit)
+      END AS Used,
       MAX(ISNULL(CAST(b.HasBeenPrinted AS int), 0)) AS HasBeenPrinted,
       CASE 
         WHEN b.IdStatus = 1 THEN 'PASS'
@@ -77,7 +82,7 @@ exports.getAll = async ({ page, limit, search }) => {
            ON bs.NoBonggolan = b.NoBonggolan
 
     WHERE 1=1
-      AND b.DateUsage IS NULL
+      ${dateUsageFilter}
       ${
         search
           ? `AND (
@@ -125,7 +130,7 @@ exports.getAll = async ({ page, limit, search }) => {
     LEFT JOIN [dbo].[BongkarSusunOutputBonggolan] bs
            ON bs.NoBonggolan = b.NoBonggolan
     WHERE 1=1
-      AND b.DateUsage IS NULL
+      ${dateUsageFilter}
       ${
         search
           ? `AND (

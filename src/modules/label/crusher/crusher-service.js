@@ -26,26 +26,11 @@ const { badReq, conflict } = require("../../../core/utils/http-error");
  * - dbo.MstMesin m                       (IdMesin -> NamaMesin)
  * - dbo.BongkarSusunOutputCrusher bs     (NoCrusher -> NoBongkarSusun)
  */
-exports.getAll = async ({ page, limit, search }) => {
+exports.getAll = async ({ page, limit, search, includeUsed = false }) => {
   const pool = await poolPromise;
   const request = pool.request();
   const offset = (page - 1) * limit;
-
-  const whereSearch = search
-    ? `
-      AND (
-        c.NoCrusher LIKE @search
-        OR c.Blok LIKE @search
-        OR CONVERT(VARCHAR(20), c.IdLokasi) LIKE @search
-        OR CONVERT(VARCHAR(20), c.IdWarehouse) LIKE @search
-        OR ISNULL(w.NamaWarehouse,'') LIKE @search
-        OR ISNULL(mc.NamaCrusher,'') LIKE @search
-        OR ISNULL(cpo.NoCrusherProduksi,'') LIKE @search
-        OR ISNULL(m.NamaMesin,'') LIKE @search
-        OR ISNULL(bs.NoBongkarSusun,'') LIKE @search
-      )
-    `
-    : "";
+  const dateUsageFilter = includeUsed ? "" : "AND c.DateUsage IS NULL";
 
   const baseQuery = `
     SELECT
@@ -58,6 +43,10 @@ exports.getAll = async ({ page, limit, search }) => {
       c.Blok,
       c.IdLokasi,
       c.Berat,
+      CASE
+        WHEN MAX(c.DateUsage) IS NULL THEN CAST(0 AS bit)
+        ELSE CAST(1 AS bit)
+      END AS Used,
       MAX(ISNULL(CAST(c.HasBeenPrinted AS int), 0)) AS HasBeenPrinted,
       CASE
         WHEN c.IdStatus = 1 THEN 'PASS'
@@ -65,10 +54,12 @@ exports.getAll = async ({ page, limit, search }) => {
         ELSE ''
       END AS StatusText,
 
-      -- Joins collapsed (if multiple rows exist, pick one deterministically)
+      -- Crusher Output
       MAX(cpo.NoCrusherProduksi) AS CrusherNoProduksi,
-      MAX(m.NamaMesin)          AS CrusherNamaMesin,
-      MAX(bs.NoBongkarSusun)    AS NoBongkarSusun
+      MAX(m.NamaMesin) AS CrusherNamaMesin,
+
+      -- Bongkar Susun
+      MAX(bs.NoBongkarSusun) AS NoBongkarSusun
 
     FROM [dbo].[Crusher] c
     LEFT JOIN [dbo].[MstCrusher] mc
@@ -76,7 +67,7 @@ exports.getAll = async ({ page, limit, search }) => {
     LEFT JOIN [dbo].[MstWarehouse] w
       ON w.IdWarehouse = c.IdWarehouse
 
-    -- Produksi chain
+    -- Crusher chain
     LEFT JOIN [dbo].[CrusherProduksiOutput] cpo
       ON cpo.NoCrusher = c.NoCrusher
     LEFT JOIN [dbo].[CrusherProduksi_h] ch
@@ -89,8 +80,22 @@ exports.getAll = async ({ page, limit, search }) => {
       ON bs.NoCrusher = c.NoCrusher
 
     WHERE 1=1
-      AND c.DateUsage IS NULL
-      ${whereSearch}
+      ${dateUsageFilter}
+      ${
+        search
+          ? `AND (
+               c.NoCrusher LIKE @search
+               OR c.Blok LIKE @search
+               OR CONVERT(VARCHAR(20), c.IdLokasi) LIKE @search
+               OR CONVERT(VARCHAR(20), c.IdWarehouse) LIKE @search
+               OR ISNULL(w.NamaWarehouse,'') LIKE @search
+               OR ISNULL(mc.NamaCrusher,'') LIKE @search
+               OR ISNULL(cpo.NoCrusherProduksi,'') LIKE @search
+               OR ISNULL(m.NamaMesin,'') LIKE @search
+               OR ISNULL(bs.NoBongkarSusun,'') LIKE @search
+             )`
+          : ""
+      }
 
     GROUP BY
       c.NoCrusher, c.DateCreate, c.IdCrusher, mc.NamaCrusher,
@@ -116,8 +121,22 @@ exports.getAll = async ({ page, limit, search }) => {
     LEFT JOIN [dbo].[BongkarSusunOutputCrusher] bs
       ON bs.NoCrusher = c.NoCrusher
     WHERE 1=1
-      AND c.DateUsage IS NULL
-      ${whereSearch}
+      ${dateUsageFilter}
+      ${
+        search
+          ? `AND (
+               c.NoCrusher LIKE @search
+               OR c.Blok LIKE @search
+               OR CONVERT(VARCHAR(20), c.IdLokasi) LIKE @search
+               OR CONVERT(VARCHAR(20), c.IdWarehouse) LIKE @search
+               OR ISNULL(w.NamaWarehouse,'') LIKE @search
+               OR ISNULL(mc.NamaCrusher,'') LIKE @search
+               OR ISNULL(cpo.NoCrusherProduksi,'') LIKE @search
+               OR ISNULL(m.NamaMesin,'') LIKE @search
+               OR ISNULL(bs.NoBongkarSusun,'') LIKE @search
+             )`
+          : ""
+      }
   `;
 
   request.input("offset", sql.Int, offset);

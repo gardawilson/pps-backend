@@ -321,7 +321,14 @@ JSON_VALUE(COALESCE(h.HeaderNew, h.HeaderInserted), '$.${field}') AS New${field}
     : "NULL";
 
   const query = `
-;WITH doc AS (
+;WITH seed AS (
+  SELECT DISTINCT
+    COALESCE(a.RequestId, CONCAT('AUDIT-', a.AuditId)) AS SessionKey
+  FROM dbo.AuditTrail a
+  WHERE a.TableName = '${config.headerTable}'
+    AND JSON_VALUE(a.PK, '$.${config.pkField}') = @DocumentNo
+)
+,doc AS (
   SELECT
     a.AuditId,
     a.EventTime,
@@ -334,12 +341,9 @@ JSON_VALUE(COALESCE(h.HeaderNew, h.HeaderInserted), '$.${field}') AS New${field}
     a.OldData,
     a.NewData
   FROM dbo.AuditTrail a
+  INNER JOIN seed s0
+    ON s0.SessionKey = COALESCE(a.RequestId, CONCAT('AUDIT-', a.AuditId))
   WHERE a.TableName IN (${tableListSQL})
-    AND EXISTS (
-      SELECT 1
-      FROM OPENJSON(a.PK)
-      WHERE value = @DocumentNo
-    )
 )
 ,sessionAgg AS (
   SELECT

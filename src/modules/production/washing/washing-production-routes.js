@@ -15,8 +15,10 @@ router.get(
 );
 
 // ✅ Create WashingProduksi_h
+// req.body support: { ..., isBlower: 1 | 0 }
 router.post("/washing", verifyToken, washingProduksiController.createProduksi);
 
+// req.body support: { ..., isBlower: 1 | 0 }
 router.put(
   "/washing/:noProduksi",
   verifyToken,

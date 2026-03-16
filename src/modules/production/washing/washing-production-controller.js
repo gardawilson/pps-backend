@@ -149,6 +149,7 @@ async function createProduksi(req, res) {
     jmlhAnggota: toInt(b.jmlhAnggota),
     hadir: toInt(b.hadir),
     hourMeter: toFloat(b.hourMeter),
+    isBlower: toBit(b.isBlower),
 
     hourStart: normalizeTime(b.hourStart) ?? null,
     hourEnd: normalizeTime(b.hourEnd) ?? null,
@@ -166,6 +167,14 @@ async function createProduksi(req, res) {
       success: false,
       message: `Field wajib: ${must.join(", ")}`,
       error: { fields: must },
+    });
+  }
+
+  if (b.isBlower !== undefined && payload.isBlower == null) {
+    return res.status(400).json({
+      success: false,
+      message: "Field isBlower harus bernilai 1 atau 0",
+      error: { fields: ["isBlower"] },
     });
   }
 
@@ -270,6 +279,7 @@ async function updateProduksi(req, res) {
     hadir: b.hadir !== undefined ? toInt(b.hadir) : undefined,
 
     hourMeter: b.hourMeter !== undefined ? toFloat(b.hourMeter) : undefined,
+    isBlower: b.isBlower !== undefined ? toBitUndef(b.isBlower) : undefined,
 
     hourStart:
       b.hourStart !== undefined ? normalizeTime(b.hourStart) : undefined,
@@ -283,6 +293,14 @@ async function updateProduksi(req, res) {
       success: false,
       message: "No fields to update",
       error: { fields: [] },
+    });
+  }
+
+  if (b.isBlower !== undefined && payload.isBlower == null) {
+    return res.status(400).json({
+      success: false,
+      message: "Field isBlower harus bernilai 1 atau 0",
+      error: { fields: ["isBlower"] },
     });
   }
 

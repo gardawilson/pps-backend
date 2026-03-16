@@ -76,6 +76,7 @@ async function getAllProduksi(page = 1, pageSize = 20, search = "") {
       h.JmlhAnggota,
       h.Hadir,
       h.HourMeter,
+      h.IsBlower,
       CONVERT(VARCHAR(8), h.HourStart, 108) AS HourStart,
       CONVERT(VARCHAR(8), h.HourEnd, 108) AS HourEnd,
 
@@ -123,7 +124,7 @@ async function getProduksiByDate(date) {
       h.NoProduksi, h.IdOperator, h.IdMesin, m.NamaMesin,
       h.TglProduksi, h.JamKerja, h.Shift, h.CreateBy,
       h.CheckBy1, h.CheckBy2, h.ApproveBy,
-      h.JmlhAnggota, h.Hadir, h.HourMeter
+      h.JmlhAnggota, h.Hadir, h.HourMeter, h.IsBlower
     FROM WashingProduksi_h h
     LEFT JOIN MstMesin m ON h.IdMesin = m.IdMesin
     WHERE CONVERT(date, h.TglProduksi) = @date
@@ -260,6 +261,7 @@ async function createWashingProduksi(payload, ctx) {
       .input("JmlhAnggota", sql.Int, body.jmlhAnggota ?? null)
       .input("Hadir", sql.Int, body.hadir ?? null)
       .input("HourMeter", sql.Decimal(18, 2), body.hourMeter ?? null)
+      .input("IsBlower", sql.Bit, body.isBlower ?? null)
       // kirim string, biar SQL yang CAST ke time(7)
       .input("HourStart", sql.VarChar(20), body.hourStart ?? null)
       .input("HourEnd", sql.VarChar(20), body.hourEnd ?? null);
@@ -279,6 +281,7 @@ async function createWashingProduksi(payload, ctx) {
         JmlhAnggota  int,
         Hadir        int,
         HourMeter    decimal(18,2),
+        IsBlower     bit,
         HourStart    time(7),
         HourEnd      time(7)
       );
@@ -297,6 +300,7 @@ async function createWashingProduksi(payload, ctx) {
         JmlhAnggota,
         Hadir,
         HourMeter,
+        IsBlower,
         HourStart,
         HourEnd
       )
@@ -314,6 +318,7 @@ async function createWashingProduksi(payload, ctx) {
         INSERTED.JmlhAnggota,
         INSERTED.Hadir,
         INSERTED.HourMeter,
+        INSERTED.IsBlower,
         INSERTED.HourStart,
         INSERTED.HourEnd
       INTO @out
@@ -331,6 +336,7 @@ async function createWashingProduksi(payload, ctx) {
         @JmlhAnggota,
         @Hadir,
         @HourMeter,
+        @IsBlower,
         CASE WHEN @HourStart IS NULL OR LTRIM(RTRIM(@HourStart)) = '' THEN NULL ELSE CAST(@HourStart AS time(7)) END,
         CASE WHEN @HourEnd   IS NULL OR LTRIM(RTRIM(@HourEnd))   = '' THEN NULL ELSE CAST(@HourEnd   AS time(7)) END
       );
@@ -505,6 +511,11 @@ async function updateWashingProduksi(noProduksi, payload, ctx) {
       rqUpd.input("HourMeter", sql.Decimal(18, 2), payload.hourMeter ?? null);
     }
 
+    if (payload.isBlower !== undefined) {
+      sets.push("IsBlower = @IsBlower");
+      rqUpd.input("IsBlower", sql.Bit, payload.isBlower ?? null);
+    }
+
     // hourStart / hourEnd (lebih aman kalau null / kosong)
     if (payload.hourStart !== undefined) {
       sets.push(`
@@ -546,6 +557,7 @@ async function updateWashingProduksi(noProduksi, payload, ctx) {
         JmlhAnggota  int,
         Hadir        int,
         HourMeter    decimal(18,2),
+        IsBlower     bit,
         HourStart    time(7),
         HourEnd      time(7)
       );
@@ -566,6 +578,7 @@ async function updateWashingProduksi(noProduksi, payload, ctx) {
         INSERTED.JmlhAnggota,
         INSERTED.Hadir,
         INSERTED.HourMeter,
+        INSERTED.IsBlower,
         INSERTED.HourStart,
         INSERTED.HourEnd
       INTO @out

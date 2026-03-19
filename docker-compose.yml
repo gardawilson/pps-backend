@@ -1,0 +1,21 @@
+services:
+  app:
+    build: .
+    container_name: pps-backend
+    ports:
+      - "7500:7500"
+    env_file: .env
+    volumes:
+      - ${UPDATES_HOST_DIR}:/app/deploy/pps_update
+    restart: always
+
+  # Uncomment saat Redis dibutuhkan:
+  # redis:
+  #   image: redis:7-alpine
+  #   container_name: pps-redis
+  #   restart: always
+  #   volumes:
+  #     - redis_data:/data
+
+# volumes:
+#   redis_data:

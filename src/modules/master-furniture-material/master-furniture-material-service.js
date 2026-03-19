@@ -1,5 +1,5 @@
-const sql = require('mssql');
-const { poolPromise } = require('../../core/config/db');
+const sql = require("mssql");
+const { poolPromise } = require("../../core/config/db");
 
 /**
  * Get all master cabinet materials with stock info
@@ -10,7 +10,7 @@ async function getMasterCabinetMaterials({ idWarehouse }) {
   const pool = await poolPromise;
   const req = pool.request();
 
-  req.input('IdWarehouse', sql.Int, idWarehouse);
+  req.input("IdWarehouse", sql.Int, idWarehouse);
 
   const query = `
     DECLARE @TglAkhir date = CAST(GETDATE() AS date);
@@ -223,14 +223,12 @@ async function getMasterCabinetMaterials({ idWarehouse }) {
   };
 }
 
-
-
 async function getByCetakanWarna({ idCetakan, idWarna }) {
   const pool = await poolPromise;
   const request = pool.request();
 
-  request.input('IdCetakan', sql.Int, idCetakan);
-  request.input('IdWarna', sql.Int, idWarna);
+  request.input("IdCetakan", sql.Int, idCetakan);
+  request.input("IdWarna", sql.Int, idWarna);
 
   const query = `
     SELECT
@@ -250,6 +248,5 @@ async function getByCetakanWarna({ idCetakan, idWarna }) {
   const result = await request.query(query);
   return result.recordset; // ini array
 }
-
 
 module.exports = { getMasterCabinetMaterials, getByCetakanWarna };

@@ -67,8 +67,10 @@ app.use(bodyParser.urlencoded({ extended: true }));
 app.get("/health", (req, res) => {
   res.status(200).json({
     status: "OK",
-    message: "Server is running",
+    message: "PPS Backend is healthy",
+    version: process.env.npm_package_version || "1.0.0",
     timestamp: new Date().toISOString(),
+    uptime: Math.floor(process.uptime()) + "s",
   });
 });
 app.use("/api/update", updateRoutes);

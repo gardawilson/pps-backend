@@ -8,8 +8,6 @@
     "test": "jest",
     "it:bongkar-susun": "node src/modules/bongkar-susun/__tests__/integration/bongkar-susun-integration.test.js",
     "it:bongkar-susun-delete": "node src/modules/bongkar-susun/__tests__/integration/bongkar-susun-delete-integration.test.js"
-
-
   },
   "author": "",
   "license": "ISC",
@@ -22,6 +20,7 @@
     "jsonwebtoken": "^9.0.2",
     "moment": "^2.30.1",
     "mssql": "^11.0.1",
+    "multer": "^2.1.1",
     "socket.io": "^4.8.1",
     "ws": "^8.18.1"
   },

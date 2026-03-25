@@ -8,11 +8,15 @@ on:
 jobs:
   deploy:
     runs-on: self-hosted
+    env:
+      APP_DIR: /opt/pps_backend
     steps:
       - name: Pull latest code
+        shell: bash
         run: git pull origin production
-        working-directory: D:\backend\pps_backend
+        working-directory: ${{ env.APP_DIR }}
 
       - name: Deploy with Docker
+        shell: bash
         run: docker compose up -d --build
-        working-directory: D:\backend\pps_backend
+        working-directory: ${{ env.APP_DIR }}

@@ -52,9 +52,14 @@ PORT=7500
 
 # Update / APK Distribution
 UPDATES_DIR=/app/deploy/pps_update
-UPDATES_HOST_DIR=D:/deploy/pps_update
+UPDATES_HOST_DIR=/opt/pps_update
 UPDATE_TOKEN=your-update-token
 ```
+
+Contoh path host:
+
+- Windows Docker Desktop: `D:/deploy/pps_update`
+- Ubuntu Docker Engine: `/opt/pps_update`
 
 ### 3. Jalankan dengan Docker
 
@@ -84,6 +89,18 @@ D:\deploy\pps_update\
 
 ---
 
+Contoh struktur folder di Ubuntu:
+
+```text
+/opt/pps_update/
+├── tablet/
+│   └── app-release.apk
+└── mobile/
+    └── app-release.apk
+```
+
+---
+
 ## Deployment ke Server
 
 ### Otomatis (via GitHub Actions)
@@ -108,9 +125,90 @@ GitHub Actions akan otomatis:
 SSH atau RDP ke server, lalu:
 
 ```bash
-cd D:\backend\pps_backend
+cd /opt/pps_backend
 git pull origin production
 docker compose up -d --build
+```
+
+---
+
+## Migrasi ke VM Ubuntu
+
+Jika Docker Engine di Ubuntu sudah aktif, langkah pindah dari Windows ke Ubuntu untuk project ini adalah:
+
+### 1. Install Git dan Docker Compose plugin
+
+```bash
+sudo apt update
+sudo apt install -y git docker-compose-plugin
+```
+
+### 2. Clone project ke direktori server
+
+```bash
+sudo mkdir -p /opt/pps_backend
+sudo chown -R $USER:$USER /opt/pps_backend
+git clone https://github.com/gardawilson/pps-backend.git /opt/pps_backend
+cd /opt/pps_backend
+git checkout production
+```
+
+### 3. Buat folder bind mount untuk file update
+
+```bash
+sudo mkdir -p /opt/pps_update/tablet /opt/pps_update/mobile
+sudo chown -R $USER:$USER /opt/pps_update
+```
+
+### 4. Sesuaikan file `.env`
+
+Contoh untuk Ubuntu:
+
+```env
+PORT=7500
+UPDATES_DIR=/app/deploy/pps_update
+UPDATES_HOST_DIR=/opt/pps_update
+```
+
+Catatan:
+
+1. `UPDATES_DIR` adalah path di dalam container.
+2. `UPDATES_HOST_DIR` adalah path di host Ubuntu.
+3. Jika SQL Server masih berada di mesin lain, `DB_SERVER` tetap isi IP server SQL tersebut.
+
+### 5. Build dan jalankan container
+
+```bash
+docker compose up -d --build
+docker compose ps
+docker compose logs -f app
+```
+
+### 6. Buka port jika firewall Ubuntu aktif
+
+```bash
+sudo ufw allow 7500/tcp
+sudo ufw reload
+```
+
+### 7. Uji service
+
+```bash
+curl http://localhost:7500/health
+```
+
+Untuk akses dari jaringan lokal:
+
+```bash
+curl http://IP_VM_UBUNTU:7500/health
+```
+
+### 8. Jika ingin auto deploy via GitHub Actions
+
+Server Ubuntu perlu dipasang GitHub Actions self-hosted runner, lalu workflow ini akan menjalankan deploy di:
+
+```bash
+/opt/pps_backend
 ```
 
 ---

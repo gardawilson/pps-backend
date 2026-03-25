@@ -67,7 +67,7 @@ app.use(bodyParser.urlencoded({ extended: true }));
 app.get("/health", (req, res) => {
   res.status(200).json({
     status: "OK",
-    message: "PPS Backend is healthy",
+    message: "PPS Backend is healthy!!",
     version: process.env.npm_package_version || "1.0.0",
     timestamp: new Date().toISOString(),
     uptime: Math.floor(process.uptime()) + "s",

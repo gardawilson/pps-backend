@@ -53,6 +53,7 @@ const bjJualRoutes = require("./modules/bj-jual/bj-jual-route");
 const mstPembeliRoutes = require("./modules/master/pembeli/master-pembeli-route");
 const mstWarehouseRoutes = require("./modules/master/warehouse/master-warehouse-route");
 const mstPrinterRoutes = require("./modules/master/printer/master-printer-route");
+const mstReguRoutes = require("./modules/master/regu/master-regu-route");
 const auditRoutes = require("./modules/audit/audit-route");
 const updateRoutes = require("./modules/update/update-routes");
 const printLockRoutes = require("./modules/label/print-lock/print-lock-routes");
@@ -126,6 +127,7 @@ app.use("/api/production", productionSharedRoutes);
 app.use("/api/bj-jual", bjJualRoutes);
 app.use("/api/mst", mstPembeliRoutes);
 app.use("/api/mst", mstWarehouseRoutes);
+app.use("/api/mst", mstReguRoutes);
 app.use("/api", mstPrinterRoutes);
 app.use("/api/audit", auditRoutes);
 

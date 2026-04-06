@@ -86,6 +86,8 @@ async function getAllProduksi(page = 1, pageSize = 20, search = "") {
       h.HourMeter,
       CONVERT(VARCHAR(8), h.HourStart, 108) AS HourStart,
       CONVERT(VARCHAR(8), h.HourEnd, 108) AS HourEnd,
+      h.IdRegu,
+      rg.NamaRegu,
 
       -- (opsional utk frontend)
       lc.LastClosedDate AS LastClosedDate,
@@ -101,6 +103,7 @@ async function getAllProduksi(page = 1, pageSize = 20, search = "") {
     FROM dbo.BrokerProduksi_h h WITH (NOLOCK)
     LEFT JOIN dbo.MstMesin    ms WITH (NOLOCK) ON ms.IdMesin     = h.IdMesin
     LEFT JOIN dbo.MstOperator op WITH (NOLOCK) ON op.IdOperator  = h.IdOperator
+    LEFT JOIN dbo.MstRegu     rg WITH (NOLOCK) ON rg.IdRegu      = h.IdRegu
 
     OUTER APPLY (
       SELECT TOP 1 LastClosedDate
@@ -679,7 +682,8 @@ async function createBrokerProduksi(payload, ctx) {
       .input("HourMeter", sql.Decimal(18, 2), body.hourMeter ?? null)
       // kirim string, biar SQL yang CAST ke time(7)
       .input("HourStart", sql.VarChar(20), body.hourStart ?? null)
-      .input("HourEnd", sql.VarChar(20), body.hourEnd ?? null);
+      .input("HourEnd", sql.VarChar(20), body.hourEnd ?? null)
+      .input("IdRegu", sql.Int, body.idRegu ?? null);
 
     const insertSql = `
       DECLARE @out TABLE (
@@ -697,7 +701,8 @@ async function createBrokerProduksi(payload, ctx) {
         Hadir        int,
         HourMeter    decimal(18,2),
         HourStart    time(7),
-        HourEnd      time(7)
+        HourEnd      time(7),
+        IdRegu       int
       );
 
       INSERT INTO dbo.BrokerProduksi_h (
@@ -715,7 +720,8 @@ async function createBrokerProduksi(payload, ctx) {
         Hadir,
         HourMeter,
         HourStart,
-        HourEnd
+        HourEnd,
+        IdRegu
       )
       OUTPUT
         INSERTED.NoProduksi,
@@ -732,7 +738,8 @@ async function createBrokerProduksi(payload, ctx) {
         INSERTED.Hadir,
         INSERTED.HourMeter,
         INSERTED.HourStart,
-        INSERTED.HourEnd
+        INSERTED.HourEnd,
+        INSERTED.IdRegu
       INTO @out
       VALUES (
         @NoProduksi,
@@ -749,7 +756,8 @@ async function createBrokerProduksi(payload, ctx) {
         @Hadir,
         @HourMeter,
         CASE WHEN @HourStart IS NULL OR LTRIM(RTRIM(@HourStart)) = '' THEN NULL ELSE CAST(@HourStart AS time(7)) END,
-        CASE WHEN @HourEnd   IS NULL OR LTRIM(RTRIM(@HourEnd))   = '' THEN NULL ELSE CAST(@HourEnd   AS time(7)) END
+        CASE WHEN @HourEnd   IS NULL OR LTRIM(RTRIM(@HourEnd))   = '' THEN NULL ELSE CAST(@HourEnd   AS time(7)) END,
+        @IdRegu
       );
 
       SELECT * FROM @out;
@@ -918,6 +926,11 @@ async function updateBrokerProduksi(noProduksi, payload, ctx) {
       rqUpd.input("HourEnd", sql.VarChar(20), payload.hourEnd ?? null);
     }
 
+    if (payload.idRegu !== undefined) {
+      sets.push("IdRegu = @IdRegu");
+      rqUpd.input("IdRegu", sql.Int, payload.idRegu ?? null);
+    }
+
     if (sets.length === 0) throw badReq("No fields to update");
 
     rqUpd.input("NoProduksi", sql.VarChar(50), noProduksi);
@@ -941,7 +954,8 @@ async function updateBrokerProduksi(noProduksi, payload, ctx) {
         Hadir        int,
         HourMeter    decimal(18,2),
         HourStart    time(7),
-        HourEnd      time(7)
+        HourEnd      time(7),
+        IdRegu       int
       );
 
       UPDATE dbo.BrokerProduksi_h
@@ -961,7 +975,8 @@ async function updateBrokerProduksi(noProduksi, payload, ctx) {
         INSERTED.Hadir,
         INSERTED.HourMeter,
         INSERTED.HourStart,
-        INSERTED.HourEnd
+        INSERTED.HourEnd,
+        INSERTED.IdRegu
       INTO @out
       WHERE NoProduksi = @NoProduksi;
 

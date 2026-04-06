@@ -63,13 +63,11 @@ async function getInputsByNoProduksi(req, res) {
       .json({ success: true, message: "Inputs retrieved", data });
   } catch (e) {
     console.error("[getInputsByNoProduksi]", e);
-    return res
-      .status(500)
-      .json({
-        success: false,
-        message: "Internal Server Error",
-        error: e.message,
-      });
+    return res.status(500).json({
+      success: false,
+      message: "Internal Server Error",
+      error: e.message,
+    });
   }
 }
 
@@ -87,13 +85,11 @@ async function getOutputsByNoProduksi(req, res) {
       .json({ success: true, message: "Outputs retrieved", data });
   } catch (e) {
     console.error("[getOutputsByNoProduksi]", e);
-    return res
-      .status(500)
-      .json({
-        success: false,
-        message: "Internal Server Error",
-        error: e.message,
-      });
+    return res.status(500).json({
+      success: false,
+      message: "Internal Server Error",
+      error: e.message,
+    });
   }
 }
 
@@ -111,13 +107,11 @@ async function getOutputsBonggolanByNoProduksi(req, res) {
       .json({ success: true, message: "Outputs retrieved", data });
   } catch (e) {
     console.error("[getOutputsBonggolanByNoProduksi]", e);
-    return res
-      .status(500)
-      .json({
-        success: false,
-        message: "Internal Server Error",
-        error: e.message,
-      });
+    return res.status(500).json({
+      success: false,
+      message: "Internal Server Error",
+      error: e.message,
+    });
   }
 }
 
@@ -221,6 +215,8 @@ async function createProduksi(req, res) {
 
     hourStart: b.hourStart || null, // ex: '08:00:00'
     hourEnd: b.hourEnd || null, // ex: '09:00:00'
+
+    idRegu: toInt(b.idRegu) ?? null,
   };
 
   // optional: validasi cepat agar error 400 rapih (service juga akan validasi)
@@ -354,6 +350,8 @@ async function updateProduksi(req, res) {
 
     hourStart: b.hourStart !== undefined ? b.hourStart || null : undefined,
     hourEnd: b.hourEnd !== undefined ? b.hourEnd || null : undefined,
+
+    idRegu: b.idRegu !== undefined ? toInt(b.idRegu) : undefined,
 
     // NOTE:
     // - Jangan kirim updateBy kalau kolomnya tidak ada di tabel.

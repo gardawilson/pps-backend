@@ -1,5 +1,5 @@
-const { sql, poolPromise } = require('../../core/config/db');
-const { hashPassword } = require('../../core/utils/crypto-helper');
+const { sql, poolPromise } = require("../../core/config/db");
+const { hashPassword } = require("../../core/utils/crypto-helper");
 
 /**
  * ✅ Verifikasi user dan kembalikan data lengkapnya dengan error detail
@@ -8,12 +8,12 @@ const { hashPassword } = require('../../core/utils/crypto-helper');
 async function verifyUser(username, password) {
   const pool = await poolPromise;
   const hashedPassword = hashPassword(password);
-  
+
   // 🔹 Query langsung dengan username DAN password
-  const result = await pool.request()
-    .input('username', sql.VarChar, username)
-    .input('password', sql.VarChar, hashedPassword)
-    .query(`
+  const result = await pool
+    .request()
+    .input("username", sql.VarChar, username)
+    .input("password", sql.VarChar, hashedPassword).query(`
       SELECT TOP 1 
         IdUsername,
         Username,
@@ -22,16 +22,16 @@ async function verifyUser(username, password) {
         Status,
         IsEnable
       FROM dbo.MstUsername
-      WHERE Username = @username AND Password = @password
+    WHERE Username = @username AND Password = @password AND IsEnable = 1
     `);
 
   // 🔹 Kalau tidak ditemukan (bisa username salah ATAU password salah)
   // Security best practice: jangan bedakan "user not found" vs "wrong password"
   if (result.recordset.length === 0) {
-    return { 
-      success: false, 
-      errorType: 'invalid_credentials',
-      message: 'Username atau password salah'
+    return {
+      success: false,
+      errorType: "invalid_credentials",
+      message: "Username atau password salah",
     };
   }
 
@@ -39,8 +39,8 @@ async function verifyUser(username, password) {
 
   // 🔹 BARU CEK status setelah credentials valid
   // if (!user.IsEnable || user.Status !== 'Active') {
-  //   return { 
-  //     success: false, 
+  //   return {
+  //     success: false,
   //     errorType: 'user_inactive',
   //     message: 'Akun Anda tidak aktif. Hubungi administrator.'
   //   };
@@ -55,8 +55,8 @@ async function verifyUser(username, password) {
       FName: user.FName,
       LName: user.LName,
       Status: user.Status,
-      IsEnable: user.IsEnable
-    }
+      IsEnable: user.IsEnable,
+    },
   };
 }
 

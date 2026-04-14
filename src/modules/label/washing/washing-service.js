@@ -32,7 +32,7 @@ exports.getAll = async ({ page, limit, search, includeUsed = false }) => {
       h.NoWashing,
       h.DateCreate,
       h.IdJenisPlastik,
-      jp.Jenis AS NamaJenisPlastik,
+      mw.Nama AS NamaJenisPlastik,
       h.IdWarehouse,
       w.NamaWarehouse,
       h.Blok,                    -- ✅ ambil langsung dari header
@@ -65,7 +65,7 @@ exports.getAll = async ({ page, limit, search, includeUsed = false }) => {
       -- ambil NoBongkarSusun
       MAX(bso.NoBongkarSusun) AS NoBongkarSusun
     FROM Washing_h h
-    INNER JOIN MstJenisPlastik jp ON jp.IdJenisPlastik = h.IdJenisPlastik
+    INNER JOIN MstWashing mw ON mw.IdWashing = h.IdJenisPlastik
     INNER JOIN MstWarehouse w ON w.IdWarehouse = h.IdWarehouse
     LEFT JOIN Washing_d d ON h.NoWashing = d.NoWashing
     LEFT JOIN WashingProduksiOutput wpo ON wpo.NoWashing = h.NoWashing
@@ -73,10 +73,10 @@ exports.getAll = async ({ page, limit, search, includeUsed = false }) => {
     LEFT JOIN MstMesin m ON m.IdMesin = wph.IdMesin
     LEFT JOIN BongkarSusunOutputWashing bso ON bso.NoWashing = h.NoWashing
     WHERE 1=1
-      ${search ? `AND (h.NoWashing LIKE @search OR jp.Jenis LIKE @search OR w.NamaWarehouse LIKE @search)` : ""}
+      ${search ? `AND (h.NoWashing LIKE @search OR mw.Nama LIKE @search OR w.NamaWarehouse LIKE @search)` : ""}
       ${dateUsageFilter}
     GROUP BY 
-      h.NoWashing, h.DateCreate, h.IdJenisPlastik, jp.Jenis, 
+      h.NoWashing, h.DateCreate, h.IdJenisPlastik, mw.Nama, 
       h.IdWarehouse, w.NamaWarehouse, h.IdStatus, 
       h.Density, h.Density2, h.Density3, h.Moisture, h.Moisture2, h.Moisture3, h.Blok, h.IdLokasi
     ORDER BY h.NoWashing DESC
@@ -86,10 +86,10 @@ exports.getAll = async ({ page, limit, search, includeUsed = false }) => {
   const countQuery = `
     SELECT COUNT(DISTINCT h.NoWashing) as total
     FROM Washing_h h
-    INNER JOIN MstJenisPlastik jp ON jp.IdJenisPlastik = h.IdJenisPlastik
+    INNER JOIN MstWashing mw ON mw.IdWashing = h.IdJenisPlastik
     INNER JOIN MstWarehouse w ON w.IdWarehouse = h.IdWarehouse
     WHERE 1=1
-      ${search ? `AND (h.NoWashing LIKE @search OR jp.Jenis LIKE @search OR w.NamaWarehouse LIKE @search)` : ""}
+      ${search ? `AND (h.NoWashing LIKE @search OR mw.Nama LIKE @search OR w.NamaWarehouse LIKE @search)` : ""}
       ${dateUsageFilter}
   `;
 

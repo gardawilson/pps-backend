@@ -3,6 +3,7 @@ const express = require("express");
 const router = express.Router();
 const verifyToken = require("../../../core/middleware/verify-token");
 const washingProduksiController = require("./washing-production-controller");
+const reguCtrl = require("../../master/regu/master-regu-controller");
 
 // GET /washing?page=1&pageSize=20
 router.get("/washing", verifyToken, washingProduksiController.getAllProduksi);
@@ -62,5 +63,9 @@ router.delete(
   verifyToken,
   washingProduksiController.deleteInputsAndPartials,
 );
+
+// List regu
+// Query: ?q=nama&idBagian=1&orderBy=NamaRegu&orderDir=ASC
+router.get("/washing/regu", verifyToken, reguCtrl.list);
 
 module.exports = router;

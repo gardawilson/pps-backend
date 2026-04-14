@@ -54,6 +54,7 @@ router.get(
   verifyToken,
   stockOpnameAscendDataHandler,
 );
+
 // Simpan hasil Stock Opname Ascend (upsert MERGE)
 router.post(
   "/no-stock-opname/:noso/ascend/hasil",

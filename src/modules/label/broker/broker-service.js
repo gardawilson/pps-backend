@@ -32,7 +32,7 @@ exports.getAll = async ({ page, limit, search, includeUsed = false }) => {
       h.NoBroker,
       h.DateCreate,
       h.IdJenisPlastik,
-      jp.Jenis AS NamaJenisPlastik,
+      mb.Nama AS NamaJenisPlastik,
       h.IdWarehouse,
       w.NamaWarehouse,
       h.Blok,                   -- dari header
@@ -70,7 +70,7 @@ exports.getAll = async ({ page, limit, search, includeUsed = false }) => {
       MAX(m.NamaMesin)            AS NamaMesin,         -- via BrokerProduksi_h → MstMesin
       MAX(bsob.NoBongkarSusun)    AS NoBongkarSusun    -- dari BongkarSusunOutputBroker
     FROM Broker_h h
-    INNER JOIN MstJenisPlastik jp ON jp.IdJenisPlastik = h.IdJenisPlastik
+    INNER JOIN MstBroker mb ON mb.IdBroker = h.IdJenisPlastik
     INNER JOIN MstWarehouse    w  ON w.IdWarehouse     = h.IdWarehouse
 
     -- Header → Output Produksi (ambil NoProduksi)
@@ -92,7 +92,7 @@ exports.getAll = async ({ page, limit, search, includeUsed = false }) => {
         search
           ? `AND (
                h.NoBroker LIKE @search
-               OR jp.Jenis LIKE @search
+               OR mb.Nama LIKE @search
                OR w.NamaWarehouse LIKE @search
                OR bpo.NoProduksi LIKE @search
                OR m.NamaMesin LIKE @search
@@ -102,7 +102,7 @@ exports.getAll = async ({ page, limit, search, includeUsed = false }) => {
       }
       ${dateUsageFilter}
     GROUP BY
-      h.NoBroker, h.DateCreate, h.IdJenisPlastik, jp.Jenis,
+      h.NoBroker, h.DateCreate, h.IdJenisPlastik, mb.Nama,
       h.IdWarehouse, w.NamaWarehouse, h.IdStatus,
       h.Density, h.Moisture, h.MaxMeltTemp, h.MinMeltTemp, h.MFI, h.VisualNote,
       h.Density2, h.Density3, h.Moisture2, h.Moisture3,
@@ -114,7 +114,7 @@ exports.getAll = async ({ page, limit, search, includeUsed = false }) => {
   const countQuery = `
     SELECT COUNT(DISTINCT h.NoBroker) AS total
     FROM Broker_h h
-    INNER JOIN MstJenisPlastik jp ON jp.IdJenisPlastik = h.IdJenisPlastik
+    INNER JOIN MstBroker mb ON mb.IdBroker = h.IdJenisPlastik
     INNER JOIN MstWarehouse    w  ON w.IdWarehouse     = h.IdWarehouse
     LEFT JOIN dbo.BrokerProduksiOutput bpo
       ON bpo.NoBroker = h.NoBroker
@@ -129,7 +129,7 @@ exports.getAll = async ({ page, limit, search, includeUsed = false }) => {
         search
           ? `AND (
                h.NoBroker LIKE @search
-               OR jp.Jenis LIKE @search
+               OR mb.Nama LIKE @search
                OR w.NamaWarehouse LIKE @search
                OR bpo.NoProduksi LIKE @search
                OR m.NamaMesin LIKE @search

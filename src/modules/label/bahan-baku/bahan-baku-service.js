@@ -335,9 +335,7 @@ exports.updateByNoBahanBakuAndNoPallet = async (payload) => {
     // use shared normalizeDecimalField from utils
 
     setIf("IdJenisPlastik", "IdJenisPlastik", sql.Int, header.IdJenisPlastik);
-    setIf("IdWarehouse", "IdWarehouse", sql.Int, header.IdWarehouse);
     setIf("IdStatus", "IdStatus", sql.Int, header.IdStatus);
-    setIf("Keterangan", "Keterangan", sql.VarChar(sql.MAX), header.Keterangan);
 
     // Field numeric dengan normalisasi (terima '', '-', null, string angka, angka)
     setIf(

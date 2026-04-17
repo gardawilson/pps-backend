@@ -1131,3 +1131,87 @@ exports.incrementHasBeenPrinted = async (payload) => {
     throw e;
   }
 };
+
+exports.getByNoReject = async (NoReject) => {
+  const pool = await poolPromise;
+
+  const result = await pool
+    .request()
+    .input("NoReject", sql.VarChar(50), NoReject)
+    .query(`
+      ;WITH RejectPartialAgg AS (
+        SELECT NoReject, SUM(ISNULL(Berat, 0)) AS TotalPartialBerat
+        FROM dbo.RejectV2Partial
+        GROUP BY NoReject
+      )
+      SELECT
+        r.NoReject,
+        r.DateCreate,
+        mr.NamaReject,
+        CASE
+          WHEN ISNULL(r.Berat, 0) - ISNULL(rp.TotalPartialBerat, 0) < 0
+            THEN 0
+          ELSE ISNULL(r.Berat, 0) - ISNULL(rp.TotalPartialBerat, 0)
+        END AS Berat,
+        ISNULL(CAST(r.HasBeenPrinted AS int), 0) AS HasBeenPrinted,
+        r.CreateBy,
+        COALESCE(outInfo.OutputNamaMesin, '')  AS Mesin,
+        outInfo.Shift                          AS Shift
+      FROM dbo.RejectV2 r
+      LEFT JOIN dbo.MstReject mr ON mr.IdReject = r.IdReject
+      LEFT JOIN RejectPartialAgg rp ON rp.NoReject = r.NoReject
+      OUTER APPLY (
+        SELECT TOP (1) src.OutputNamaMesin, src.Shift
+        FROM (
+          SELECT mInject.NamaMesin AS OutputNamaMesin, injh.Shift, 1 AS Priority
+          FROM dbo.InjectProduksiOutputRejectV2 injr
+          JOIN dbo.InjectProduksi_h injh ON injh.NoProduksi = injr.NoProduksi
+          LEFT JOIN dbo.MstMesin mInject ON mInject.IdMesin = injh.IdMesin
+          WHERE injr.NoReject = r.NoReject
+
+          UNION ALL
+
+          SELECT mHot.NamaMesin, hsh.Shift, 2
+          FROM dbo.HotStampingOutputRejectV2 hsr
+          JOIN dbo.HotStamping_h hsh ON hsh.NoProduksi = hsr.NoProduksi
+          LEFT JOIN dbo.MstMesin mHot ON mHot.IdMesin = hsh.IdMesin
+          WHERE hsr.NoReject = r.NoReject
+
+          UNION ALL
+
+          SELECT mSpan.NamaMesin, sph.Shift, 3
+          FROM dbo.SpannerOutputRejectV2 spr
+          JOIN dbo.Spanner_h sph ON sph.NoProduksi = spr.NoProduksi
+          LEFT JOIN dbo.MstMesin mSpan ON mSpan.IdMesin = sph.IdMesin
+          WHERE spr.NoReject = r.NoReject
+
+          UNION ALL
+
+          SELECT bjr.NoBJSortir, NULL, 4
+          FROM dbo.BJSortirRejectOutputLabelReject bjr
+          WHERE bjr.NoReject = r.NoReject
+        ) src
+        WHERE src.OutputNamaMesin IS NOT NULL AND src.OutputNamaMesin <> ''
+        ORDER BY src.Priority
+      ) outInfo
+      WHERE r.NoReject = @NoReject
+    `);
+
+  const first = result.recordset?.[0];
+  if (!first) {
+    const e = new Error(`NoReject ${NoReject} tidak ditemukan`);
+    e.statusCode = 404;
+    throw e;
+  }
+
+  return {
+    NoReject:       first.NoReject,
+    DateCreate:     first.DateCreate,
+    NamaReject:     first.NamaReject,
+    Berat:          first.Berat,
+    HasBeenPrinted: first.HasBeenPrinted,
+    CreateBy:       first.CreateBy,
+    Mesin:          first.Mesin,
+    Shift:          first.Shift,
+  };
+};

@@ -6,6 +6,8 @@ const {
   makeRequestId,
 } = require("../../../core/utils/http-context");
 const { getIo } = require("../../../core/utils/socket-instance");
+const { generateLabelPdf } = require("../../../core/utils/pdf/label-generator");
+const { buildFurnitureWipLabelHtml } = require("../../../core/utils/pdf/templates/furniture-wip-label-pdf/furniture-wip-label-pdf");
 
 // GET /labels/furniture-wip?page=&limit=&search=
 exports.getAll = async (req, res) => {
@@ -312,5 +314,48 @@ exports.incrementHasBeenPrinted = async (req, res) => {
       success: false,
       message: err.message || "Terjadi kesalahan server",
     });
+  }
+};
+
+// GET /labels/furniture-wip/:noFurnitureWip/pdf
+exports.generatePdf = async (req, res) => {
+  try {
+    const NoFurnitureWIP = String(req.params.noFurnitureWip || "").trim();
+    if (!NoFurnitureWIP) {
+      return res.status(400).json({ success: false, message: "noFurnitureWip wajib diisi" });
+    }
+
+    const row = await service.getByNoFurnitureWip(NoFurnitureWIP);
+
+    const d = new Date(row.DateCreate);
+    const dd = String(d.getDate()).padStart(2, "0");
+    const mmm = d.toLocaleDateString("id-ID", { month: "short" });
+    const yy = String(d.getFullYear()).slice(-2);
+
+    const data = {
+      noLabel:         row.NoFurnitureWIP,
+      namaFurnitureWip: row.NamaFurnitureWIP,
+      mesin:           row.Mesin || "-",
+      shift:           row.Shift != null ? String(row.Shift) : "-",
+      pcs:             row.Pcs != null ? String(row.Pcs) : "-",
+      berat:           row.Berat != null ? `${Number(row.Berat).toFixed(2)} kg` : "-",
+      tanggal:         `${dd}-${mmm}-${yy}`,
+      createBy:        row.CreateBy || "-",
+      watermarkText:   row.HasBeenPrinted > 0 ? `COPY ${row.HasBeenPrinted}` : "",
+    };
+
+    const pdfBuffer = await generateLabelPdf(data, buildFurnitureWipLabelHtml);
+
+    res.set({
+      "Content-Type": "application/pdf",
+      "Content-Disposition": `inline; filename="label-${NoFurnitureWIP}.pdf"`,
+      "Content-Length": pdfBuffer.length,
+    });
+
+    return res.end(pdfBuffer);
+  } catch (err) {
+    console.error("FurnitureWIP PDF Error:", err);
+    const status = err.statusCode || 500;
+    return res.status(status).json({ success: false, message: err.message });
   }
 };

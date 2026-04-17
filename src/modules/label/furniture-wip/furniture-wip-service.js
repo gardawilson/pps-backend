@@ -1317,3 +1317,108 @@ exports.incrementHasBeenPrinted = async (payload) => {
 //     padLeft,
 //     generateNextNoFurnitureWip,
 //   };
+
+exports.getByNoFurnitureWip = async (NoFurnitureWIP) => {
+  const pool = await poolPromise;
+
+  const result = await pool
+    .request()
+    .input("NoFurnitureWIP", sql.VarChar(50), NoFurnitureWIP).query(`
+      SELECT
+        f.NoFurnitureWIP,
+        f.DateCreate,
+        cw.Nama AS NamaFurnitureWIP,
+        CASE
+          WHEN f.IsPartial = 1 THEN
+            CASE
+              WHEN ISNULL(f.Pcs, 0) - ISNULL(fp.TotalPartialPcs, 0) < 0
+                THEN 0
+              ELSE ISNULL(f.Pcs, 0) - ISNULL(fp.TotalPartialPcs, 0)
+            END
+          ELSE ISNULL(f.Pcs, 0)
+        END AS Pcs,
+        ISNULL(f.Berat, 0)                       AS Berat,
+        ISNULL(CAST(f.HasBeenPrinted AS int), 0) AS HasBeenPrinted,
+        f.CreateBy,
+        COALESCE(outInfo.OutputNamaMesin, '')     AS Mesin,
+        outInfo.Shift                             AS Shift
+      FROM dbo.FurnitureWIP f
+      LEFT JOIN dbo.MstCabinetWIP cw
+        ON cw.IdCabinetWIP = f.IdFurnitureWIP
+      LEFT JOIN (
+        SELECT NoFurnitureWIP, SUM(ISNULL(Pcs, 0)) AS TotalPartialPcs
+        FROM dbo.FurnitureWIPPartial
+        GROUP BY NoFurnitureWIP
+      ) fp ON fp.NoFurnitureWIP = f.NoFurnitureWIP
+      OUTER APPLY (
+        SELECT TOP (1) src.OutputNamaMesin, src.Shift
+        FROM (
+          SELECT mHs.NamaMesin AS OutputNamaMesin, hsh.Shift, 1 AS Priority
+          FROM dbo.HotStampingOutputLabelFWIP hsmap
+          JOIN dbo.HotStamping_h hsh ON hsh.NoProduksi = hsmap.NoProduksi
+          LEFT JOIN dbo.MstMesin mHs ON mHs.IdMesin = hsh.IdMesin
+          WHERE hsmap.NoFurnitureWIP = f.NoFurnitureWIP
+
+          UNION ALL
+
+          SELECT mPk.NamaMesin, pkh.Shift, 2
+          FROM dbo.PasangKunciOutputLabelFWIP pkmap
+          JOIN dbo.PasangKunci_h pkh ON pkh.NoProduksi = pkmap.NoProduksi
+          LEFT JOIN dbo.MstMesin mPk ON mPk.IdMesin = pkh.IdMesin
+          WHERE pkmap.NoFurnitureWIP = f.NoFurnitureWIP
+
+          UNION ALL
+
+          SELECT mSp.NamaMesin, sph.Shift, 3
+          FROM dbo.SpannerOutputLabelFWIP spmap
+          JOIN dbo.Spanner_h sph ON sph.NoProduksi = spmap.NoProduksi
+          LEFT JOIN dbo.MstMesin mSp ON mSp.IdMesin = sph.IdMesin
+          WHERE spmap.NoFurnitureWIP = f.NoFurnitureWIP
+
+          UNION ALL
+
+          SELECT mInj.NamaMesin, injh.Shift, 4
+          FROM dbo.InjectProduksiOutputFurnitureWIP injmap
+          JOIN dbo.InjectProduksi_h injh ON injh.NoProduksi = injmap.NoProduksi
+          LEFT JOIN dbo.MstMesin mInj ON mInj.IdMesin = injh.IdMesin
+          WHERE injmap.NoFurnitureWIP = f.NoFurnitureWIP
+
+          UNION ALL
+
+          SELECT bsmap.NoBongkarSusun, NULL, 5
+          FROM dbo.BongkarSusunOutputFurnitureWIP bsmap
+          WHERE bsmap.NoFurnitureWIP = f.NoFurnitureWIP
+
+          UNION ALL
+
+          SELECT pemb.NamaPembeli, NULL, 6
+          FROM dbo.BJReturFurnitureWIP_d retmap
+          JOIN dbo.BJRetur_h bjh ON bjh.NoRetur = retmap.NoRetur
+          JOIN dbo.MstPembeli pemb ON pemb.IdPembeli = bjh.IdPembeli
+          WHERE retmap.NoFurnitureWIP = f.NoFurnitureWIP
+        ) src
+        WHERE src.OutputNamaMesin IS NOT NULL AND src.OutputNamaMesin <> ''
+        ORDER BY src.Priority
+      ) outInfo
+      WHERE f.NoFurnitureWIP = @NoFurnitureWIP
+    `);
+
+  const first = result.recordset?.[0];
+  if (!first) {
+    const e = new Error(`NoFurnitureWIP ${NoFurnitureWIP} tidak ditemukan`);
+    e.statusCode = 404;
+    throw e;
+  }
+
+  return {
+    NoFurnitureWIP: first.NoFurnitureWIP,
+    DateCreate: first.DateCreate,
+    NamaFurnitureWIP: first.NamaFurnitureWIP,
+    Pcs: first.Pcs,
+    Berat: first.Berat,
+    HasBeenPrinted: first.HasBeenPrinted,
+    CreateBy: first.CreateBy,
+    Mesin: first.Mesin,
+    Shift: first.Shift,
+  };
+};

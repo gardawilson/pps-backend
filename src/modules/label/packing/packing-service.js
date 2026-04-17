@@ -16,34 +16,6 @@ const {
 } = require("../../../core/utils/sequence-code-helper");
 const { badReq, conflict } = require("../../../core/utils/http-error");
 
-exports.getByNoBJ = async (NoBJ) => {
-  const pool = await poolPromise;
-  const request = pool.request();
-  request.input('NoBJ', sql.NVarChar, NoBJ);
-
-  const result = await request.query(`
-    SELECT
-      bj.NoBJ,
-      bj.DateCreate,
-      bj.IdBJ,
-      mbj.NamaBJ,
-      ISNULL(bj.Pcs, 0)   AS Pcs,
-      ISNULL(bj.Berat, 0) AS Berat,
-      bj.CreateBy
-    FROM [dbo].[BarangJadi] bj
-    LEFT JOIN [dbo].[MasterBarangJadi] mbj ON mbj.IdBJ = bj.IdBJ
-    WHERE bj.NoBJ = @NoBJ
-  `);
-
-  const row = result.recordset?.[0] || null;
-  if (!row) {
-    const e = new Error(`NoBJ ${NoBJ} tidak ditemukan`);
-    e.statusCode = 404;
-    throw e;
-  }
-  return row;
-};
-
 function hasOwn(obj, key) {
   return Object.prototype.hasOwnProperty.call(obj, key);
 }
@@ -1143,4 +1115,93 @@ exports.incrementHasBeenPrinted = async (payload) => {
     } catch (_) {}
     throw e;
   }
+};
+
+exports.getByNoBJ = async (NoBJ) => {
+  const pool = await poolPromise;
+
+  const result = await pool
+    .request()
+    .input("NoBJ", sql.VarChar(50), NoBJ)
+    .query(`
+      SELECT
+        bj.NoBJ,
+        bj.DateCreate,
+        mbj.NamaBJ,
+        CASE
+          WHEN bj.IsPartial = 1 THEN
+            CASE
+              WHEN ISNULL(bj.Pcs, 0) - ISNULL(bjp.TotalPartialPcs, 0) < 0
+                THEN 0
+              ELSE ISNULL(bj.Pcs, 0) - ISNULL(bjp.TotalPartialPcs, 0)
+            END
+          ELSE ISNULL(bj.Pcs, 0)
+        END AS Pcs,
+        ISNULL(bj.Berat, 0)                       AS Berat,
+        ISNULL(CAST(bj.HasBeenPrinted AS int), 0) AS HasBeenPrinted,
+        bj.CreateBy,
+        COALESCE(outInfo.OutputNamaMesin, '')      AS Mesin,
+        outInfo.Shift                              AS Shift
+      FROM dbo.BarangJadi bj
+      LEFT JOIN dbo.MstBarangJadi mbj ON mbj.IdBJ = bj.IdBJ
+      LEFT JOIN (
+        SELECT NoBJ, SUM(ISNULL(Pcs, 0)) AS TotalPartialPcs
+        FROM dbo.BarangJadiPartial
+        GROUP BY NoBJ
+      ) bjp ON bjp.NoBJ = bj.NoBJ
+      OUTER APPLY (
+        SELECT TOP (1) src.OutputNamaMesin, src.Shift
+        FROM (
+          SELECT mPack.NamaMesin AS OutputNamaMesin, packh.Shift, 1 AS Priority
+          FROM dbo.PackingProduksiOutputLabelBJ packmap
+          JOIN dbo.PackingProduksi_h packh ON packh.NoPacking = packmap.NoPacking
+          LEFT JOIN dbo.MstMesin mPack     ON mPack.IdMesin = packh.IdMesin
+          WHERE packmap.NoBJ = bj.NoBJ
+
+          UNION ALL
+
+          SELECT mInj.NamaMesin, injh.Shift, 2
+          FROM dbo.InjectProduksiOutputBarangJadi injmap
+          JOIN dbo.InjectProduksi_h injh ON injh.NoProduksi = injmap.NoProduksi
+          LEFT JOIN dbo.MstMesin mInj    ON mInj.IdMesin = injh.IdMesin
+          WHERE injmap.NoBJ = bj.NoBJ
+
+          UNION ALL
+
+          SELECT bsmap.NoBongkarSusun, NULL, 3
+          FROM dbo.BongkarSusunOutputBarangjadi bsmap
+          WHERE bsmap.NoBJ = bj.NoBJ
+
+          UNION ALL
+
+          SELECT pemb.NamaPembeli, NULL, 4
+          FROM dbo.BJReturBarangJadi_d retmap
+          JOIN dbo.BJRetur_h bjh  ON bjh.NoRetur = retmap.NoRetur
+          JOIN dbo.MstPembeli pemb ON pemb.IdPembeli = bjh.IdPembeli
+          WHERE retmap.NoBJ = bj.NoBJ
+        ) src
+        WHERE src.OutputNamaMesin IS NOT NULL AND src.OutputNamaMesin <> ''
+        ORDER BY src.Priority
+      ) outInfo
+      WHERE bj.NoBJ = @NoBJ
+    `);
+
+  const first = result.recordset?.[0];
+  if (!first) {
+    const e = new Error(`NoBJ ${NoBJ} tidak ditemukan`);
+    e.statusCode = 404;
+    throw e;
+  }
+
+  return {
+    NoBJ:           first.NoBJ,
+    DateCreate:     first.DateCreate,
+    NamaBJ:         first.NamaBJ,
+    Pcs:            first.Pcs,
+    Berat:          first.Berat,
+    HasBeenPrinted: first.HasBeenPrinted,
+    CreateBy:       first.CreateBy,
+    Mesin:          first.Mesin,
+    Shift:          first.Shift,
+  };
 };

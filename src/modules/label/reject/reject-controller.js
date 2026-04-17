@@ -6,6 +6,8 @@ const {
   makeRequestId,
 } = require("../../../core/utils/http-context");
 const { getIo } = require("../../../core/utils/socket-instance");
+const { generateLabelPdf } = require("../../../core/utils/pdf/label-generator");
+const { buildRejectLabelHtml } = require("../../../core/utils/pdf/templates/reject-label-pdf/reject-label-pdf");
 
 // GET /labels/reject?page=&limit=&search=
 exports.getAll = async (req, res) => {
@@ -326,5 +328,47 @@ exports.incrementHasBeenPrinted = async (req, res) => {
       success: false,
       message: err.message || "Terjadi kesalahan server",
     });
+  }
+};
+
+// GET /labels/reject/:noReject/pdf
+exports.generatePdf = async (req, res) => {
+  try {
+    const NoReject = String(req.params.noReject || "").trim();
+    if (!NoReject) {
+      return res.status(400).json({ success: false, message: "noReject wajib diisi" });
+    }
+
+    const row = await service.getByNoReject(NoReject);
+
+    const d = new Date(row.DateCreate);
+    const dd = String(d.getDate()).padStart(2, "0");
+    const mmm = d.toLocaleDateString("id-ID", { month: "short" });
+    const yy = String(d.getFullYear()).slice(-2);
+
+    const data = {
+      noLabel:      row.NoReject,
+      namaReject:   row.NamaReject,
+      mesin:        row.Mesin || "-",
+      shift:        row.Shift != null ? String(row.Shift) : "-",
+      berat:        row.Berat != null ? `${Number(row.Berat).toFixed(2)} kg` : "-",
+      tanggal:      `${dd}-${mmm}-${yy}`,
+      createBy:     row.CreateBy || "-",
+      watermarkText: row.HasBeenPrinted > 0 ? `COPY ${row.HasBeenPrinted}` : "",
+    };
+
+    const pdfBuffer = await generateLabelPdf(data, buildRejectLabelHtml);
+
+    res.set({
+      "Content-Type": "application/pdf",
+      "Content-Disposition": `inline; filename="label-${NoReject}.pdf"`,
+      "Content-Length": pdfBuffer.length,
+    });
+
+    return res.end(pdfBuffer);
+  } catch (err) {
+    console.error("Reject PDF Error:", err);
+    const status = err.statusCode || 500;
+    return res.status(status).json({ success: false, message: err.message });
   }
 };

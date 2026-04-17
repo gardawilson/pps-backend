@@ -50,4 +50,11 @@ router.get(
   ctrl.getFurnitureWipPartialInfo,
 );
 
+// GET /labels/furniture-wip/:noFurnitureWip/pdf
+router.get(
+  "/labels/furniture-wip/:noFurnitureWip/pdf",
+  requirePermission("label_furniturewip:read"),
+  ctrl.generatePdf,
+);
+
 module.exports = router;

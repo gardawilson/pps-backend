@@ -49,4 +49,11 @@ router.get(
   ctrl.getRejectPartialInfo,
 );
 
+// GET /labels/reject/:noReject/pdf
+router.get(
+  "/labels/reject/:noReject/pdf",
+  requirePermission("label_reject:read"),
+  ctrl.generatePdf,
+);
+
 module.exports = router;

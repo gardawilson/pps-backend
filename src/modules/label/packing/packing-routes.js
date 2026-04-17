@@ -49,4 +49,11 @@ router.get(
   ctrl.getPackingPartialInfo,
 );
 
+// GET /labels/packing/:noBJ/pdf
+router.get(
+  "/labels/packing/:noBJ/pdf",
+  requirePermission("label_barangjadi:read"),
+  ctrl.generatePdf,
+);
+
 module.exports = router;

@@ -19,12 +19,33 @@
       .label {
         width: 80mm;
         padding: 3mm 4mm;
+      }
+
+      .label-header {
+        display: flex;
+        justify-content: space-between;
+        align-items: baseline;
+        border-bottom: 1.5px solid #000;
+        padding-bottom: 1.5mm;
+        margin-bottom: 2mm;
+      }
+
+      .label-header .title {
+        font-size: 12pt;
+        font-weight: bold;
+      }
+
+      .label-header .no-label {
+        font-size: 12pt;
+        font-weight: bold;
+      }
+
+      .label-body {
         display: flex;
         gap: 3mm;
         align-items: flex-start;
       }
 
-      /* ── Kiri: info ── */
       .label-info {
         flex: 1;
         display: flex;
@@ -36,9 +57,8 @@
         font-size: 9pt;
         font-weight: bold;
         padding-bottom: 1.5mm;
-        border-bottom: 1px solid #000;
-        margin-bottom: 1mm;
         display: block;
+        width: 100%;
         position: relative;
       }
 
@@ -47,7 +67,7 @@
         top: 50%;
         right: 0;
         transform: translateY(-50%);
-        font-size: 14pt;
+        font-size: 16pt;
         font-weight: 900;
         color: rgba(0, 0, 0, 0.3);
         letter-spacing: 2px;
@@ -66,13 +86,11 @@
       }
 
       .label-info .tanggal {
-        font-size: 18pt;
+        font-size: 20pt;
         font-weight: bold;
         color: #000;
-        margin-top: 1mm;
       }
 
-      /* ── Kanan: QR ── */
       .label-qr {
         display: flex;
         flex-direction: column;
@@ -85,30 +103,38 @@
       }
 
       .label-qr .qr-caption {
-        font-size: 8t;
+        font-size: 9pt;
         text-align: center;
         font-weight: bold;
-        word-break: break-all;
-        max-width: 26mm;
       }
     </style>
   </head>
   <body>
     <div class="label">
-      <!-- Kiri: info -->
-      <div class="label-info">
-        <span class="jenis">
-          <span class="jenis-text">{{namaProduk}}</span>
-          <span class="watermark">{{watermarkText}}</span>
-        </span>
-        <div class="row">By &nbsp;: {{createBy}}</div>
-        <div class="tanggal">{{tanggal}}</div>
+      <div class="label-header">
+        <span class="title">FURNITURE WIP</span>
+        <span class="no-label">({{noLabel}})</span>
       </div>
 
-      <!-- Kanan: QR code -->
-      <div class="label-qr">
-        <img src="{{qrBase64}}" alt="QR" />
-        <div class="qr-caption">{{noLabel}}</div>
+      <div class="jenis">
+        <span class="jenis-text">{{namaFurnitureWip}}</span>
+        <span class="watermark">{{watermarkText}}</span>
+      </div>
+
+      <div class="label-body">
+        <div class="label-info">
+          <div class="row">Mesin &nbsp;: {{mesin}}</div>
+          <div class="row">Shift &nbsp;: {{shift}}</div>
+          <div class="row">Pcs &nbsp;&nbsp;: {{pcs}}</div>
+          <div class="row">Berat &nbsp;: {{berat}}</div>
+          <div class="row">By &nbsp;&nbsp;&nbsp;: {{createBy}}</div>
+          <div class="tanggal">{{tanggal}}</div>
+        </div>
+
+        <div class="label-qr">
+          <img src="{{qrBase64}}" alt="QR" />
+          <div class="qr-caption">{{noLabel}}</div>
+        </div>
       </div>
     </div>
   </body>

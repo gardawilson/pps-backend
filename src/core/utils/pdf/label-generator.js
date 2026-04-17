@@ -28,14 +28,16 @@ async function generateLabelPdf(data, templateFn, options = {}) {
   const page = await browser.newPage();
 
   try {
-    // Set viewport lebar dulu, tinggi sementara
-    await page.setViewport({ width: 302, height: 800 });
+    // Set viewport lebar dulu, tinggi sementara (besar agar konten tidak terpotong)
+    await page.setViewport({ width: 302, height: 3000 });
     await page.setContent(html, { waitUntil: 'networkidle0' });
 
-    // Baca tinggi konten aktual setelah render
-    const contentHeight = await page.evaluate(
-      () => document.body.scrollHeight
-    );
+    // Baca tinggi konten aktual dari elemen .label (lebih akurat dari body.scrollHeight pada flex layout)
+    const contentHeight = await page.evaluate(() => {
+      const el = document.querySelector('.label');
+      if (el) return Math.ceil(el.getBoundingClientRect().height) + 2;
+      return Math.ceil(document.documentElement.offsetHeight) + 2;
+    });
 
     // Set viewport ulang sesuai tinggi konten agar tidak ada blank space
     await page.setViewport({ width: 302, height: contentHeight });

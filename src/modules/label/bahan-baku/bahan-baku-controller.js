@@ -6,6 +6,8 @@ const {
   makeRequestId,
 } = require("../../../core/utils/http-context");
 const { getIo } = require("../../../core/utils/socket-instance");
+const { generateLabelPdf } = require("../../../core/utils/pdf/label-generator");
+const { buildBahanBakuLabelHtml } = require("../../../core/utils/pdf/templates/bahan-baku-label-pdf/bahan-baku-label-pdf");
 
 exports.getAll = async (req, res) => {
   try {
@@ -153,6 +155,54 @@ exports.updateByNoBahanBakuAndNoPallet = async (req, res) => {
       success: false,
       message: err.message || "Terjadi kesalahan server",
     });
+  }
+};
+
+// GET /labels/bahan-baku/:nobahanbaku/pallet/:nopallet/pdf
+exports.generatePdf = async (req, res) => {
+  try {
+    const NoBahanBaku = String(req.params.nobahanbaku || "").trim();
+    const NoPallet = String(req.params.nopallet || "").trim();
+
+    if (!NoBahanBaku || !NoPallet) {
+      return res.status(400).json({ success: false, message: "NoBahanBaku dan NoPallet wajib diisi" });
+    }
+
+    const row = await bahanBakuService.getByPalletForPdf(NoBahanBaku, NoPallet);
+
+    const d = new Date(row.DateCreate);
+    const dd = String(d.getDate()).padStart(2, "0");
+    const mmm = d.toLocaleDateString("id-ID", { month: "short" });
+    const yy = String(d.getFullYear()).slice(-2);
+
+    const data = {
+      noLabel:          `${row.NoBahanBaku}-${row.NoPallet}`,
+      noBahanBaku:      row.NoBahanBaku,
+      noPallet:         row.NoPallet,
+      namaJenisPlastik: row.NamaJenisPlastik,
+      namaSupplier:     row.NamaSupplier,
+      noPlat:           row.NoPlat,
+      sakSisa:          row.SakSisa,
+      beratSisa:        `${Number(row.BeratSisa).toFixed(2)} kg`,
+      tanggal:          `${dd}-${mmm}-${yy}`,
+      createBy:         row.CreateBy,
+      watermarkText:    row.HasBeenPrinted > 0 ? `COPY ${row.HasBeenPrinted}` : "",
+      details:          row.details,
+    };
+
+    const pdfBuffer = await generateLabelPdf(data, buildBahanBakuLabelHtml);
+
+    res.set({
+      "Content-Type": "application/pdf",
+      "Content-Disposition": `inline; filename="label-${NoPallet}.pdf"`,
+      "Content-Length": pdfBuffer.length,
+    });
+
+    return res.end(pdfBuffer);
+  } catch (err) {
+    console.error("BahanBaku PDF Error:", err);
+    const status = err.statusCode || 500;
+    return res.status(status).json({ success: false, message: err.message });
   }
 };
 

@@ -491,3 +491,93 @@ exports.incrementHasBeenPrinted = async (payload) => {
     throw e;
   }
 };
+
+exports.getByPalletForPdf = async (NoBahanBaku, NoPallet) => {
+  const pool = await poolPromise;
+
+  const [palletResult, detailResult] = await Promise.all([
+    pool.request()
+      .input("NoBahanBaku", sql.VarChar(50), NoBahanBaku)
+      .input("NoPallet", sql.VarChar(50), NoPallet)
+      .query(`
+        SELECT
+          h.NoBahanBaku,
+          h.NoPlat,
+          h.DateCreate,
+          h.CreateBy,
+          s.NmSupplier AS NamaSupplier,
+          p.NoPallet,
+          jp.Jenis AS NamaJenisPlastik,
+          ISNULL(CAST(p.HasBeenPrinted AS int), 0) AS HasBeenPrinted,
+          ISNULL(dAgg.SakSisa, 0)   AS SakSisa,
+          ISNULL(dAgg.BeratSisa, 0) AS BeratSisa
+        FROM dbo.BahanBaku_h h
+        LEFT JOIN dbo.MstSupplier s         ON s.IdSupplier     = h.IdSupplier
+        LEFT JOIN dbo.BahanBakuPallet_h p   ON p.NoBahanBaku    = h.NoBahanBaku
+                                           AND p.NoPallet        = @NoPallet
+        LEFT JOIN dbo.MstJenisPlastik jp    ON jp.IdJenisPlastik = p.IdJenisPlastik
+        OUTER APPLY (
+          SELECT
+            SUM(CASE WHEN d.DateUsage IS NULL THEN 1 ELSE 0 END) AS SakSisa,
+            SUM(
+              CASE WHEN d.DateUsage IS NOT NULL THEN 0
+                ELSE
+                  CASE WHEN d.IsPartial = 1 THEN
+                    CASE WHEN (ISNULL(d.Berat,0) - ISNULL(ps.PartialBerat,0)) < 0 THEN 0
+                      ELSE (ISNULL(d.Berat,0) - ISNULL(ps.PartialBerat,0)) END
+                  ELSE ISNULL(d.Berat,0) END
+              END
+            ) AS BeratSisa
+          FROM dbo.BahanBaku_d d
+          LEFT JOIN (
+            SELECT NoBahanBaku, NoPallet, NoSak, SUM(Berat) AS PartialBerat
+            FROM dbo.BahanBakuPartial GROUP BY NoBahanBaku, NoPallet, NoSak
+          ) ps ON ps.NoBahanBaku = d.NoBahanBaku AND ps.NoPallet = d.NoPallet AND ps.NoSak = d.NoSak
+          WHERE d.NoBahanBaku = h.NoBahanBaku AND d.NoPallet = @NoPallet
+        ) dAgg
+        WHERE h.NoBahanBaku = @NoBahanBaku
+      `),
+    pool.request()
+      .input("NoBahanBaku", sql.VarChar(50), NoBahanBaku)
+      .input("NoPallet", sql.VarChar(50), NoPallet)
+      .query(`
+        SELECT
+          d.NoSak,
+          CASE
+            WHEN d.IsPartial = 1 THEN
+              d.Berat - ISNULL((
+                SELECT SUM(p.Berat) FROM dbo.BahanBakuPartial p
+                WHERE p.NoBahanBaku = d.NoBahanBaku AND p.NoPallet = d.NoPallet AND p.NoSak = d.NoSak
+              ), 0)
+            ELSE d.Berat
+          END AS Berat
+        FROM dbo.BahanBaku_d d
+        WHERE d.NoBahanBaku = @NoBahanBaku AND d.NoPallet = @NoPallet AND d.DateUsage IS NULL
+        ORDER BY d.NoSak
+      `),
+  ]);
+
+  const header = palletResult.recordset?.[0];
+  if (!header || !header.NoPallet) {
+    const e = new Error(`NoPallet ${NoPallet} tidak ditemukan pada NoBahanBaku ${NoBahanBaku}`);
+    e.statusCode = 404;
+    throw e;
+  }
+
+  return {
+    NoBahanBaku:      header.NoBahanBaku,
+    NoPallet:         header.NoPallet,
+    NamaSupplier:     header.NamaSupplier || "-",
+    NoPlat:           header.NoPlat || "-",
+    DateCreate:       header.DateCreate,
+    CreateBy:         header.CreateBy || "-",
+    NamaJenisPlastik: header.NamaJenisPlastik || "-",
+    HasBeenPrinted:   header.HasBeenPrinted || 0,
+    SakSisa:          header.SakSisa || 0,
+    BeratSisa:        header.BeratSisa || 0,
+    details:          detailResult.recordset.map(r => ({
+      NoSak: r.NoSak,
+      Berat: typeof r.Berat === "number" ? r.Berat : parseFloat(r.Berat) || 0,
+    })),
+  };
+};

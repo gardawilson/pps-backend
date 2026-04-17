@@ -262,6 +262,51 @@ exports.getPackingPartialInfo = async (req, res) => {
   }
 };
 
+// GET /labels/packing/:noBJ/pdf
+exports.generatePdf = async (req, res) => {
+  try {
+    const NoBJ = String(req.params.noBJ || "").trim();
+    if (!NoBJ) {
+      return res
+        .status(400)
+        .json({ success: false, message: "noBJ wajib diisi" });
+    }
+
+    const row = await service.getByNoBJ(NoBJ);
+
+    const d = new Date(row.DateCreate);
+    const mm = String(d.getMonth() + 1).padStart(2, "0");
+    const yy = String(d.getFullYear()).slice(-2);
+    const printed = row.HasBeenPrinted || 0;
+    const kodeLabel = printed > 0 ? `BJ${mm}${yy}CY${printed}` : `BJ${mm}${yy}`;
+
+    const data = {
+      noLabel: row.NoBJ,
+      namaProduk: row.NamaBJ,
+      kode: row.Mesin || "-",
+      berat: row.Berat != null ? `${Number(row.Berat).toFixed(2)} kg` : "-",
+      pcs: row.Pcs != null ? String(row.Pcs) : "-",
+      tanggal: kodeLabel,
+      createBy: row.CreateBy || "-",
+      watermarkText: "",
+    };
+
+    const pdfBuffer = await generateLabelPdf(data, buildPackingLabelHtml);
+
+    res.set({
+      "Content-Type": "application/pdf",
+      "Content-Disposition": `inline; filename="label-${NoBJ}.pdf"`,
+      "Content-Length": pdfBuffer.length,
+    });
+
+    return res.end(pdfBuffer);
+  } catch (err) {
+    console.error("Packing PDF Error:", err);
+    const status = err.statusCode || 500;
+    return res.status(status).json({ success: false, message: err.message });
+  }
+};
+
 exports.incrementHasBeenPrinted = async (req, res) => {
   const { nobj, noBJ } = req.params;
 

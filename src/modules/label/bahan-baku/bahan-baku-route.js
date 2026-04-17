@@ -65,4 +65,11 @@ router.patch(
   ctrl.incrementHasBeenPrinted,
 );
 
+// GET /labels/bahan-baku/:nobahanbaku/pallet/:nopallet/pdf
+router.get(
+  "/labels/bahan-baku/:nobahanbaku/pallet/:nopallet/pdf",
+  requirePermission("penerimaanbahanbaku:read"),
+  ctrl.generatePdf,
+);
+
 module.exports = router;

@@ -16,6 +16,34 @@ const {
 } = require("../../../core/utils/sequence-code-helper");
 const { badReq, conflict } = require("../../../core/utils/http-error");
 
+exports.getByNoBJ = async (NoBJ) => {
+  const pool = await poolPromise;
+  const request = pool.request();
+  request.input('NoBJ', sql.NVarChar, NoBJ);
+
+  const result = await request.query(`
+    SELECT
+      bj.NoBJ,
+      bj.DateCreate,
+      bj.IdBJ,
+      mbj.NamaBJ,
+      ISNULL(bj.Pcs, 0)   AS Pcs,
+      ISNULL(bj.Berat, 0) AS Berat,
+      bj.CreateBy
+    FROM [dbo].[BarangJadi] bj
+    LEFT JOIN [dbo].[MasterBarangJadi] mbj ON mbj.IdBJ = bj.IdBJ
+    WHERE bj.NoBJ = @NoBJ
+  `);
+
+  const row = result.recordset?.[0] || null;
+  if (!row) {
+    const e = new Error(`NoBJ ${NoBJ} tidak ditemukan`);
+    e.statusCode = 404;
+    throw e;
+  }
+  return row;
+};
+
 function hasOwn(obj, key) {
   return Object.prototype.hasOwnProperty.call(obj, key);
 }

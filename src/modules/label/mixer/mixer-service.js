@@ -1415,6 +1415,96 @@ exports.getPartialInfoByMixerAndSak = async (nomixer, nosak) => {
   return { totalPartialWeight, rows };
 };
 
+exports.getByNoMixer = async (NoMixer) => {
+  const pool = await poolPromise;
+
+  const result = await pool.request().input("NoMixer", sql.VarChar(50), NoMixer)
+    .query(`
+SELECT
+  h.NoMixer,
+  h.DateCreate,
+  mx.Jenis,
+  COUNT(d.NoSak)                           AS JumlahSak,
+  SUM(d.Berat) - ISNULL(SUM(mp.Berat), 0) AS SisaBerat,
+  h.CreateBy,
+  ISNULL(CAST(h.HasBeenPrinted AS int), 0) AS HasBeenPrinted,
+  COALESCE(outInfo.OutputNamaMesin, '-')   AS Mesin,
+  COALESCE(CAST(outInfo.Shift AS VARCHAR(10)), '-') AS Shift
+FROM dbo.Mixer_h h
+JOIN dbo.MstMixer mx
+  ON mx.IdMixer = h.IdMixer
+JOIN dbo.Mixer_d d
+  ON d.NoMixer = h.NoMixer AND d.DateUsage IS NULL
+LEFT JOIN dbo.MixerPartial mp
+  ON mp.NoMixer = h.NoMixer AND mp.NoSak = d.NoSak
+OUTER APPLY (
+  SELECT TOP (1) 
+    src.OutputNamaMesin,
+    src.Shift
+  FROM (
+    SELECT
+      m.NamaMesin  AS OutputNamaMesin,
+      mph.Shift    AS Shift,
+      1            AS Priority
+    FROM dbo.MixerProduksiOutput mpo
+    JOIN dbo.MixerProduksi_h mph ON mph.NoProduksi = mpo.NoProduksi
+    LEFT JOIN dbo.MstMesin m     ON m.IdMesin = mph.IdMesin
+    WHERE mpo.NoMixer = h.NoMixer
+
+    UNION ALL
+
+    SELECT
+      mi.NamaMesin AS OutputNamaMesin,
+      iph.Shift    AS Shift,
+      2            AS Priority
+    FROM dbo.InjectProduksiOutputMixer ipom
+    JOIN dbo.InjectProduksi_h iph ON iph.NoProduksi = ipom.NoProduksi
+    LEFT JOIN dbo.MstMesin mi     ON mi.IdMesin = iph.IdMesin
+    WHERE ipom.NoMixer = h.NoMixer
+
+    UNION ALL
+
+    SELECT
+      bsom.NoBongkarSusun AS OutputNamaMesin,
+      NULL                AS Shift,
+      3                   AS Priority
+    FROM dbo.BongkarSusunOutputMixer bsom
+    WHERE bsom.NoMixer = h.NoMixer
+  ) AS src
+  WHERE src.OutputNamaMesin IS NOT NULL
+  ORDER BY src.Priority
+) AS outInfo
+WHERE h.NoMixer = @NoMixer
+GROUP BY 
+  h.NoMixer, 
+  h.DateCreate, 
+  mx.Jenis, 
+  h.CreateBy, 
+  h.HasBeenPrinted,
+  outInfo.OutputNamaMesin,
+  outInfo.Shift
+    `);
+
+  const first = result.recordset?.[0];
+  if (!first) {
+    const e = new Error(`NoMixer ${NoMixer} tidak ditemukan`);
+    e.statusCode = 404;
+    throw e;
+  }
+
+  return {
+    NoMixer: first.NoMixer,
+    DateCreate: first.DateCreate,
+    Jenis: first.Jenis,
+    JumlahSak: first.JumlahSak,
+    SisaBerat: first.SisaBerat,
+    CreateBy: first.CreateBy,
+    HasBeenPrinted: first.HasBeenPrinted,
+    Mesin: first.Mesin,
+    Shift: first.Shift, // ✅ ini yang kurang
+  };
+};
+
 exports.incrementHasBeenPrinted = async (payload) => {
   const NoMixer = String(payload?.NoMixer || "").trim();
   if (!NoMixer) throw badReq("NoMixer wajib diisi");

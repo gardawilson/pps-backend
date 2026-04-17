@@ -155,6 +155,92 @@ exports.getAll = async ({ page, limit, search, includeUsed = false }) => {
 };
 
 // GET details by NoBroker (mirror Washing.getWashingDetailByNoWashing)
+// GET label data by NoBroker (untuk generate PDF)
+exports.getByNoBroker = async (NoBroker) => {
+  const pool = await poolPromise;
+  const result = await pool
+    .request()
+    .input("NoBroker", sql.VarChar(30), NoBroker).query(`
+      WITH LabelData AS (
+        SELECT
+          A.NoBroker                                        AS NoBroker_Pallet,
+          A.DateCreate                                      AS DateCreate_Pallet,
+          B.Jenis                                           AS JenisPlastik_Pallet,
+          C.NamaWarehouse,
+          CASE
+            WHEN E.NoProduksi IS NULL
+              THEN 'BS - ' + ISNULL(H.NoBongkarSusun, '')
+            ELSE ISNULL(G.NamaMesin, '')
+          END                                               AS Mesin,
+          COUNT(D.NoSak)                                    AS JmllhSak_Pallet,
+          SUM(D.Berat)                                      AS JmllhBerat_Pallet,
+          A.CreateBy,
+          F.Shift,
+          A.HasBeenPrinted
+        FROM Broker_h A
+        INNER JOIN MstJenisPlastik          B ON B.IdJenisPlastik = A.IdJenisPlastik
+        INNER JOIN MstWarehouse             C ON C.IdWarehouse    = A.IdWarehouse
+        INNER JOIN Broker_d                 D ON D.NoBroker       = A.NoBroker
+        LEFT  JOIN BrokerProduksiOutput     E ON E.NoBroker       = A.NoBroker
+                                             AND E.NoSak          = D.NoSak
+        LEFT  JOIN BrokerProduksi_h         F ON F.NoProduksi     = E.NoProduksi
+        LEFT  JOIN MstMesin                 G ON G.IdMesin        = F.IdMesin
+        LEFT  JOIN BongkarSusunOutputBroker H ON H.NoBroker       = A.NoBroker
+                                             AND H.NoSak          = D.NoSak
+        WHERE A.NoBroker = @NoBroker
+          AND D.DateUsage IS NULL
+        GROUP BY
+          A.NoBroker, A.DateCreate, B.Jenis, C.NamaWarehouse,
+          E.NoProduksi, G.NamaMesin, H.NoBongkarSusun,
+          A.CreateBy, F.Shift, A.HasBeenPrinted
+      ),
+      PartialBerat AS (
+        SELECT
+          A.NoBroker,
+          SUM(A.Berat) AS TotalPartialBerat
+        FROM BrokerPartial A
+        INNER JOIN Broker_d B ON B.NoBroker = A.NoBroker
+                              AND B.NoSak   = A.NoSak
+        WHERE A.NoBroker = @NoBroker
+          AND B.DateUsage IS NULL
+        GROUP BY A.NoBroker
+      )
+      SELECT
+        L.NoBroker_Pallet,
+        L.DateCreate_Pallet,
+        L.JenisPlastik_Pallet,
+        L.Mesin,
+        L.NamaWarehouse,
+        L.JmllhSak_Pallet,
+        L.JmllhBerat_Pallet - ISNULL(P.TotalPartialBerat, 0) AS JmllhBerat_Pallet,
+        L.CreateBy,
+        L.Shift,
+        L.HasBeenPrinted
+      FROM LabelData L
+      LEFT JOIN PartialBerat P ON P.NoBroker = L.NoBroker_Pallet
+    `);
+
+  const row = result.recordset?.[0] || null;
+  if (!row) {
+    const e = new Error(`NoBroker ${NoBroker} tidak ditemukan`);
+    e.statusCode = 404;
+    throw e;
+  }
+
+  return {
+    NoBroker: row.NoBroker_Pallet,
+    DateCreate: row.DateCreate_Pallet,
+    JenisPlastik: row.JenisPlastik_Pallet,
+    Mesin: row.Mesin,
+    NamaWarehouse: row.NamaWarehouse,
+    JumlahSak: row.JmllhSak_Pallet,
+    TotalBerat: row.JmllhBerat_Pallet,
+    CreateBy: row.CreateBy,
+    Shift: row.Shift,
+    HasBeenPrinted: row.HasBeenPrinted,
+  };
+};
+
 exports.getBrokerDetailByNoBroker = async (nobroker) => {
   const pool = await poolPromise;
 

@@ -66,4 +66,11 @@ router.delete(
   ctrl.remove,
 );
 
+// GET /labels/washing/:nowashing/pdf
+router.get(
+  "/labels/washing/:nowashing/pdf",
+  requirePermission("label_washing:read"),
+  ctrl.generatePdf,
+);
+
 module.exports = router;

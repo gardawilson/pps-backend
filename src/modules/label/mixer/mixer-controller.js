@@ -6,6 +6,10 @@ const {
   makeRequestId,
 } = require("../../../core/utils/http-context");
 const { getIo } = require("../../../core/utils/socket-instance");
+const { generateLabelPdf } = require("../../../core/utils/pdf/label-generator");
+const {
+  buildMixerLabelHtml,
+} = require("../../../core/utils/pdf/templates/mixer-label-pdf/mixer-label-pdf");
 
 // GET all header mixer
 exports.getAll = async (req, res) => {
@@ -278,7 +282,11 @@ exports.incrementHasBeenPrinted = async (req, res) => {
     });
 
     const io = getIo();
-    if (io) io.emit('print_confirmed', { noLabel: NoMixer, hasBeenPrinted: result.HasBeenPrinted });
+    if (io)
+      io.emit("print_confirmed", {
+        noLabel: NoMixer,
+        hasBeenPrinted: result.HasBeenPrinted,
+      });
 
     return res.status(200).json({
       success: true,
@@ -292,5 +300,51 @@ exports.incrementHasBeenPrinted = async (req, res) => {
       success: false,
       message: err.message || "Terjadi kesalahan server",
     });
+  }
+};
+
+// GET /labels/mixer/:nomixer/pdf
+exports.generatePdf = async (req, res) => {
+  try {
+    const NoMixer = String(req.params.nomixer || "").trim();
+    if (!NoMixer) {
+      return res
+        .status(400)
+        .json({ success: false, message: "nomixer wajib diisi" });
+    }
+
+    const row = await mixerService.getByNoMixer(NoMixer);
+
+    const data = {
+      noLabel: row.NoMixer,
+      jenisPlastik: row.Jenis,
+      mesin: row.Mesin,
+      jumlahSak: String(row.JumlahSak ?? "-"),
+      totalBerat: row.SisaBerat != null ? `${row.SisaBerat} kg` : "-",
+      shift: row.Shift || "-",
+      tanggal: (() => {
+        const d = new Date(row.DateCreate);
+        const dd = String(d.getDate()).padStart(2, "0");
+        const mmm = d.toLocaleDateString("id-ID", { month: "short" });
+        const yy = String(d.getFullYear()).slice(-2);
+        return `${dd}-${mmm}-${yy}`;
+      })(),
+      createBy: row.CreateBy || "-",
+      watermarkText: row.HasBeenPrinted > 0 ? `COPY ${row.HasBeenPrinted}` : "",
+    };
+
+    const pdfBuffer = await generateLabelPdf(data, buildMixerLabelHtml);
+
+    res.set({
+      "Content-Type": "application/pdf",
+      "Content-Disposition": `inline; filename="label-${NoMixer}.pdf"`,
+      "Content-Length": pdfBuffer.length,
+    });
+
+    return res.end(pdfBuffer);
+  } catch (err) {
+    console.error("Mixer PDF Error:", err);
+    const status = err.statusCode || 500;
+    return res.status(status).json({ success: false, message: err.message });
   }
 };

@@ -6,6 +6,8 @@ const {
   makeRequestId,
 } = require("../../../core/utils/http-context");
 const { getIo } = require("../../../core/utils/socket-instance");
+const { generateLabelPdf } = require("../../../core/utils/pdf/label-generator");
+const { buildCrusherLabelHtml } = require("../../../core/utils/pdf/templates/crusher-label-pdf/crusher-label-pdf");
 
 // GET all header crusher
 exports.getAll = async (req, res) => {
@@ -267,5 +269,48 @@ exports.incrementHasBeenPrinted = async (req, res) => {
       success: false,
       message: err.message || "Terjadi kesalahan server",
     });
+  }
+};
+
+// GET /labels/crusher/:noCrusher/pdf
+exports.generatePdf = async (req, res) => {
+  try {
+    const NoCrusher = String(req.params.noCrusher || "").trim();
+    if (!NoCrusher) {
+      return res.status(400).json({ success: false, message: "noCrusher wajib diisi" });
+    }
+
+    const row = await service.getByNoCrusher(NoCrusher);
+
+    const d = new Date(row.DateCreate);
+    const dd = String(d.getDate()).padStart(2, "0");
+    const mmm = d.toLocaleDateString("id-ID", { month: "short" });
+    const yy = String(d.getFullYear()).slice(-2);
+
+    const data = {
+      noLabel:      row.NoCrusher,
+      namaCrusher:  row.NamaCrusher,
+      mesin:        row.Mesin || "-",
+      shift:        row.Shift ? String(row.Shift) : "-",
+      berat:        row.Berat != null ? `${row.Berat} kg` : "-",
+      warehouse:    row.NamaWarehouse || "-",
+      tanggal:      `${dd}-${mmm}-${yy}`,
+      createBy:     row.CreateBy || "-",
+      watermarkText: row.HasBeenPrinted > 0 ? `COPY ${row.HasBeenPrinted}` : "",
+    };
+
+    const pdfBuffer = await generateLabelPdf(data, buildCrusherLabelHtml);
+
+    res.set({
+      "Content-Type": "application/pdf",
+      "Content-Disposition": `inline; filename="label-${NoCrusher}.pdf"`,
+      "Content-Length": pdfBuffer.length,
+    });
+
+    return res.end(pdfBuffer);
+  } catch (err) {
+    console.error("Crusher PDF Error:", err);
+    const status = err.statusCode || 500;
+    return res.status(status).json({ success: false, message: err.message });
   }
 };

@@ -6,6 +6,8 @@ const {
   makeRequestId,
 } = require("../../../core/utils/http-context");
 const { getIo } = require("../../../core/utils/socket-instance");
+const { generateLabelPdf } = require("../../../core/utils/pdf/label-generator");
+const { buildBonggolanLabelHtml } = require("../../../core/utils/pdf/templates/bonggolan-label-pdf/bonggolan-label-pdf");
 
 // GET all header bonggolan
 exports.getAll = async (req, res) => {
@@ -249,5 +251,48 @@ exports.incrementHasBeenPrinted = async (req, res) => {
       success: false,
       message: err.message || "Terjadi kesalahan server",
     });
+  }
+};
+
+// GET /labels/bonggolan/:noBonggolan/pdf
+exports.generatePdf = async (req, res) => {
+  try {
+    const NoBonggolan = String(req.params.noBonggolan || "").trim();
+    if (!NoBonggolan) {
+      return res.status(400).json({ success: false, message: "noBonggolan wajib diisi" });
+    }
+
+    const row = await service.getByNoBonggolan(NoBonggolan);
+
+    const d = new Date(row.Tanggal);
+    const dd = String(d.getDate()).padStart(2, "0");
+    const mmm = d.toLocaleDateString("id-ID", { month: "short" });
+    const yy = String(d.getFullYear()).slice(-2);
+
+    const data = {
+      noLabel:      row.NoBonggolan,
+      jenisPlastik: row.Jenis,
+      mesin:        row.Ket || "-",
+      shift:        row.Shift ? String(row.Shift) : "-",
+      berat:        row.Berat != null ? `${row.Berat} kg` : "-",
+      warehouse:    row.Warehouse || "-",
+      tanggal:      `${dd}-${mmm}-${yy}`,
+      createBy:     row.CreateBy || "-",
+      watermarkText: row.HasBeenPrinted > 0 ? `COPY ${row.HasBeenPrinted}` : "",
+    };
+
+    const pdfBuffer = await generateLabelPdf(data, buildBonggolanLabelHtml);
+
+    res.set({
+      "Content-Type": "application/pdf",
+      "Content-Disposition": `inline; filename="label-${NoBonggolan}.pdf"`,
+      "Content-Length": pdfBuffer.length,
+    });
+
+    return res.end(pdfBuffer);
+  } catch (err) {
+    console.error("Bonggolan PDF Error:", err);
+    const status = err.statusCode || 500;
+    return res.status(status).json({ success: false, message: err.message });
   }
 };

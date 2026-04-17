@@ -6,6 +6,10 @@ const {
   makeRequestId,
 } = require("../../../core/utils/http-context");
 const { getIo } = require("../../../core/utils/socket-instance");
+const { generateLabelPdf } = require("../../../core/utils/pdf/label-generator");
+const {
+  buildPackingLabelHtml,
+} = require("../../../core/utils/pdf/templates/packing-label-pdf/packing-label-pdf");
 
 // GET /labels/packing?page=&limit=&search=
 exports.getAll = async (req, res) => {

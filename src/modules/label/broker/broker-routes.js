@@ -79,4 +79,11 @@ router.get(
   ctrl.getPartialInfo,
 );
 
+// GET /labels/broker/:nobroker/pdf
+router.get(
+  "/labels/broker/:nobroker/pdf",
+  requirePermission("label_broker:read"),
+  ctrl.generatePdf,
+);
+
 module.exports = router;

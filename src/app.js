@@ -122,6 +122,7 @@ app.use("/api/production", productionSpannerRoutes);
 app.use("/api/production", productionReturnRoutes);
 app.use("/api/furniture-wip-type", furnitureWipTypeRoutes);
 app.use("/api/", labelPackingRoutes);
+
 app.use("/api/production", productionPackingRoutes);
 app.use("/api/packing-type", packingTypeRoutes);
 app.use("/api/", labelRejectRoutes);

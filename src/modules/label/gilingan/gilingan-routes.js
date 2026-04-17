@@ -50,4 +50,11 @@ router.get(
   ctrl.getGilinganPartialInfo,
 );
 
+// GET /labels/gilingan/:noGilingan/pdf
+router.get(
+  "/labels/gilingan/:noGilingan/pdf",
+  requirePermission("label_crusher:read"),
+  ctrl.generatePdf,
+);
+
 module.exports = router;

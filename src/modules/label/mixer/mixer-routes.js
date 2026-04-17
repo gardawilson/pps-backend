@@ -80,5 +80,11 @@ router.get(
   ctrl.getPartialInfo,
 );
 
-// (Nanti kalau mau GET one / create / update / delete tinggal tambah di sini)
+// GET /labels/mixer/:nomixer/pdf
+router.get(
+  "/labels/mixer/:nomixer/pdf",
+  requirePermission("label_mixer:read"),
+  ctrl.generatePdf,
+);
+
 module.exports = router;

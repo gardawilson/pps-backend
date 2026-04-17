@@ -110,6 +110,64 @@ exports.getAll = async ({ page, limit, search, includeUsed = false }) => {
   return { data, total };
 };
 
+// GET label data by NoWashing (untuk generate PDF)
+exports.getByNoWashing = async (NoWashing) => {
+  const pool = await poolPromise;
+  const result = await pool
+    .request()
+    .input("NoWashing", sql.VarChar(50), NoWashing).query(`
+      SELECT
+        A.NoWashing                                       AS NoWashing_Pallet,
+        A.DateCreate                                      AS DateCreate_Pallet,
+        CASE
+          WHEN D.NoProduksi IS NULL
+            THEN 'BS - ' + ISNULL(G.NoBongkarSusun, '')
+          ELSE ISNULL(F.NamaMesin, '')
+        END                                               AS Mesin,
+        B.Jenis                                           AS JenisPlastik_Pallet,
+        COUNT(C.NoSak)                                    AS JmllhSak_Pallet,
+        SUM(C.Berat)                                      AS JmllhBerat_Pallet,
+        A.CreateBy,
+        E.Shift,
+        A.HasBeenPrinted
+      FROM Washing_h A
+      INNER JOIN MstJenisPlastik           B ON B.IdJenisPlastik = A.IdJenisPlastik
+      INNER JOIN Washing_d                 C ON C.NoWashing      = A.NoWashing
+      LEFT  JOIN WashingProduksiOutput     D ON D.NoWashing      = A.NoWashing
+                                           AND D.NoSak           = C.NoSak
+      LEFT  JOIN WashingProduksi_h         E ON E.NoProduksi     = D.NoProduksi
+      LEFT  JOIN MstMesin                  F ON F.IdMesin        = E.IdMesin
+      LEFT  JOIN BongkarSusunOutputWashing G ON G.NoWashing      = A.NoWashing
+                                           AND G.NoSak           = C.NoSak
+      WHERE A.NoWashing = @NoWashing
+        AND C.DateUsage IS NULL
+      GROUP BY
+        A.NoWashing, A.DateCreate, B.Jenis,
+        D.NoProduksi, G.NoBongkarSusun, F.NamaMesin,
+        A.CreateBy, E.Shift, A.HasBeenPrinted
+    `);
+
+  const rows = result.recordset;
+  if (!rows || rows.length === 0) {
+    const e = new Error(`NoWashing ${NoWashing} tidak ditemukan`);
+    e.statusCode = 404;
+    throw e;
+  }
+
+  const first = rows[0];
+  return {
+    NoWashing: first.NoWashing_Pallet,
+    DateCreate: first.DateCreate_Pallet,
+    Mesin: first.Mesin,
+    JenisPlastik: first.JenisPlastik_Pallet,
+    JumlahSak: first.JmllhSak_Pallet,
+    TotalBerat: first.JmllhBerat_Pallet,
+    CreateBy: first.CreateBy,
+    Shift: first.Shift,
+    HasBeenPrinted: first.HasBeenPrinted,
+  };
+};
+
 // GET details by NoWashing
 exports.getWashingDetailByNoWashing = async (nowashing) => {
   const pool = await poolPromise;

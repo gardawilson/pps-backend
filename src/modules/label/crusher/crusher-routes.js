@@ -41,4 +41,11 @@ router.delete(
   ctrl.delete,
 );
 
+// GET /labels/crusher/:noCrusher/pdf
+router.get(
+  "/labels/crusher/:noCrusher/pdf",
+  requirePermission("label_crusher:read"),
+  ctrl.generatePdf,
+);
+
 module.exports = router;

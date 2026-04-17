@@ -1,0 +1,150 @@
+<!doctype html>
+<html>
+  <head>
+    <meta charset="UTF-8" />
+    <style>
+      * {
+        margin: 0;
+        padding: 0;
+        box-sizing: border-box;
+      }
+
+      body {
+        width: 80mm;
+        font-family: Arial, sans-serif;
+        font-size: 9pt;
+        background: white;
+      }
+
+      .label {
+        width: 80mm;
+        padding: 3mm 4mm;
+      }
+
+      /* ── Header row: BROKER | (NoLabel) ── */
+      .label-header {
+        display: flex;
+        justify-content: space-between;
+        align-items: baseline;
+        border-bottom: 1.5px solid #000;
+        padding-bottom: 1.5mm;
+        margin-bottom: 2mm;
+      }
+
+      .label-header .title {
+        font-size: 12pt;
+        font-weight: bold;
+      }
+
+      .label-header .no-label {
+        font-size: 12pt;
+        font-weight: bold;
+      }
+
+      /* ── Body: info kiri | QR kanan ── */
+      .label-body {
+        display: flex;
+        gap: 3mm;
+        align-items: flex-start;
+      }
+
+      /* Kolom kiri */
+      .label-info {
+        flex: 1;
+        display: flex;
+        flex-direction: column;
+        gap: 0.8mm;
+      }
+
+      .jenis {
+        font-size: 9pt;
+        font-weight: bold;
+        padding-bottom: 1.5mm;
+        display: block;
+        width: 100%;
+        position: relative;
+      }
+
+      .watermark {
+        position: absolute;
+        top: 50%;
+        right: 0;
+        transform: translateY(-50%);
+        font-size: 16pt;
+        font-weight: 900;
+        color: rgba(0, 0, 0, 0.3);
+        letter-spacing: 2px;
+        white-space: nowrap;
+        z-index: 0;
+      }
+
+      .jenis-text {
+        position: relative;
+        z-index: 1;
+      }
+
+      .label-info .row {
+        font-size: 9pt;
+        color: #222;
+      }
+
+      .label-info .tanggal {
+        font-size: 20pt;
+        font-weight: bold;
+        color: #000;
+      }
+
+      /* Kolom kanan: QR + no label bawah */
+      .label-qr {
+        display: flex;
+        flex-direction: column;
+        align-items: center;
+      }
+
+      .label-qr img {
+        width: 26mm;
+        height: 26mm;
+      }
+
+      .label-qr .qr-caption {
+        font-size: 9pt;
+        text-align: center;
+        font-weight: bold;
+      }
+    </style>
+  </head>
+  <body>
+    <div class="label">
+      <!-- Header -->
+      <div class="label-header">
+        <span class="title">BROKER</span>
+        <span class="no-label">({{noLabel}})</span>
+      </div>
+
+      <!-- Jenis: full row + watermark COPY jika sudah pernah dicetak -->
+      <div class="jenis">
+        <span class="jenis-text">{{jenisPlastik}}</span>
+        <span class="watermark">{{watermarkText}}</span>
+      </div>
+
+      <!-- Body -->
+      <div class="label-body">
+        <!-- Kiri: info -->
+        <div class="label-info">
+          <div class="row">Mesin &nbsp;: {{mesin}}</div>
+          <div class="row">Shift &nbsp;: {{shift}}</div>
+          <div class="row">Jumlah : {{jumlahSak}} Sak</div>
+          <div class="row">Berat &nbsp;: {{totalBerat}}</div>
+          <div class="row">By &nbsp;: {{createBy}}</div>
+          <div class="tanggal">{{tanggal}}</div>
+        </div>
+
+        <!-- Kanan: QR code -->
+        <div class="label-qr">
+          <img src="{{qrBase64}}" alt="QR" />
+          <div class="qr-caption">{{noLabel}}</div>
+        </div>
+      </div>
+    </div>
+  </body>
+</html>

@@ -856,3 +856,89 @@ exports.incrementHasBeenPrinted = async (payload) => {
     throw e;
   }
 };
+
+exports.getByNoCrusher = async (NoCrusher) => {
+  const pool = await poolPromise;
+
+  const result = await pool
+    .request()
+    .input("NoCrusher", sql.VarChar(50), NoCrusher).query(`
+      ;WITH Base AS (
+        SELECT
+          A.NoCrusher,
+          A.DateCreate,
+          B.NamaCrusher,
+          A.DateUsage,
+          A.Berat,
+          A.CreateBy,
+          G.NamaWarehouse,
+          A.HasBeenPrinted
+        FROM dbo.Crusher A
+        INNER JOIN dbo.MstCrusher B
+          ON B.IdCrusher = A.IdCrusher
+        LEFT JOIN dbo.MstWarehouse G
+          ON G.IdWarehouse = A.IdWarehouse
+        WHERE A.NoCrusher = @NoCrusher
+      )
+      SELECT
+        A.NoCrusher,
+        A.DateCreate,
+        A.NamaCrusher,
+        A.DateUsage,
+        A.Berat,
+        ISNULL(K.Mesin, '') AS Mesin,
+        A.CreateBy,
+        A.NamaWarehouse,
+        ISNULL(K.Shift, 0)  AS Shift,
+        A.HasBeenPrinted
+      FROM Base A
+      OUTER APPLY (
+        SELECT TOP (1)
+          src.Mesin,
+          src.Shift
+        FROM (
+          SELECT
+            E.NamaMesin AS Mesin,
+            D.Shift,
+            1 AS Priority
+          FROM dbo.CrusherProduksiOutput C
+          JOIN dbo.CrusherProduksi_h D ON D.NoCrusherProduksi = C.NoCrusherProduksi
+          JOIN dbo.MstMesin E          ON E.IdMesin = D.IdMesin
+          WHERE C.NoCrusher = A.NoCrusher
+
+          UNION ALL
+
+          SELECT
+            F.NoBongkarSusun,
+            0,
+            2
+          FROM dbo.BongkarSusunOutputCrusher F
+          WHERE F.NoCrusher = A.NoCrusher
+
+          UNION ALL
+
+          SELECT '', 0, 3
+        ) src
+        ORDER BY src.Priority
+      ) K
+    `);
+
+  const first = result.recordset?.[0];
+  if (!first) {
+    const e = new Error(`NoCrusher ${NoCrusher} tidak ditemukan`);
+    e.statusCode = 404;
+    throw e;
+  }
+
+  return {
+    NoCrusher: first.NoCrusher,
+    DateCreate: first.DateCreate,
+    NamaCrusher: first.NamaCrusher,
+    Berat: first.Berat,
+    Mesin: first.Mesin,
+    CreateBy: first.CreateBy,
+    NamaWarehouse: first.NamaWarehouse,
+    Shift: first.Shift,
+    HasBeenPrinted: first.HasBeenPrinted ?? 0,
+  };
+};

@@ -963,3 +963,68 @@ exports.incrementHasBeenPrinted = async (payload) => {
     throw e;
   }
 };
+
+exports.getByNoGilingan = async (NoGilingan) => {
+  const pool = await poolPromise;
+
+  const result = await pool
+    .request()
+    .input("NoGilingan", sql.VarChar(50), NoGilingan).query(`
+      SELECT
+        g.NoGilingan,
+        g.DateCreate,
+        mg.NamaGilingan,
+        CASE
+          WHEN g.IsPartial = 1 THEN
+            CASE
+              WHEN ISNULL(g.Berat, 0) - ISNULL(gp.TotalPartial, 0) < 0
+                THEN 0
+              ELSE ISNULL(g.Berat, 0) - ISNULL(gp.TotalPartial, 0)
+            END
+          ELSE ISNULL(g.Berat, 0)
+        END AS Berat,
+        ISNULL(CAST(g.HasBeenPrinted AS int), 0) AS HasBeenPrinted,
+        g.CreateBy,
+        COALESCE(prod.NamaMesin, bs.NoBongkarSusun, '') AS Mesin
+      FROM dbo.Gilingan g
+      LEFT JOIN dbo.MstGilingan mg
+        ON mg.IdGilingan = g.IdGilingan
+      LEFT JOIN (
+        SELECT NoGilingan, SUM(ISNULL(Berat, 0)) AS TotalPartial
+        FROM dbo.GilinganPartial
+        GROUP BY NoGilingan
+      ) gp ON gp.NoGilingan = g.NoGilingan
+      OUTER APPLY (
+        SELECT TOP (1)
+          m.NamaMesin
+        FROM dbo.GilinganProduksiOutput gpo
+        JOIN dbo.GilinganProduksi_h gh ON gh.NoProduksi = gpo.NoProduksi
+        LEFT JOIN dbo.MstMesin m       ON m.IdMesin = gh.IdMesin
+        WHERE gpo.NoGilingan = g.NoGilingan
+      ) prod
+      OUTER APPLY (
+        SELECT TOP (1)
+          bs.NoBongkarSusun
+        FROM dbo.BongkarSusunOutputGilingan bs
+        WHERE bs.NoGilingan = g.NoGilingan
+      ) bs
+      WHERE g.NoGilingan = @NoGilingan
+    `);
+
+  const first = result.recordset?.[0];
+  if (!first) {
+    const e = new Error(`NoGilingan ${NoGilingan} tidak ditemukan`);
+    e.statusCode = 404;
+    throw e;
+  }
+
+  return {
+    NoGilingan: first.NoGilingan,
+    DateCreate: first.DateCreate,
+    NamaGilingan: first.NamaGilingan,
+    Berat: first.Berat,
+    HasBeenPrinted: first.HasBeenPrinted,
+    CreateBy: first.CreateBy,
+    Mesin: first.Mesin,
+  };
+};

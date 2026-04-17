@@ -43,4 +43,11 @@ router.delete(
   ctrl.delete,
 );
 
+// GET /labels/bonggolan/:noBonggolan/pdf
+router.get(
+  "/labels/bonggolan/:noBonggolan/pdf",
+  requirePermission("label_bonggolan:read"),
+  ctrl.generatePdf,
+);
+
 module.exports = router;

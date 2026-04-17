@@ -847,3 +847,114 @@ exports.incrementHasBeenPrinted = async (payload) => {
     throw e;
   }
 };
+
+exports.getByNoBonggolan = async (NoBonggolan) => {
+  const pool = await poolPromise;
+
+  const result = await pool
+    .request()
+    .input("NoBonggolan", sql.VarChar(50), NoBonggolan)
+    .query(`
+      ;WITH Base AS (
+        SELECT
+          A.NoBonggolan,
+          A.DateCreate    AS Tanggal,
+          B.NamaBonggolan AS Jenis,
+          A.Berat,
+          C.NamaWarehouse AS Warehouse,
+          A.CreateBy,
+          A.HasBeenPrinted
+        FROM dbo.Bonggolan A
+        INNER JOIN dbo.MstBonggolan B
+          ON B.IdBonggolan = A.IdBonggolan
+        LEFT JOIN dbo.MstWarehouse C
+          ON C.IdWarehouse = A.IdWarehouse
+        WHERE A.NoBonggolan = @NoBonggolan
+      )
+      SELECT
+        A.NoBonggolan,
+        A.Tanggal,
+        A.Jenis,
+        A.Berat,
+        A.Warehouse,
+        A.CreateBy,
+        ISNULL(K.Ket, '')          AS Ket,
+        ISNULL(K.Shift, 0)         AS Shift,
+        ISNULL(K.NamaOperator, '') AS NamaOperator,
+        A.HasBeenPrinted
+      FROM Base A
+      OUTER APPLY (
+        SELECT TOP (1)
+          src.Ket,
+          src.Shift,
+          src.NamaOperator
+        FROM (
+          SELECT
+            CAST(C.NoAdjustment AS VARCHAR(100)) AS Ket,
+            0 AS Shift,
+            '' AS NamaOperator,
+            1 AS Priority
+          FROM dbo.AdjustmentOutputBonggolan C
+          WHERE C.NoBonggolan = A.NoBonggolan
+
+          UNION ALL
+
+          SELECT
+            CAST(D.NoBongkarSusun AS VARCHAR(100)),
+            0,
+            '',
+            2
+          FROM dbo.BongkarSusunOutputBonggolan D
+          WHERE D.NoBonggolan = A.NoBonggolan
+
+          UNION ALL
+
+          SELECT
+            G.NamaMesin,
+            F.Shift,
+            H.NamaOperator,
+            3
+          FROM dbo.BrokerProduksiOutputBonggolan E
+          JOIN dbo.BrokerProduksi_h F ON F.NoProduksi = E.NoProduksi
+          JOIN dbo.MstMesin G         ON G.IdMesin = F.IdMesin
+          JOIN dbo.MstOperator H      ON H.IdOperator = F.IdOperator
+          WHERE E.NoBonggolan = A.NoBonggolan
+
+          UNION ALL
+
+          SELECT
+            G.NamaMesin,
+            F.Shift,
+            H.NamaOperator,
+            4
+          FROM dbo.InjectProduksiOutputBonggolan E
+          JOIN dbo.InjectProduksi_h F ON F.NoProduksi = E.NoProduksi
+          JOIN dbo.MstMesin G         ON G.IdMesin = F.IdMesin
+          JOIN dbo.MstOperator H      ON H.IdOperator = F.IdOperator
+          WHERE E.NoBonggolan = A.NoBonggolan
+        ) src
+        ORDER BY src.Priority
+      ) K
+    `);
+
+  const first = result.recordset?.[0];
+  if (!first) {
+    const e = new Error(`NoBonggolan ${NoBonggolan} tidak ditemukan`);
+    e.statusCode = 404;
+    throw e;
+  }
+
+  return {
+    NoBonggolan:    first.NoBonggolan,
+    Tanggal:        first.Tanggal,
+    Jenis:          first.Jenis,
+    Berat:          first.Berat,
+    Warehouse:      first.Warehouse,
+    CreateBy:       first.CreateBy,
+    Ket:            first.Ket,
+    Shift:          first.Shift,
+    NamaOperator:   first.NamaOperator,
+    HasBeenPrinted: first.HasBeenPrinted ?? 0,
+  };
+};
+

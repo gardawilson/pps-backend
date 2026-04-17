@@ -7,6 +7,10 @@ const {
   makeRequestId,
 } = require("../../../core/utils/http-context");
 const { getIo } = require("../../../core/utils/socket-instance");
+const { generateLabelPdf } = require("../../../core/utils/pdf/label-generator");
+const {
+  buildBrokerLabelHtml,
+} = require("../../../core/utils/pdf/templates/broker-label-pdf/broker-label-pdf");
 
 // GET all header broker
 exports.getAll = async (req, res) => {
@@ -296,5 +300,51 @@ exports.incrementHasBeenPrinted = async (req, res) => {
       success: false,
       message: err.message || "Terjadi kesalahan server",
     });
+  }
+};
+
+// GET /labels/broker/:nobroker/pdf
+exports.generatePdf = async (req, res) => {
+  try {
+    const NoBroker = String(req.params.nobroker || "").trim();
+    if (!NoBroker) {
+      return res
+        .status(400)
+        .json({ success: false, message: "nobroker wajib diisi" });
+    }
+
+    const row = await brokerService.getByNoBroker(NoBroker);
+
+    const data = {
+      noLabel: row.NoBroker,
+      jenisPlastik: row.JenisPlastik,
+      mesin: row.Mesin,
+      jumlahSak: String(row.JumlahSak ?? "-"),
+      totalBerat: row.TotalBerat != null ? `${row.TotalBerat} kg` : "-",
+      shift: row.Shift || "-",
+      tanggal: (() => {
+        const d = new Date(row.DateCreate);
+        const dd = String(d.getDate()).padStart(2, "0");
+        const mmm = d.toLocaleDateString("id-ID", { month: "short" });
+        const yy = String(d.getFullYear()).slice(-2);
+        return `${dd}-${mmm}-${yy}`;
+      })(),
+      createBy: row.CreateBy || "-",
+      watermarkText: row.HasBeenPrinted > 0 ? `COPY ${row.HasBeenPrinted}` : "",
+    };
+
+    const pdfBuffer = await generateLabelPdf(data, buildBrokerLabelHtml);
+
+    res.set({
+      "Content-Type": "application/pdf",
+      "Content-Disposition": `inline; filename="label-${NoBroker}.pdf"`,
+      "Content-Length": pdfBuffer.length,
+    });
+
+    return res.end(pdfBuffer);
+  } catch (err) {
+    console.error("Broker PDF Error:", err);
+    const status = err.statusCode || 500;
+    return res.status(status).json({ success: false, message: err.message });
   }
 };

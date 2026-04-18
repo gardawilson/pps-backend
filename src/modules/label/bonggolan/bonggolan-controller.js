@@ -7,7 +7,9 @@ const {
 } = require("../../../core/utils/http-context");
 const { getIo } = require("../../../core/utils/socket-instance");
 const { generateLabelPdf } = require("../../../core/utils/pdf/label-generator");
-const { buildBonggolanLabelHtml } = require("../../../core/utils/pdf/templates/bonggolan-label-pdf/bonggolan-label-pdf");
+const {
+  buildBonggolanLabelHtml,
+} = require("../../../core/utils/pdf/templates/bonggolan-label-pdf/bonggolan-label-pdf");
 
 // GET all header bonggolan
 exports.getAll = async (req, res) => {
@@ -259,7 +261,9 @@ exports.generatePdf = async (req, res) => {
   try {
     const NoBonggolan = String(req.params.noBonggolan || "").trim();
     if (!NoBonggolan) {
-      return res.status(400).json({ success: false, message: "noBonggolan wajib diisi" });
+      return res
+        .status(400)
+        .json({ success: false, message: "noBonggolan wajib diisi" });
     }
 
     const row = await service.getByNoBonggolan(NoBonggolan);
@@ -270,14 +274,17 @@ exports.generatePdf = async (req, res) => {
     const yy = String(d.getFullYear()).slice(-2);
 
     const data = {
-      noLabel:      row.NoBonggolan,
+      noLabel: row.NoBonggolan,
       jenisPlastik: row.Jenis,
-      mesin:        row.Ket || "-",
-      shift:        row.Shift ? String(row.Shift) : "-",
-      berat:        row.Berat != null ? `${row.Berat} kg` : "-",
-      warehouse:    row.Warehouse || "-",
-      tanggal:      `${dd}-${mmm}-${yy}`,
-      createBy:     row.CreateBy || "-",
+      mesinLabel: String(row.Ket || "").startsWith("BG.")
+        ? "BS&nbsp"
+        : "Mesin &nbsp;",
+      mesin: row.Ket || "-",
+      shift: row.Shift ? String(row.Shift) : "",
+      berat: row.Berat != null ? `${row.Berat} kg` : "-",
+      warehouse: row.Warehouse || "-",
+      tanggal: `${dd}-${mmm}-${yy}`,
+      createBy: row.CreateBy || "-",
       watermarkText: row.HasBeenPrinted > 0 ? `COPY ${row.HasBeenPrinted}` : "",
     };
 

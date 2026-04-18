@@ -318,10 +318,11 @@ exports.generatePdf = async (req, res) => {
     const data = {
       noLabel: row.NoMixer,
       jenisPlastik: row.Jenis,
-      mesin: row.Mesin,
+      mesinLabel: String(row.Mesin || "").startsWith("BG.") ? "BS &nbsp;" : "Mesin &nbsp;",
+      mesin: row.Mesin || "-",
       jumlahSak: String(row.JumlahSak ?? "-"),
       totalBerat: row.SisaBerat != null ? `${row.SisaBerat} kg` : "-",
-      shift: row.Shift || "-",
+      shift: row.Shift || "",
       tanggal: (() => {
         const d = new Date(row.DateCreate);
         const dd = String(d.getDate()).padStart(2, "0");

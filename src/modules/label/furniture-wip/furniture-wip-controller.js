@@ -335,8 +335,9 @@ exports.generatePdf = async (req, res) => {
     const data = {
       noLabel:         row.NoFurnitureWIP,
       namaFurnitureWip: row.NamaFurnitureWIP,
+      mesinLabel:      String(row.Mesin || "").startsWith("BG.") ? "BS &nbsp;" : "Mesin &nbsp;",
       mesin:           row.Mesin || "-",
-      shift:           row.Shift != null ? String(row.Shift) : "-",
+      shift:           row.Shift != null ? String(row.Shift) : "",
       pcs:             row.Pcs != null ? String(row.Pcs) : "-",
       berat:           row.Berat != null ? `${Number(row.Berat).toFixed(2)} kg` : "-",
       tanggal:         `${dd}-${mmm}-${yy}`,

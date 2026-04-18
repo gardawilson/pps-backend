@@ -169,7 +169,7 @@ exports.getByNoBroker = async (NoBroker) => {
           C.NamaWarehouse,
           CASE
             WHEN E.NoProduksi IS NULL
-              THEN 'BS - ' + ISNULL(H.NoBongkarSusun, '')
+              THEN ISNULL(H.NoBongkarSusun, '')
             ELSE ISNULL(G.NamaMesin, '')
           END                                               AS Mesin,
           COUNT(D.NoSak)                                    AS JmllhSak_Pallet,

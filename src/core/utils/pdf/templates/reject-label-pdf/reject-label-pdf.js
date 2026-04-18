@@ -8,8 +8,9 @@ function buildRejectLabelHtml(data) {
   return templateHtml
     .replace(/{{noLabel}}/g, data.noLabel || "-")
     .replace("{{namaReject}}", data.namaReject || "-")
+    .replace("{{mesinLabel}}", data.mesinLabel || "Mesin &nbsp;")
     .replace("{{mesin}}", data.mesin || "-")
-    .replace("{{shift}}", data.shift || "-")
+    .replace("{{shiftRow}}", (data.shift && data.shift !== "-") ? `<div class="row">Shift &nbsp;: ${data.shift}</div>` : "")
     .replace("{{berat}}", data.berat || "-")
     .replace("{{tanggal}}", data.tanggal || "-")
     .replace("{{createBy}}", data.createBy || "-")

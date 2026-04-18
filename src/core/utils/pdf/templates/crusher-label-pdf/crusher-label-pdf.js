@@ -8,8 +8,9 @@ function buildCrusherLabelHtml(data) {
   return templateHtml
     .replace(/{{noLabel}}/g, data.noLabel || "-")
     .replace("{{namaCrusher}}", data.namaCrusher || "-")
+    .replace("{{mesinLabel}}", data.mesinLabel || "Mesin &nbsp;")
     .replace("{{mesin}}", data.mesin || "-")
-    .replace("{{shift}}", data.shift || "-")
+    .replace("{{shiftRow}}", (data.shift && data.shift !== "-") ? `<div class="row">Shift &nbsp;: ${data.shift}</div>` : "")
     .replace("{{berat}}", data.berat || "-")
     .replace("{{warehouse}}", data.warehouse || "-")
     .replace("{{tanggal}}", data.tanggal || "-")

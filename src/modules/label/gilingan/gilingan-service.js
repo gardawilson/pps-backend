@@ -985,7 +985,8 @@ exports.getByNoGilingan = async (NoGilingan) => {
         END AS Berat,
         ISNULL(CAST(g.HasBeenPrinted AS int), 0) AS HasBeenPrinted,
         g.CreateBy,
-        COALESCE(prod.NamaMesin, bs.NoBongkarSusun, '') AS Mesin
+        COALESCE(prod.NamaMesin, bs.NoBongkarSusun, '') AS Mesin,
+        prod.Shift AS Shift
       FROM dbo.Gilingan g
       LEFT JOIN dbo.MstGilingan mg
         ON mg.IdGilingan = g.IdGilingan
@@ -996,7 +997,8 @@ exports.getByNoGilingan = async (NoGilingan) => {
       ) gp ON gp.NoGilingan = g.NoGilingan
       OUTER APPLY (
         SELECT TOP (1)
-          m.NamaMesin
+          m.NamaMesin,
+          gh.Shift
         FROM dbo.GilinganProduksiOutput gpo
         JOIN dbo.GilinganProduksi_h gh ON gh.NoProduksi = gpo.NoProduksi
         LEFT JOIN dbo.MstMesin m       ON m.IdMesin = gh.IdMesin
@@ -1026,5 +1028,6 @@ exports.getByNoGilingan = async (NoGilingan) => {
     HasBeenPrinted: first.HasBeenPrinted,
     CreateBy: first.CreateBy,
     Mesin: first.Mesin,
+    Shift: first.Shift,
   };
 };

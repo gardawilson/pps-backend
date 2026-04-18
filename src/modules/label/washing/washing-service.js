@@ -121,7 +121,7 @@ exports.getByNoWashing = async (NoWashing) => {
         A.DateCreate                                      AS DateCreate_Pallet,
         CASE
           WHEN D.NoProduksi IS NULL
-            THEN 'BS - ' + ISNULL(G.NoBongkarSusun, '')
+            THEN ISNULL(G.NoBongkarSusun, '')
           ELSE ISNULL(F.NamaMesin, '')
         END                                               AS Mesin,
         B.Jenis                                           AS JenisPlastik_Pallet,

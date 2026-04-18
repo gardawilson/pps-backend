@@ -266,7 +266,10 @@ exports.generatePdf = async (req, res) => {
     const data = {
       noLabel: row.NoWashing,
       jenisPlastik: row.JenisPlastik,
-      mesin: row.Mesin,
+      mesinLabel: String(row.Mesin || "").startsWith("BG.")
+        ? "BS &nbsp;"
+        : "Mesin &nbsp;",
+      mesin: row.Mesin || "-",
       jumlahSak: String(row.JumlahSak ?? "-"),
       totalBerat: row.TotalBerat != null ? `${row.TotalBerat} kg` : "-",
       shift: row.Shift || "-",

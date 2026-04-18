@@ -7,7 +7,9 @@ const {
 } = require("../../../core/utils/http-context");
 const { getIo } = require("../../../core/utils/socket-instance");
 const { generateLabelPdf } = require("../../../core/utils/pdf/label-generator");
-const { buildCrusherLabelHtml } = require("../../../core/utils/pdf/templates/crusher-label-pdf/crusher-label-pdf");
+const {
+  buildCrusherLabelHtml,
+} = require("../../../core/utils/pdf/templates/crusher-label-pdf/crusher-label-pdf");
 
 // GET all header crusher
 exports.getAll = async (req, res) => {
@@ -255,7 +257,11 @@ exports.incrementHasBeenPrinted = async (req, res) => {
     });
 
     const io = getIo();
-    if (io) io.emit('print_confirmed', { noLabel: NoCrusher, hasBeenPrinted: result.HasBeenPrinted });
+    if (io)
+      io.emit("print_confirmed", {
+        noLabel: NoCrusher,
+        hasBeenPrinted: result.HasBeenPrinted,
+      });
 
     return res.status(200).json({
       success: true,
@@ -277,7 +283,9 @@ exports.generatePdf = async (req, res) => {
   try {
     const NoCrusher = String(req.params.noCrusher || "").trim();
     if (!NoCrusher) {
-      return res.status(400).json({ success: false, message: "noCrusher wajib diisi" });
+      return res
+        .status(400)
+        .json({ success: false, message: "noCrusher wajib diisi" });
     }
 
     const row = await service.getByNoCrusher(NoCrusher);
@@ -288,14 +296,17 @@ exports.generatePdf = async (req, res) => {
     const yy = String(d.getFullYear()).slice(-2);
 
     const data = {
-      noLabel:      row.NoCrusher,
-      namaCrusher:  row.NamaCrusher,
-      mesin:        row.Mesin || "-",
-      shift:        row.Shift ? String(row.Shift) : "-",
-      berat:        row.Berat != null ? `${row.Berat} kg` : "-",
-      warehouse:    row.NamaWarehouse || "-",
-      tanggal:      `${dd}-${mmm}-${yy}`,
-      createBy:     row.CreateBy || "-",
+      noLabel: row.NoCrusher,
+      namaCrusher: row.NamaCrusher,
+      mesinLabel: String(row.Mesin || "").startsWith("BG.")
+        ? "BS &nbsp;"
+        : "Mesin &nbsp;",
+      mesin: row.Mesin || "-",
+      shift: row.Shift ? String(row.Shift) : "",
+      berat: row.Berat != null ? `${row.Berat} kg` : "-",
+      warehouse: row.NamaWarehouse || "-",
+      tanggal: `${dd}-${mmm}-${yy}`,
+      createBy: row.CreateBy || "-",
       watermarkText: row.HasBeenPrinted > 0 ? `COPY ${row.HasBeenPrinted}` : "",
     };
 

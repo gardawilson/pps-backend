@@ -124,14 +124,14 @@ exports.getByNoWashing = async (NoWashing) => {
             THEN ISNULL(G.NoBongkarSusun, '')
           ELSE ISNULL(F.NamaMesin, '')
         END                                               AS Mesin,
-        B.Jenis                                           AS JenisPlastik_Pallet,
+        B.Nama                                            AS JenisPlastik_Pallet,
         COUNT(C.NoSak)                                    AS JmllhSak_Pallet,
         SUM(C.Berat)                                      AS JmllhBerat_Pallet,
         A.CreateBy,
         E.Shift,
         A.HasBeenPrinted
       FROM Washing_h A
-      INNER JOIN MstJenisPlastik           B ON B.IdJenisPlastik = A.IdJenisPlastik
+      INNER JOIN MstWashing                B ON B.IdWashing     = A.IdJenisPlastik
       INNER JOIN Washing_d                 C ON C.NoWashing      = A.NoWashing
       LEFT  JOIN WashingProduksiOutput     D ON D.NoWashing      = A.NoWashing
                                            AND D.NoSak           = C.NoSak
@@ -142,7 +142,7 @@ exports.getByNoWashing = async (NoWashing) => {
       WHERE A.NoWashing = @NoWashing
         AND C.DateUsage IS NULL
       GROUP BY
-        A.NoWashing, A.DateCreate, B.Jenis,
+        A.NoWashing, A.DateCreate, B.Nama,
         D.NoProduksi, G.NoBongkarSusun, F.NamaMesin,
         A.CreateBy, E.Shift, A.HasBeenPrinted
     `);

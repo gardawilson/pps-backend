@@ -165,7 +165,7 @@ exports.getByNoBroker = async (NoBroker) => {
         SELECT
           A.NoBroker                                        AS NoBroker_Pallet,
           A.DateCreate                                      AS DateCreate_Pallet,
-          B.Jenis                                           AS JenisPlastik_Pallet,
+          B.Nama                                            AS JenisPlastik_Pallet,
           C.NamaWarehouse,
           CASE
             WHEN E.NoProduksi IS NULL
@@ -178,7 +178,7 @@ exports.getByNoBroker = async (NoBroker) => {
           F.Shift,
           A.HasBeenPrinted
         FROM Broker_h A
-        INNER JOIN MstJenisPlastik          B ON B.IdJenisPlastik = A.IdJenisPlastik
+        INNER JOIN MstBroker                B ON B.IdBroker        = A.IdJenisPlastik
         INNER JOIN MstWarehouse             C ON C.IdWarehouse    = A.IdWarehouse
         INNER JOIN Broker_d                 D ON D.NoBroker       = A.NoBroker
         LEFT  JOIN BrokerProduksiOutput     E ON E.NoBroker       = A.NoBroker
@@ -190,7 +190,7 @@ exports.getByNoBroker = async (NoBroker) => {
         WHERE A.NoBroker = @NoBroker
           AND D.DateUsage IS NULL
         GROUP BY
-          A.NoBroker, A.DateCreate, B.Jenis, C.NamaWarehouse,
+          A.NoBroker, A.DateCreate, B.Nama, C.NamaWarehouse,
           E.NoProduksi, G.NamaMesin, H.NoBongkarSusun,
           A.CreateBy, F.Shift, A.HasBeenPrinted
       ),

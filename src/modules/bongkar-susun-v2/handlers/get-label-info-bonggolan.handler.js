@@ -17,7 +17,9 @@ exports.getLabelInfoBonggolan = async (labelCode) => {
     `);
 
   if (!result.recordset.length) {
-    const e = new Error(`Label ${labelCode} tidak ditemukan atau sudah terpakai`);
+    const e = new Error(
+      `Label ${labelCode} tidak ditemukan atau sudah terpakai`,
+    );
     e.statusCode = 404;
     throw e;
   }

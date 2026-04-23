@@ -1,10 +1,10 @@
 ﻿const { sql, poolPromise } = require("../../../core/config/db");
-const { generateNextCode } = require("../../../core/utils/sequence-code-helper");
+const {
+  generateNextCode,
+} = require("../../../core/utils/sequence-code-helper");
 const { badReq, conflict } = require("../../../core/utils/http-error");
 const { formatYMD } = require("../../../core/shared/tutup-transaksi-guard");
-const {
-  detectCategory,
-} = require("../bongkar-susun-v2-category-registry");
+const { detectCategory } = require("../bongkar-susun-v2-category-registry");
 exports.createBongkarSusunBroker = async (payload, ctx) => {
   const { note, inputs, outputs } = payload;
   const { actorId, actorUsername, requestId } = ctx;
@@ -326,5 +326,3 @@ exports.createBongkarSusunBroker = async (payload, ctx) => {
     throw e;
   }
 };
-
-

@@ -1327,6 +1327,7 @@ exports.getByNoFurnitureWip = async (NoFurnitureWIP) => {
       SELECT
         f.NoFurnitureWIP,
         f.DateCreate,
+        f.IdFurnitureWIP,
         cw.Nama AS NamaFurnitureWIP,
         CASE
           WHEN f.IsPartial = 1 THEN
@@ -1413,6 +1414,7 @@ exports.getByNoFurnitureWip = async (NoFurnitureWIP) => {
   return {
     NoFurnitureWIP: first.NoFurnitureWIP,
     DateCreate: first.DateCreate,
+    IdFurnitureWIP: first.IdFurnitureWIP,
     NamaFurnitureWIP: first.NamaFurnitureWIP,
     Pcs: first.Pcs,
     Berat: first.Berat,

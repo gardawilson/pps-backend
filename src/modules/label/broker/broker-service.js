@@ -71,7 +71,7 @@ exports.getAll = async ({ page, limit, search, includeUsed = false }) => {
       MAX(bsob.NoBongkarSusun)    AS NoBongkarSusun    -- dari BongkarSusunOutputBroker
     FROM Broker_h h
     INNER JOIN MstBroker mb ON mb.IdBroker = h.IdJenisPlastik
-    INNER JOIN MstWarehouse    w  ON w.IdWarehouse     = h.IdWarehouse
+    LEFT JOIN MstWarehouse    w  ON w.IdWarehouse     = h.IdWarehouse
 
     -- Header → Output Produksi (ambil NoProduksi)
     LEFT JOIN dbo.BrokerProduksiOutput bpo
@@ -115,7 +115,7 @@ exports.getAll = async ({ page, limit, search, includeUsed = false }) => {
     SELECT COUNT(DISTINCT h.NoBroker) AS total
     FROM Broker_h h
     INNER JOIN MstBroker mb ON mb.IdBroker = h.IdJenisPlastik
-    INNER JOIN MstWarehouse    w  ON w.IdWarehouse     = h.IdWarehouse
+    LEFT JOIN MstWarehouse    w  ON w.IdWarehouse     = h.IdWarehouse
     LEFT JOIN dbo.BrokerProduksiOutput bpo
       ON bpo.NoBroker = h.NoBroker
     LEFT JOIN dbo.BrokerProduksi_h bp
@@ -165,11 +165,11 @@ exports.getByNoBroker = async (NoBroker) => {
         SELECT
           A.NoBroker                                        AS NoBroker_Pallet,
           A.DateCreate                                      AS DateCreate_Pallet,
-          B.Nama                                            AS JenisPlastik_Pallet,
+          B.Jenis                                           AS JenisPlastik_Pallet,
           C.NamaWarehouse,
           CASE
             WHEN E.NoProduksi IS NULL
-              THEN ISNULL(H.NoBongkarSusun, '')
+              THEN 'BS - ' + ISNULL(H.NoBongkarSusun, '')
             ELSE ISNULL(G.NamaMesin, '')
           END                                               AS Mesin,
           COUNT(D.NoSak)                                    AS JmllhSak_Pallet,
@@ -178,7 +178,7 @@ exports.getByNoBroker = async (NoBroker) => {
           F.Shift,
           A.HasBeenPrinted
         FROM Broker_h A
-        INNER JOIN MstBroker                B ON B.IdBroker        = A.IdJenisPlastik
+        INNER JOIN MstJenisPlastik          B ON B.IdJenisPlastik = A.IdJenisPlastik
         INNER JOIN MstWarehouse             C ON C.IdWarehouse    = A.IdWarehouse
         INNER JOIN Broker_d                 D ON D.NoBroker       = A.NoBroker
         LEFT  JOIN BrokerProduksiOutput     E ON E.NoBroker       = A.NoBroker
@@ -190,7 +190,7 @@ exports.getByNoBroker = async (NoBroker) => {
         WHERE A.NoBroker = @NoBroker
           AND D.DateUsage IS NULL
         GROUP BY
-          A.NoBroker, A.DateCreate, B.Nama, C.NamaWarehouse,
+          A.NoBroker, A.DateCreate, B.Jenis, C.NamaWarehouse,
           E.NoProduksi, G.NamaMesin, H.NoBongkarSusun,
           A.CreateBy, F.Shift, A.HasBeenPrinted
       ),

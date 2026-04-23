@@ -2,8 +2,9 @@ const { sql, poolPromise } = require("../../../core/config/db");
 
 exports.getLabelInfoBroker = async (labelCode) => {
   const pool = await poolPromise;
-  const result = await pool.request().input("NoBroker", sql.VarChar(50), labelCode)
-    .query(`
+  const result = await pool
+    .request()
+    .input("NoBroker", sql.VarChar(50), labelCode).query(`
       SELECT
         h.NoBroker        AS labelCode,
         h.IdJenisPlastik  AS idJenis,
@@ -27,7 +28,9 @@ exports.getLabelInfoBroker = async (labelCode) => {
     `);
 
   if (!result.recordset.length) {
-    const e = new Error(`Label ${labelCode} tidak ditemukan atau sudah terpakai`);
+    const e = new Error(
+      `Label ${labelCode} tidak ditemukan atau sudah terpakai`,
+    );
     e.statusCode = 404;
     throw e;
   }
@@ -42,7 +45,9 @@ exports.getLabelInfoBroker = async (labelCode) => {
     `);
 
   if (!saksRes.recordset.length) {
-    const e = new Error(`Label ${labelCode} tidak ditemukan atau sudah terpakai`);
+    const e = new Error(
+      `Label ${labelCode} tidak ditemukan atau sudah terpakai`,
+    );
     e.statusCode = 404;
     throw e;
   }

@@ -9,7 +9,11 @@ const {
 } = require("./bongkar-susun-v2-category-registry");
 const getLabelInfoWashingHandler = require("./handlers/get-label-info-washing.handler");
 const getLabelInfoBrokerHandler = require("./handlers/get-label-info-broker.handler");
+const getLabelInfoCrusherHandler = require("./handlers/get-label-info-crusher.handler");
+const getLabelInfoGilinganHandler = require("./handlers/get-label-info-gilingan.handler");
+const getLabelInfoFurnitureWipHandler = require("./handlers/get-label-info-furniture-wip.handler");
 const getLabelInfoBonggolanHandler = require("./handlers/get-label-info-bonggolan.handler");
+const getLabelInfoBarangJadiHandler = require("./handlers/get-label-info-barang-jadi.handler");
 
 // GET label info dispatcher
 exports.getLabelInfo = async (labelCode) => {
@@ -32,6 +36,12 @@ exports.getLabelInfo = async (labelCode) => {
   const handlers = {
     getLabelInfoWashing: getLabelInfoWashingHandler.getLabelInfoWashing,
     getLabelInfoBroker: getLabelInfoBrokerHandler.getLabelInfoBroker,
+    getLabelInfoCrusher: getLabelInfoCrusherHandler.getLabelInfoCrusher,
+    getLabelInfoGilingan: getLabelInfoGilinganHandler.getLabelInfoGilingan,
+    getLabelInfoFurnitureWip:
+      getLabelInfoFurnitureWipHandler.getLabelInfoFurnitureWip,
+    getLabelInfoBarangJadi:
+      getLabelInfoBarangJadiHandler.getLabelInfoBarangJadi,
     getLabelInfoBonggolan: getLabelInfoBonggolanHandler.getLabelInfoBonggolan,
   };
 
@@ -72,8 +82,409 @@ exports.getAll = async (page = 1, pageSize = 20, search = "") => {
         h.NoBongkarSusun,
         h.Tanggal,
         h.IdUsername,
-        h.Note
+        h.Note,
+        ISNULL(cat.category, '') AS category,
+        ISNULL(cat.inputLabelCount, 0) AS inputLabelCount,
+        ISNULL(cat.outputLabelCount, 0) AS outputLabelCount,
+        ISNULL(bal.balance, CAST(0 AS bit)) AS balance
       FROM dbo.BongkarSusun_h h
+      OUTER APPLY (
+        SELECT TOP (1)
+          x.category,
+          x.inputLabelCount,
+          x.outputLabelCount
+        FROM (
+          SELECT
+            'washing' AS category,
+            (
+              SELECT COUNT(DISTINCT iw.NoWashing)
+              FROM dbo.BongkarSusunInputWashing iw
+              WHERE iw.NoBongkarSusun = h.NoBongkarSusun
+            ) AS inputLabelCount,
+            (
+              SELECT COUNT(DISTINCT ow.NoWashing)
+              FROM dbo.BongkarSusunOutputWashing ow
+              WHERE ow.NoBongkarSusun = h.NoBongkarSusun
+            ) AS outputLabelCount,
+            1 AS priority
+          WHERE EXISTS (
+            SELECT 1
+            FROM dbo.BongkarSusunInputWashing iw
+            WHERE iw.NoBongkarSusun = h.NoBongkarSusun
+          )
+          OR EXISTS (
+            SELECT 1
+            FROM dbo.BongkarSusunOutputWashing ow
+            WHERE ow.NoBongkarSusun = h.NoBongkarSusun
+          )
+
+          UNION ALL
+
+          SELECT
+            'broker' AS category,
+            (
+              SELECT COUNT(DISTINCT ib.NoBroker)
+              FROM dbo.BongkarSusunInputBroker ib
+              WHERE ib.NoBongkarSusun = h.NoBongkarSusun
+            ) AS inputLabelCount,
+            (
+              SELECT COUNT(DISTINCT ob.NoBroker)
+              FROM dbo.BongkarSusunOutputBroker ob
+              WHERE ob.NoBongkarSusun = h.NoBongkarSusun
+            ) AS outputLabelCount,
+            2 AS priority
+          WHERE EXISTS (
+            SELECT 1
+            FROM dbo.BongkarSusunInputBroker ib
+            WHERE ib.NoBongkarSusun = h.NoBongkarSusun
+          )
+          OR EXISTS (
+            SELECT 1
+            FROM dbo.BongkarSusunOutputBroker ob
+            WHERE ob.NoBongkarSusun = h.NoBongkarSusun
+          )
+
+          UNION ALL
+
+          SELECT
+            'crusher' AS category,
+            (
+              SELECT COUNT(DISTINCT ic.NoCrusher)
+              FROM dbo.BongkarSusunInputCrusher ic
+              WHERE ic.NoBongkarSusun = h.NoBongkarSusun
+            ) AS inputLabelCount,
+            (
+              SELECT COUNT(DISTINCT oc.NoCrusher)
+              FROM dbo.BongkarSusunOutputCrusher oc
+              WHERE oc.NoBongkarSusun = h.NoBongkarSusun
+            ) AS outputLabelCount,
+            3 AS priority
+          WHERE EXISTS (
+            SELECT 1
+            FROM dbo.BongkarSusunInputCrusher ic
+            WHERE ic.NoBongkarSusun = h.NoBongkarSusun
+            )
+            OR EXISTS (
+              SELECT 1
+              FROM dbo.BongkarSusunOutputCrusher oc
+              WHERE oc.NoBongkarSusun = h.NoBongkarSusun
+            )
+
+          UNION ALL
+
+          SELECT
+            'gilingan' AS category,
+            (
+              SELECT COUNT(DISTINCT ig.NoGilingan)
+              FROM dbo.BongkarSusunInputGilingan ig
+              WHERE ig.NoBongkarSusun = h.NoBongkarSusun
+            ) AS inputLabelCount,
+            (
+              SELECT COUNT(DISTINCT og.NoGilingan)
+              FROM dbo.BongkarSusunOutputGilingan og
+              WHERE og.NoBongkarSusun = h.NoBongkarSusun
+            ) AS outputLabelCount,
+            4 AS priority
+          WHERE EXISTS (
+            SELECT 1
+            FROM dbo.BongkarSusunInputGilingan ig
+            WHERE ig.NoBongkarSusun = h.NoBongkarSusun
+          )
+          OR EXISTS (
+            SELECT 1
+            FROM dbo.BongkarSusunOutputGilingan og
+            WHERE og.NoBongkarSusun = h.NoBongkarSusun
+            )
+
+          UNION ALL
+
+          SELECT
+            'furnitureWip' AS category,
+            (
+              SELECT COUNT(DISTINCT ifw.NoFurnitureWIP)
+              FROM dbo.BongkarSusunInputFurnitureWIP ifw
+              WHERE ifw.NoBongkarSusun = h.NoBongkarSusun
+            ) AS inputLabelCount,
+            (
+              SELECT COUNT(DISTINCT ofw.NoFurnitureWIP)
+              FROM dbo.BongkarSusunOutputFurnitureWIP ofw
+              WHERE ofw.NoBongkarSusun = h.NoBongkarSusun
+            ) AS outputLabelCount,
+            5 AS priority
+          WHERE EXISTS (
+            SELECT 1
+            FROM dbo.BongkarSusunInputFurnitureWIP ifw
+            WHERE ifw.NoBongkarSusun = h.NoBongkarSusun
+            )
+            OR EXISTS (
+              SELECT 1
+              FROM dbo.BongkarSusunOutputFurnitureWIP ofw
+              WHERE ofw.NoBongkarSusun = h.NoBongkarSusun
+            )
+
+          UNION ALL
+
+          SELECT
+            'barangJadi' AS category,
+            (
+              SELECT COUNT(DISTINCT ibj.NoBJ)
+              FROM dbo.BongkarSusunInputBarangJadi ibj
+              WHERE ibj.NoBongkarSusun = h.NoBongkarSusun
+            ) AS inputLabelCount,
+            (
+              SELECT COUNT(DISTINCT obj.NoBJ)
+              FROM dbo.BongkarSusunOutputBarangjadi obj
+              WHERE obj.NoBongkarSusun = h.NoBongkarSusun
+            ) AS outputLabelCount,
+            6 AS priority
+          WHERE EXISTS (
+            SELECT 1
+            FROM dbo.BongkarSusunInputBarangJadi ibj
+            WHERE ibj.NoBongkarSusun = h.NoBongkarSusun
+          )
+          OR EXISTS (
+            SELECT 1
+            FROM dbo.BongkarSusunOutputBarangjadi obj
+            WHERE obj.NoBongkarSusun = h.NoBongkarSusun
+          )
+
+          UNION ALL
+
+          SELECT
+            'bonggolan' AS category,
+            (
+              SELECT COUNT(DISTINCT ibg.NoBonggolan)
+              FROM dbo.BongkarSusunInputBonggolan ibg
+              WHERE ibg.NoBongkarSusun = h.NoBongkarSusun
+            ) AS inputLabelCount,
+            (
+              SELECT COUNT(DISTINCT obg.NoBonggolan)
+              FROM dbo.BongkarSusunOutputBonggolan obg
+              WHERE obg.NoBongkarSusun = h.NoBongkarSusun
+            ) AS outputLabelCount,
+            7 AS priority
+          WHERE EXISTS (
+            SELECT 1
+            FROM dbo.BongkarSusunInputBonggolan ibg
+            WHERE ibg.NoBongkarSusun = h.NoBongkarSusun
+          )
+          OR EXISTS (
+            SELECT 1
+            FROM dbo.BongkarSusunOutputBonggolan obg
+            WHERE obg.NoBongkarSusun = h.NoBongkarSusun
+          )
+        ) x
+        ORDER BY x.priority
+      ) cat
+      OUTER APPLY (
+        SELECT CASE
+          WHEN cat.category = 'washing' THEN
+            CASE
+              WHEN ABS(
+                ISNULL((
+                  SELECT SUM(ISNULL(d.Berat, 0))
+                  FROM dbo.BongkarSusunInputWashing iw
+                  INNER JOIN dbo.Washing_d d
+                    ON d.NoWashing = iw.NoWashing
+                   AND d.NoSak = iw.NoSak
+                  WHERE iw.NoBongkarSusun = h.NoBongkarSusun
+                ), 0) -
+                ISNULL((
+                  SELECT SUM(ISNULL(d.Berat, 0))
+                  FROM dbo.BongkarSusunOutputWashing ow
+                  INNER JOIN dbo.Washing_d d
+                    ON d.NoWashing = ow.NoWashing
+                   AND d.NoSak = ow.NoSak
+                  WHERE ow.NoBongkarSusun = h.NoBongkarSusun
+                ), 0)
+              ) < 0.001 THEN CAST(1 AS bit) ELSE CAST(0 AS bit) END
+          WHEN cat.category = 'broker' THEN
+            CASE
+              WHEN ABS(
+                ISNULL((
+                  SELECT SUM(ISNULL(d.Berat, 0))
+                  FROM dbo.BongkarSusunInputBroker ib
+                  INNER JOIN dbo.Broker_d d
+                    ON d.NoBroker = ib.NoBroker
+                   AND d.NoSak = ib.NoSak
+                  WHERE ib.NoBongkarSusun = h.NoBongkarSusun
+                ), 0) -
+                ISNULL((
+                  SELECT SUM(ISNULL(d.Berat, 0))
+                  FROM dbo.BongkarSusunOutputBroker ob
+                  INNER JOIN dbo.Broker_d d
+                    ON d.NoBroker = ob.NoBroker
+                   AND d.NoSak = ob.NoSak
+                  WHERE ob.NoBongkarSusun = h.NoBongkarSusun
+                ), 0)
+              ) < 0.001 THEN CAST(1 AS bit) ELSE CAST(0 AS bit) END
+          WHEN cat.category = 'crusher' THEN
+            CASE
+              WHEN ABS(
+                ISNULL((
+                  SELECT SUM(ISNULL(c.Berat, 0))
+                  FROM dbo.BongkarSusunInputCrusher ic
+                  INNER JOIN dbo.Crusher c ON c.NoCrusher = ic.NoCrusher
+                  WHERE ic.NoBongkarSusun = h.NoBongkarSusun
+                ), 0) -
+                ISNULL((
+                  SELECT SUM(ISNULL(c.Berat, 0))
+                  FROM dbo.BongkarSusunOutputCrusher oc
+                  INNER JOIN dbo.Crusher c ON c.NoCrusher = oc.NoCrusher
+                  WHERE oc.NoBongkarSusun = h.NoBongkarSusun
+                ), 0)
+              ) < 0.001 THEN CAST(1 AS bit) ELSE CAST(0 AS bit) END
+          WHEN cat.category = 'gilingan' THEN
+            CASE
+              WHEN ABS(
+                ISNULL((
+                  SELECT SUM(
+                    CASE
+                      WHEN g.IsPartial = 1 THEN
+                        CASE
+                          WHEN ISNULL(g.Berat, 0) - ISNULL(gp.TotalPartial, 0) < 0 THEN 0
+                          ELSE ISNULL(g.Berat, 0) - ISNULL(gp.TotalPartial, 0)
+                        END
+                      ELSE ISNULL(g.Berat, 0)
+                    END
+                  )
+                  FROM dbo.BongkarSusunInputGilingan ig
+                  INNER JOIN dbo.Gilingan g ON g.NoGilingan = ig.NoGilingan
+                  LEFT JOIN (
+                    SELECT NoGilingan, SUM(ISNULL(Berat, 0)) AS TotalPartial
+                    FROM dbo.GilinganPartial
+                    GROUP BY NoGilingan
+                  ) gp ON gp.NoGilingan = g.NoGilingan
+                  WHERE ig.NoBongkarSusun = h.NoBongkarSusun
+                ), 0) -
+                ISNULL((
+                  SELECT SUM(
+                    CASE
+                      WHEN g.IsPartial = 1 THEN
+                        CASE
+                          WHEN ISNULL(g.Berat, 0) - ISNULL(gp.TotalPartial, 0) < 0 THEN 0
+                          ELSE ISNULL(g.Berat, 0) - ISNULL(gp.TotalPartial, 0)
+                        END
+                      ELSE ISNULL(g.Berat, 0)
+                    END
+                  )
+                  FROM dbo.BongkarSusunOutputGilingan og
+                  INNER JOIN dbo.Gilingan g ON g.NoGilingan = og.NoGilingan
+                  LEFT JOIN (
+                    SELECT NoGilingan, SUM(ISNULL(Berat, 0)) AS TotalPartial
+                    FROM dbo.GilinganPartial
+                    GROUP BY NoGilingan
+                  ) gp ON gp.NoGilingan = g.NoGilingan
+                  WHERE og.NoBongkarSusun = h.NoBongkarSusun
+                ), 0)
+              ) < 0.001 THEN CAST(1 AS bit) ELSE CAST(0 AS bit) END
+          WHEN cat.category = 'furnitureWip' THEN
+            CASE
+              WHEN ABS(
+                ISNULL((
+                  SELECT SUM(
+                    CASE
+                      WHEN f.IsPartial = 1 THEN
+                        CASE
+                          WHEN ISNULL(f.Pcs, 0) - ISNULL(fp.TotalPartialPcs, 0) < 0 THEN 0
+                          ELSE ISNULL(f.Pcs, 0) - ISNULL(fp.TotalPartialPcs, 0)
+                        END
+                      ELSE ISNULL(f.Pcs, 0)
+                    END
+                  )
+                  FROM dbo.BongkarSusunInputFurnitureWIP ifw
+                  INNER JOIN dbo.FurnitureWIP f ON f.NoFurnitureWIP = ifw.NoFurnitureWIP
+                  LEFT JOIN (
+                    SELECT NoFurnitureWIP, SUM(ISNULL(Pcs, 0)) AS TotalPartialPcs
+                    FROM dbo.FurnitureWIPPartial
+                    GROUP BY NoFurnitureWIP
+                  ) fp ON fp.NoFurnitureWIP = f.NoFurnitureWIP
+                  WHERE ifw.NoBongkarSusun = h.NoBongkarSusun
+                ), 0) -
+                ISNULL((
+                  SELECT SUM(
+                    CASE
+                      WHEN f.IsPartial = 1 THEN
+                        CASE
+                          WHEN ISNULL(f.Pcs, 0) - ISNULL(fp.TotalPartialPcs, 0) < 0 THEN 0
+                          ELSE ISNULL(f.Pcs, 0) - ISNULL(fp.TotalPartialPcs, 0)
+                        END
+                      ELSE ISNULL(f.Pcs, 0)
+                    END
+                  )
+                  FROM dbo.BongkarSusunOutputFurnitureWIP ofw
+                  INNER JOIN dbo.FurnitureWIP f ON f.NoFurnitureWIP = ofw.NoFurnitureWIP
+                  LEFT JOIN (
+                    SELECT NoFurnitureWIP, SUM(ISNULL(Pcs, 0)) AS TotalPartialPcs
+                    FROM dbo.FurnitureWIPPartial
+                    GROUP BY NoFurnitureWIP
+                  ) fp ON fp.NoFurnitureWIP = f.NoFurnitureWIP
+                  WHERE ofw.NoBongkarSusun = h.NoBongkarSusun
+                ), 0)
+              ) < 0.001 THEN CAST(1 AS bit) ELSE CAST(0 AS bit) END
+          WHEN cat.category = 'barangJadi' THEN
+            CASE
+              WHEN ABS(
+                ISNULL((
+                  SELECT SUM(
+                    CASE
+                      WHEN b.IsPartial = 1 THEN
+                        CASE
+                          WHEN ISNULL(b.Pcs, 0) - ISNULL(bp.TotalPartialPcs, 0) < 0 THEN 0
+                          ELSE ISNULL(b.Pcs, 0) - ISNULL(bp.TotalPartialPcs, 0)
+                        END
+                      ELSE ISNULL(b.Pcs, 0)
+                    END
+                  )
+                  FROM dbo.BongkarSusunInputBarangJadi ibj
+                  INNER JOIN dbo.BarangJadi b ON b.NoBJ = ibj.NoBJ
+                  LEFT JOIN (
+                    SELECT NoBJ, SUM(ISNULL(Pcs, 0)) AS TotalPartialPcs
+                    FROM dbo.BarangJadiPartial
+                    GROUP BY NoBJ
+                  ) bp ON bp.NoBJ = b.NoBJ
+                  WHERE ibj.NoBongkarSusun = h.NoBongkarSusun
+                ), 0) -
+                ISNULL((
+                  SELECT SUM(
+                    CASE
+                      WHEN b.IsPartial = 1 THEN
+                        CASE
+                          WHEN ISNULL(b.Pcs, 0) - ISNULL(bp.TotalPartialPcs, 0) < 0 THEN 0
+                          ELSE ISNULL(b.Pcs, 0) - ISNULL(bp.TotalPartialPcs, 0)
+                        END
+                      ELSE ISNULL(b.Pcs, 0)
+                    END
+                  )
+                  FROM dbo.BongkarSusunOutputBarangjadi obj
+                  INNER JOIN dbo.BarangJadi b ON b.NoBJ = obj.NoBJ
+                  LEFT JOIN (
+                    SELECT NoBJ, SUM(ISNULL(Pcs, 0)) AS TotalPartialPcs
+                    FROM dbo.BarangJadiPartial
+                    GROUP BY NoBJ
+                  ) bp ON bp.NoBJ = b.NoBJ
+                  WHERE obj.NoBongkarSusun = h.NoBongkarSusun
+                ), 0)
+              ) < 0.001 THEN CAST(1 AS bit) ELSE CAST(0 AS bit) END
+          WHEN cat.category = 'bonggolan' THEN
+            CASE
+              WHEN ABS(
+                ISNULL((
+                  SELECT SUM(ISNULL(b.Berat, 0))
+                  FROM dbo.BongkarSusunInputBonggolan ibg
+                  INNER JOIN dbo.Bonggolan b ON b.NoBonggolan = ibg.NoBonggolan
+                  WHERE ibg.NoBongkarSusun = h.NoBongkarSusun
+                ), 0) -
+                ISNULL((
+                  SELECT SUM(ISNULL(b.Berat, 0))
+                  FROM dbo.BongkarSusunOutputBonggolan obg
+                  INNER JOIN dbo.Bonggolan b ON b.NoBonggolan = obg.NoBonggolan
+                  WHERE obg.NoBongkarSusun = h.NoBongkarSusun
+                ), 0)
+              ) < 0.001 THEN CAST(1 AS bit) ELSE CAST(0 AS bit) END
+          ELSE CAST(0 AS bit)
+        END AS balance
+      ) bal
       ${whereClause}
       ORDER BY h.NoBongkarSusun DESC
       OFFSET @offset ROWS FETCH NEXT @pageSize ROWS ONLY
@@ -90,8 +501,16 @@ exports.getDetail = async (noBongkarSusun) => {
   const headerRes = await pool
     .request()
     .input("NoBongkarSusun", sql.VarChar(50), noBongkarSusun).query(`
-      SELECT NoBongkarSusun, Tanggal, IdUsername, Note
+      SELECT
+        h.NoBongkarSusun,
+        h.Tanggal,
+        h.IdUsername,
+        u.Username,
+        h.Note
       FROM dbo.BongkarSusun_h
+      h
+      LEFT JOIN dbo.MstUsername u
+        ON u.IdUsername = h.IdUsername
       WHERE NoBongkarSusun = @NoBongkarSusun
     `);
 
@@ -136,22 +555,127 @@ exports.getDetail = async (noBongkarSusun) => {
     `);
 
   // outputs â€” washing
-  const inputsBrokerRes = await pool
+  const inputsBrokerDetailRes = await pool
     .request()
     .input("NoBongkarSusun", sql.VarChar(50), noBongkarSusun).query(`
       SELECT
         bi.NoBroker           AS labelCode,
         'broker'              AS category,
         h.IdJenisPlastik      AS idJenis,
-        COUNT(bi.NoSak)       AS jumlahSak,
-        SUM(d.Berat)          AS totalBerat
+        mb.Nama               AS namaJenis,
+        bi.NoSak              AS noSak,
+        d.Berat               AS beratSak
       FROM BongkarSusunInputBroker bi
       INNER JOIN dbo.Broker_h h ON h.NoBroker = bi.NoBroker
+      INNER JOIN dbo.MstBroker mb ON mb.IdBroker = h.IdJenisPlastik
       INNER JOIN dbo.Broker_d d
         ON d.NoBroker = bi.NoBroker
        AND d.NoSak = bi.NoSak
       WHERE bi.NoBongkarSusun = @NoBongkarSusun
-      GROUP BY bi.NoBroker, h.IdJenisPlastik
+      ORDER BY bi.NoBroker, bi.NoSak
+    `);
+
+  // inputs â€” crusher
+  const inputsCrusherRes = await pool
+    .request()
+    .input("NoBongkarSusun", sql.VarChar(50), noBongkarSusun).query(`
+      SELECT
+        ic.NoCrusher          AS labelCode,
+        'crusher'             AS category,
+        c.IdCrusher           AS idCrusher,
+        mc.NamaCrusher        AS namaCrusher,
+        c.Berat               AS totalBerat
+      FROM BongkarSusunInputCrusher ic
+      INNER JOIN dbo.Crusher c ON c.NoCrusher = ic.NoCrusher
+      INNER JOIN dbo.MstCrusher mc ON mc.IdCrusher = c.IdCrusher
+      WHERE ic.NoBongkarSusun = @NoBongkarSusun
+    `);
+
+  // inputs â€” gilingan
+  const inputsGilinganRes = await pool
+    .request()
+    .input("NoBongkarSusun", sql.VarChar(50), noBongkarSusun).query(`
+      SELECT
+        ig.NoGilingan         AS labelCode,
+        'gilingan'            AS category,
+        g.IdGilingan          AS idJenis,
+        mg.NamaGilingan       AS namaJenis,
+        CASE
+          WHEN g.IsPartial = 1 THEN
+            CASE
+              WHEN ISNULL(g.Berat, 0) - ISNULL(gp.TotalPartial, 0) < 0
+                THEN 0
+              ELSE ISNULL(g.Berat, 0) - ISNULL(gp.TotalPartial, 0)
+            END
+          ELSE ISNULL(g.Berat, 0)
+        END AS totalBerat
+      FROM BongkarSusunInputGilingan ig
+      INNER JOIN dbo.Gilingan g ON g.NoGilingan = ig.NoGilingan
+      INNER JOIN dbo.MstGilingan mg ON mg.IdGilingan = g.IdGilingan
+      LEFT JOIN (
+        SELECT NoGilingan, SUM(ISNULL(Berat, 0)) AS TotalPartial
+        FROM dbo.GilinganPartial
+        GROUP BY NoGilingan
+      ) gp ON gp.NoGilingan = g.NoGilingan
+      WHERE ig.NoBongkarSusun = @NoBongkarSusun
+    `);
+
+  // inputs â€” furnitureWip
+  const inputsFurnitureWipRes = await pool
+    .request()
+    .input("NoBongkarSusun", sql.VarChar(50), noBongkarSusun).query(`
+      SELECT
+        ifw.NoFurnitureWIP    AS labelCode,
+        'furnitureWip'        AS category,
+        f.IdFurnitureWIP      AS idFurnitureWIP,
+        cw.Nama               AS namaFurnitureWIP,
+        CASE
+          WHEN f.IsPartial = 1 THEN
+            CASE
+              WHEN ISNULL(f.Pcs, 0) - ISNULL(fp.TotalPartialPcs, 0) < 0
+                THEN 0
+              ELSE ISNULL(f.Pcs, 0) - ISNULL(fp.TotalPartialPcs, 0)
+            END
+          ELSE ISNULL(f.Pcs, 0)
+        END AS pcs
+      FROM dbo.BongkarSusunInputFurnitureWIP ifw
+      INNER JOIN dbo.FurnitureWIP f ON f.NoFurnitureWIP = ifw.NoFurnitureWIP
+      INNER JOIN dbo.MstCabinetWIP cw ON cw.IdCabinetWIP = f.IdFurnitureWIP
+      LEFT JOIN (
+        SELECT NoFurnitureWIP, SUM(ISNULL(Pcs, 0)) AS TotalPartialPcs
+        FROM dbo.FurnitureWIPPartial
+        GROUP BY NoFurnitureWIP
+      ) fp ON fp.NoFurnitureWIP = f.NoFurnitureWIP
+      WHERE ifw.NoBongkarSusun = @NoBongkarSusun
+    `);
+
+  const inputsBarangJadiRes = await pool
+    .request()
+    .input("NoBongkarSusun", sql.VarChar(50), noBongkarSusun).query(`
+      SELECT
+        ibj.NoBJ              AS labelCode,
+        'barangJadi'          AS category,
+        b.IdBJ                AS idBJ,
+        mbj.NamaBJ            AS namaBJ,
+        CASE
+          WHEN b.IsPartial = 1 THEN
+            CASE
+              WHEN ISNULL(b.Pcs, 0) - ISNULL(bp.TotalPartialPcs, 0) < 0
+                THEN 0
+              ELSE ISNULL(b.Pcs, 0) - ISNULL(bp.TotalPartialPcs, 0)
+            END
+          ELSE ISNULL(b.Pcs, 0)
+        END AS pcs,
+        ISNULL(b.Berat, 0)    AS berat
+      FROM dbo.BongkarSusunInputBarangJadi ibj
+      INNER JOIN dbo.BarangJadi b ON b.NoBJ = ibj.NoBJ
+      INNER JOIN dbo.MstBarangJadi mbj ON mbj.IdBJ = b.IdBJ
+      LEFT JOIN (
+        SELECT NoBJ, SUM(ISNULL(Pcs, 0)) AS TotalPartialPcs
+        FROM dbo.BarangJadiPartial
+        GROUP BY NoBJ
+      ) bp ON bp.NoBJ = b.NoBJ
+      WHERE ibj.NoBongkarSusun = @NoBongkarSusun
     `);
 
   const outputsWashingRes = await pool
@@ -187,35 +711,180 @@ exports.getDetail = async (noBongkarSusun) => {
       WHERE bo.NoBongkarSusun = @NoBongkarSusun
     `);
 
-  const outputsBrokerRes = await pool
+  // outputs â€” crusher
+  const outputsCrusherRes = await pool
+    .request()
+    .input("NoBongkarSusun", sql.VarChar(50), noBongkarSusun).query(`
+      SELECT
+        oc.NoCrusher          AS labelCode,
+        'crusher'             AS category,
+        c.IdCrusher           AS idCrusher,
+        mc.NamaCrusher        AS namaCrusher,
+        c.Berat               AS totalBerat
+      FROM BongkarSusunOutputCrusher oc
+      INNER JOIN dbo.Crusher c ON c.NoCrusher = oc.NoCrusher
+      INNER JOIN dbo.MstCrusher mc ON mc.IdCrusher = c.IdCrusher
+      WHERE oc.NoBongkarSusun = @NoBongkarSusun
+    `);
+
+  // outputs â€” gilingan
+  const outputsGilinganRes = await pool
+    .request()
+    .input("NoBongkarSusun", sql.VarChar(50), noBongkarSusun).query(`
+      SELECT
+        og.NoGilingan         AS labelCode,
+        'gilingan'            AS category,
+        g.IdGilingan          AS idJenis,
+        mg.NamaGilingan       AS namaJenis,
+        CASE
+          WHEN g.IsPartial = 1 THEN
+            CASE
+              WHEN ISNULL(g.Berat, 0) - ISNULL(gp.TotalPartial, 0) < 0
+                THEN 0
+              ELSE ISNULL(g.Berat, 0) - ISNULL(gp.TotalPartial, 0)
+            END
+          ELSE ISNULL(g.Berat, 0)
+        END AS totalBerat
+      FROM BongkarSusunOutputGilingan og
+      INNER JOIN dbo.Gilingan g ON g.NoGilingan = og.NoGilingan
+      INNER JOIN dbo.MstGilingan mg ON mg.IdGilingan = g.IdGilingan
+      LEFT JOIN (
+        SELECT NoGilingan, SUM(ISNULL(Berat, 0)) AS TotalPartial
+        FROM dbo.GilinganPartial
+        GROUP BY NoGilingan
+      ) gp ON gp.NoGilingan = g.NoGilingan
+      WHERE og.NoBongkarSusun = @NoBongkarSusun
+    `);
+
+  // outputs â€” furnitureWip
+  const outputsFurnitureWipRes = await pool
+    .request()
+    .input("NoBongkarSusun", sql.VarChar(50), noBongkarSusun).query(`
+      SELECT
+        ofw.NoFurnitureWIP    AS labelCode,
+        'furnitureWip'        AS category,
+        f.IdFurnitureWIP      AS idFurnitureWIP,
+        cw.Nama               AS namaFurnitureWIP,
+        CASE
+          WHEN f.IsPartial = 1 THEN
+            CASE
+              WHEN ISNULL(f.Pcs, 0) - ISNULL(fp.TotalPartialPcs, 0) < 0
+                THEN 0
+              ELSE ISNULL(f.Pcs, 0) - ISNULL(fp.TotalPartialPcs, 0)
+            END
+          ELSE ISNULL(f.Pcs, 0)
+        END AS pcs
+      FROM dbo.BongkarSusunOutputFurnitureWIP ofw
+      INNER JOIN dbo.FurnitureWIP f ON f.NoFurnitureWIP = ofw.NoFurnitureWIP
+      INNER JOIN dbo.MstCabinetWIP cw ON cw.IdCabinetWIP = f.IdFurnitureWIP
+      LEFT JOIN (
+        SELECT NoFurnitureWIP, SUM(ISNULL(Pcs, 0)) AS TotalPartialPcs
+        FROM dbo.FurnitureWIPPartial
+        GROUP BY NoFurnitureWIP
+      ) fp ON fp.NoFurnitureWIP = f.NoFurnitureWIP
+      WHERE ofw.NoBongkarSusun = @NoBongkarSusun
+    `);
+
+  const outputsBarangJadiRes = await pool
+    .request()
+    .input("NoBongkarSusun", sql.VarChar(50), noBongkarSusun).query(`
+      SELECT
+        obj.NoBJ              AS labelCode,
+        'barangJadi'          AS category,
+        b.IdBJ                AS idBJ,
+        mbj.NamaBJ            AS namaBJ,
+        CASE
+          WHEN b.IsPartial = 1 THEN
+            CASE
+              WHEN ISNULL(b.Pcs, 0) - ISNULL(bp.TotalPartialPcs, 0) < 0
+                THEN 0
+              ELSE ISNULL(b.Pcs, 0) - ISNULL(bp.TotalPartialPcs, 0)
+            END
+          ELSE ISNULL(b.Pcs, 0)
+        END AS pcs,
+        ISNULL(b.Berat, 0)    AS berat
+      FROM dbo.BongkarSusunOutputBarangjadi obj
+      INNER JOIN dbo.BarangJadi b ON b.NoBJ = obj.NoBJ
+      INNER JOIN dbo.MstBarangJadi mbj ON mbj.IdBJ = b.IdBJ
+      LEFT JOIN (
+        SELECT NoBJ, SUM(ISNULL(Pcs, 0)) AS TotalPartialPcs
+        FROM dbo.BarangJadiPartial
+        GROUP BY NoBJ
+      ) bp ON bp.NoBJ = b.NoBJ
+      WHERE obj.NoBongkarSusun = @NoBongkarSusun
+    `);
+
+  const outputsBrokerDetailRes = await pool
     .request()
     .input("NoBongkarSusun", sql.VarChar(50), noBongkarSusun).query(`
       SELECT
         bo.NoBroker           AS labelCode,
         'broker'              AS category,
         h.IdJenisPlastik      AS idJenis,
-        COUNT(bo.NoSak)       AS jumlahSak,
-        SUM(d.Berat)          AS totalBerat
+        mb.Nama               AS namaJenis,
+        bo.NoSak              AS noSak,
+        d.Berat               AS beratSak
       FROM BongkarSusunOutputBroker bo
       INNER JOIN dbo.Broker_h h ON h.NoBroker = bo.NoBroker
+      INNER JOIN dbo.MstBroker mb ON mb.IdBroker = h.IdJenisPlastik
       INNER JOIN dbo.Broker_d d
         ON d.NoBroker = bo.NoBroker
        AND d.NoSak = bo.NoSak
       WHERE bo.NoBongkarSusun = @NoBongkarSusun
-      GROUP BY bo.NoBroker, h.IdJenisPlastik
+      ORDER BY bo.NoBroker, bo.NoSak
     `);
+
+  const groupBrokerRows = (rows) => {
+    const grouped = new Map();
+
+    for (const row of rows) {
+      const key = row.labelCode;
+      if (!grouped.has(key)) {
+        grouped.set(key, {
+          labelCode: row.labelCode,
+          category: row.category,
+          idJenis: row.idJenis,
+          namaJenis: row.namaJenis,
+          jumlahSak: 0,
+          totalBerat: 0,
+          saks: [],
+        });
+      }
+
+      const item = grouped.get(key);
+      item.saks.push({
+        noSak: row.noSak,
+        berat: row.beratSak,
+      });
+      item.jumlahSak += 1;
+      item.totalBerat += Number(row.beratSak || 0);
+    }
+
+    return Array.from(grouped.values());
+  };
+
+  const inputsBrokerRes = groupBrokerRows(inputsBrokerDetailRes.recordset || []);
+  const outputsBrokerRes = groupBrokerRows(outputsBrokerDetailRes.recordset || []);
 
   return {
     header: headerRes.recordset[0],
     inputs: [
       ...inputsWashingRes.recordset,
       ...inputsBonggolanRes.recordset,
-      ...inputsBrokerRes.recordset,
+      ...inputsBrokerRes,
+      ...inputsCrusherRes.recordset,
+      ...inputsGilinganRes.recordset,
+      ...inputsFurnitureWipRes.recordset,
+      ...inputsBarangJadiRes.recordset,
     ],
     outputs: [
       ...outputsWashingRes.recordset,
       ...outputsBonggolanRes.recordset,
-      ...outputsBrokerRes.recordset,
+      ...outputsBrokerRes,
+      ...outputsCrusherRes.recordset,
+      ...outputsGilinganRes.recordset,
+      ...outputsFurnitureWipRes.recordset,
+      ...outputsBarangJadiRes.recordset,
     ],
   };
 };
@@ -223,6 +892,10 @@ exports.getDetail = async (noBongkarSusun) => {
 // create handlers
 const createWashingHandler = require("./handlers/create-washing.handler");
 const createBrokerHandler = require("./handlers/create-broker.handler");
+const createCrusherHandler = require("./handlers/create-crusher.handler");
+const createGilinganHandler = require("./handlers/create-gilingan.handler");
+const createFurnitureWipHandler = require("./handlers/create-furniture-wip.handler");
+const createBarangJadiHandler = require("./handlers/create-barang-jadi.handler");
 const createBonggolanHandler = require("./handlers/create-bonggolan.handler");
 exports.deleteBongkarSusun = async (noBongkarSusun, ctx) => {
   const { actorId, requestId } = ctx;
@@ -255,71 +928,27 @@ exports.deleteBongkarSusun = async (noBongkarSusun, ctx) => {
       throw e;
     }
 
-    // Ambil output washings dari transaksi ini (distinct NoWashing)
-    const outputsRes = await new sql.Request(tx).input(
-      "NoBongkarSusun",
-      sql.VarChar(50),
-      noBongkarSusun,
-    ).query(`
-        SELECT DISTINCT NoWashing
-        FROM dbo.BongkarSusunOutputWashing
-        WHERE NoBongkarSusun = @NoBongkarSusun
+    const outputGuard = await new sql.Request(tx)
+      .input("NoBongkarSusun", sql.VarChar(50), noBongkarSusun)
+      .query(`
+        SELECT CASE WHEN
+          EXISTS (SELECT 1 FROM dbo.BongkarSusunOutputWashing      WITH (NOLOCK) WHERE NoBongkarSusun = @NoBongkarSusun)
+          OR EXISTS (SELECT 1 FROM dbo.BongkarSusunOutputBroker    WITH (NOLOCK) WHERE NoBongkarSusun = @NoBongkarSusun)
+          OR EXISTS (SELECT 1 FROM dbo.BongkarSusunOutputCrusher   WITH (NOLOCK) WHERE NoBongkarSusun = @NoBongkarSusun)
+          OR EXISTS (SELECT 1 FROM dbo.BongkarSusunOutputGilingan   WITH (NOLOCK) WHERE NoBongkarSusun = @NoBongkarSusun)
+          OR EXISTS (SELECT 1 FROM dbo.BongkarSusunOutputBonggolan  WITH (NOLOCK) WHERE NoBongkarSusun = @NoBongkarSusun)
+          OR EXISTS (SELECT 1 FROM dbo.BongkarSusunOutputMixer      WITH (NOLOCK) WHERE NoBongkarSusun = @NoBongkarSusun)
+          OR EXISTS (SELECT 1 FROM dbo.BongkarSusunOutputFurnitureWIP WITH (NOLOCK) WHERE NoBongkarSusun = @NoBongkarSusun)
+          OR EXISTS (SELECT 1 FROM dbo.BongkarSusunOutputBarangjadi WITH (NOLOCK) WHERE NoBongkarSusun = @NoBongkarSusun)
+          OR EXISTS (SELECT 1 FROM dbo.BongkarSusunOutputBahanBaku  WITH (NOLOCK) WHERE NoBongkarSusun = @NoBongkarSusun)
+        THEN CAST(1 AS bit) ELSE CAST(0 AS bit) END AS HasOutput;
       `);
 
-    const outputWashings = outputsRes.recordset.map((r) => r.NoWashing);
-
-    if (outputWashings.length > 0) {
-      const outputCodesJson = JSON.stringify(
-        outputWashings.map((c) => ({ code: c })),
+    const hasOutput = outputGuard.recordset?.[0]?.HasOutput === true;
+    if (hasOutput) {
+      throw conflict(
+        "Tidak bisa hapus: transaksi ini sudah menerbitkan label/output",
       );
-
-      // Cek apakah output labels sudah terpakai lagi
-      const usedRes = await new sql.Request(tx).input(
-        "CodesJson",
-        sql.NVarChar(sql.MAX),
-        outputCodesJson,
-      ).query(`
-          SELECT TOP 1 NoWashing
-          FROM dbo.Washing_d
-          WHERE NoWashing IN (
-            SELECT j.code FROM OPENJSON(@CodesJson) WITH (code varchar(50) '$.code') AS j
-          )
-          AND DateUsage IS NOT NULL
-        `);
-
-      if (usedRes.recordset.length > 0)
-        throw conflict(
-          "Tidak bisa hapus: label output sudah digunakan di proses lain",
-        );
-
-      // Hapus BongkarSusunOutputWashing, Washing_d, Washing_h output
-      await new sql.Request(tx)
-        .input("NoBongkarSusun", sql.VarChar(50), noBongkarSusun)
-        .query(
-          `DELETE FROM dbo.BongkarSusunOutputWashing WHERE NoBongkarSusun = @NoBongkarSusun`,
-        );
-
-      await new sql.Request(tx).input(
-        "CodesJson",
-        sql.NVarChar(sql.MAX),
-        outputCodesJson,
-      ).query(`
-          DELETE FROM dbo.Washing_d
-          WHERE NoWashing IN (
-            SELECT j.code FROM OPENJSON(@CodesJson) WITH (code varchar(50) '$.code') AS j
-          )
-        `);
-
-      await new sql.Request(tx).input(
-        "CodesJson",
-        sql.NVarChar(sql.MAX),
-        outputCodesJson,
-      ).query(`
-          DELETE FROM dbo.Washing_h
-          WHERE NoWashing IN (
-            SELECT j.code FROM OPENJSON(@CodesJson) WITH (code varchar(50) '$.code') AS j
-          )
-        `);
     }
 
     // Kembalikan DateUsage input washing ke NULL
@@ -348,6 +977,55 @@ exports.deleteBongkarSusun = async (noBongkarSusun, ctx) => {
         .query(
           `DELETE FROM dbo.BongkarSusunInputWashing WHERE NoBongkarSusun = @NoBongkarSusun`,
         );
+    }
+
+    // Handle output & input gilingan
+    const outputsGilinganRes = await new sql.Request(tx)
+      .input("NoBongkarSusun", sql.VarChar(50), noBongkarSusun)
+      .query(
+        `SELECT NoGilingan FROM dbo.BongkarSusunOutputGilingan WHERE NoBongkarSusun = @NoBongkarSusun`,
+      );
+
+    if (outputsGilinganRes.recordset.length > 0) {
+      const outputGilinganCodes = outputsGilinganRes.recordset.map(
+        (r) => r.NoGilingan,
+      );
+      const outGilinganJson = JSON.stringify(
+        outputGilinganCodes.map((c) => ({ code: c })),
+      );
+
+      const usedGilingan = await new sql.Request(tx).input(
+        "CodesJson",
+        sql.NVarChar(sql.MAX),
+        outGilinganJson,
+      ).query(`
+          SELECT TOP 1 NoGilingan FROM dbo.Gilingan
+          WHERE NoGilingan IN (
+            SELECT j.code FROM OPENJSON(@CodesJson) WITH (code varchar(50) '$.code') AS j
+          )
+          AND DateUsage IS NOT NULL
+        `);
+      if (usedGilingan.recordset.length > 0)
+        throw conflict(
+          "Tidak bisa hapus: label output gilingan sudah digunakan di proses lain",
+        );
+
+      await new sql.Request(tx)
+        .input("NoBongkarSusun", sql.VarChar(50), noBongkarSusun)
+        .query(
+          `DELETE FROM dbo.BongkarSusunOutputGilingan WHERE NoBongkarSusun = @NoBongkarSusun`,
+        );
+
+      await new sql.Request(tx).input(
+        "CodesJson",
+        sql.NVarChar(sql.MAX),
+        outGilinganJson,
+      ).query(`
+          DELETE FROM dbo.Gilingan
+          WHERE NoGilingan IN (
+            SELECT j.code FROM OPENJSON(@CodesJson) WITH (code varchar(50) '$.code') AS j
+          )
+        `);
     }
 
     // Handle output & input bonggolan
@@ -424,6 +1102,183 @@ exports.deleteBongkarSusun = async (noBongkarSusun, ctx) => {
         .input("NoBongkarSusun", sql.VarChar(50), noBongkarSusun)
         .query(
           `DELETE FROM dbo.BongkarSusunInputBonggolan WHERE NoBongkarSusun = @NoBongkarSusun`,
+        );
+    }
+
+    const inputsGilinganRes = await new sql.Request(tx)
+      .input("NoBongkarSusun", sql.VarChar(50), noBongkarSusun)
+      .query(
+        `SELECT NoGilingan FROM dbo.BongkarSusunInputGilingan WHERE NoBongkarSusun = @NoBongkarSusun`,
+      );
+
+    if (inputsGilinganRes.recordset.length > 0) {
+      const inGilinganJson = JSON.stringify(
+        inputsGilinganRes.recordset.map((r) => ({ code: r.NoGilingan })),
+      );
+      await new sql.Request(tx).input(
+        "CodesJson",
+        sql.NVarChar(sql.MAX),
+        inGilinganJson,
+      ).query(`
+          UPDATE dbo.Gilingan SET DateUsage = NULL
+          WHERE NoGilingan IN (
+            SELECT j.code FROM OPENJSON(@CodesJson) WITH (code varchar(50) '$.code') AS j
+          )
+        `);
+      await new sql.Request(tx)
+        .input("NoBongkarSusun", sql.VarChar(50), noBongkarSusun)
+        .query(
+          `DELETE FROM dbo.BongkarSusunInputGilingan WHERE NoBongkarSusun = @NoBongkarSusun`,
+        );
+    }
+
+    const outputsFurnitureWipRes = await new sql.Request(tx)
+      .input("NoBongkarSusun", sql.VarChar(50), noBongkarSusun)
+      .query(
+        `SELECT NoFurnitureWIP FROM dbo.BongkarSusunOutputFurnitureWIP WHERE NoBongkarSusun = @NoBongkarSusun`,
+      );
+
+    if (outputsFurnitureWipRes.recordset.length > 0) {
+      const outputFurnitureWipCodes = outputsFurnitureWipRes.recordset.map(
+        (r) => r.NoFurnitureWIP,
+      );
+      const outFurnitureWipJson = JSON.stringify(
+        outputFurnitureWipCodes.map((c) => ({ code: c })),
+      );
+
+      const usedFurnitureWip = await new sql.Request(tx).input(
+        "CodesJson",
+        sql.NVarChar(sql.MAX),
+        outFurnitureWipJson,
+      ).query(`
+          SELECT TOP 1 NoFurnitureWIP FROM dbo.FurnitureWIP
+          WHERE NoFurnitureWIP IN (
+            SELECT j.code FROM OPENJSON(@CodesJson) WITH (code varchar(50) '$.code') AS j
+          )
+          AND DateUsage IS NOT NULL
+        `);
+      if (usedFurnitureWip.recordset.length > 0)
+        throw conflict(
+          "Tidak bisa hapus: label output furnitureWip sudah digunakan di proses lain",
+        );
+
+      await new sql.Request(tx)
+        .input("NoBongkarSusun", sql.VarChar(50), noBongkarSusun)
+        .query(
+          `DELETE FROM dbo.BongkarSusunOutputFurnitureWIP WHERE NoBongkarSusun = @NoBongkarSusun`,
+        );
+
+      await new sql.Request(tx).input(
+        "CodesJson",
+        sql.NVarChar(sql.MAX),
+        outFurnitureWipJson,
+      ).query(`
+          DELETE FROM dbo.FurnitureWIP
+          WHERE NoFurnitureWIP IN (
+            SELECT j.code FROM OPENJSON(@CodesJson) WITH (code varchar(50) '$.code') AS j
+          )
+        `);
+    }
+
+    const inputsFurnitureWipRes = await new sql.Request(tx)
+      .input("NoBongkarSusun", sql.VarChar(50), noBongkarSusun)
+      .query(
+        `SELECT NoFurnitureWIP FROM dbo.BongkarSusunInputFurnitureWIP WHERE NoBongkarSusun = @NoBongkarSusun`,
+      );
+
+    if (inputsFurnitureWipRes.recordset.length > 0) {
+      const inFurnitureWipJson = JSON.stringify(
+        inputsFurnitureWipRes.recordset.map((r) => ({ code: r.NoFurnitureWIP })),
+      );
+      await new sql.Request(tx).input(
+        "CodesJson",
+        sql.NVarChar(sql.MAX),
+        inFurnitureWipJson,
+      ).query(`
+          UPDATE dbo.FurnitureWIP SET DateUsage = NULL
+          WHERE NoFurnitureWIP IN (
+            SELECT j.code FROM OPENJSON(@CodesJson) WITH (code varchar(50) '$.code') AS j
+          )
+        `);
+      await new sql.Request(tx)
+        .input("NoBongkarSusun", sql.VarChar(50), noBongkarSusun)
+        .query(
+          `DELETE FROM dbo.BongkarSusunInputFurnitureWIP WHERE NoBongkarSusun = @NoBongkarSusun`,
+        );
+    }
+
+    const outputsBarangJadiRes = await new sql.Request(tx)
+      .input("NoBongkarSusun", sql.VarChar(50), noBongkarSusun)
+      .query(
+        `SELECT NoBJ FROM dbo.BongkarSusunOutputBarangjadi WHERE NoBongkarSusun = @NoBongkarSusun`,
+      );
+
+    if (outputsBarangJadiRes.recordset.length > 0) {
+      const outputBarangJadiCodes = outputsBarangJadiRes.recordset.map(
+        (r) => r.NoBJ,
+      );
+      const outBarangJadiJson = JSON.stringify(
+        outputBarangJadiCodes.map((c) => ({ code: c })),
+      );
+
+      const usedBarangJadi = await new sql.Request(tx).input(
+        "CodesJson",
+        sql.NVarChar(sql.MAX),
+        outBarangJadiJson,
+      ).query(`
+          SELECT TOP 1 NoBJ FROM dbo.BarangJadi
+          WHERE NoBJ IN (
+            SELECT j.code FROM OPENJSON(@CodesJson) WITH (code varchar(50) '$.code') AS j
+          )
+          AND DateUsage IS NOT NULL
+        `);
+      if (usedBarangJadi.recordset.length > 0)
+        throw conflict(
+          "Tidak bisa hapus: label output barangJadi sudah digunakan di proses lain",
+        );
+
+      await new sql.Request(tx)
+        .input("NoBongkarSusun", sql.VarChar(50), noBongkarSusun)
+        .query(
+          `DELETE FROM dbo.BongkarSusunOutputBarangjadi WHERE NoBongkarSusun = @NoBongkarSusun`,
+        );
+
+      await new sql.Request(tx).input(
+        "CodesJson",
+        sql.NVarChar(sql.MAX),
+        outBarangJadiJson,
+      ).query(`
+          DELETE FROM dbo.BarangJadi
+          WHERE NoBJ IN (
+            SELECT j.code FROM OPENJSON(@CodesJson) WITH (code varchar(50) '$.code') AS j
+          )
+        `);
+    }
+
+    const inputsBarangJadiRes = await new sql.Request(tx)
+      .input("NoBongkarSusun", sql.VarChar(50), noBongkarSusun)
+      .query(
+        `SELECT NoBJ FROM dbo.BongkarSusunInputBarangJadi WHERE NoBongkarSusun = @NoBongkarSusun`,
+      );
+
+    if (inputsBarangJadiRes.recordset.length > 0) {
+      const inBarangJadiJson = JSON.stringify(
+        inputsBarangJadiRes.recordset.map((r) => ({ code: r.NoBJ })),
+      );
+      await new sql.Request(tx).input(
+        "CodesJson",
+        sql.NVarChar(sql.MAX),
+        inBarangJadiJson,
+      ).query(`
+          UPDATE dbo.BarangJadi SET DateUsage = NULL
+          WHERE NoBJ IN (
+            SELECT j.code FROM OPENJSON(@CodesJson) WITH (code varchar(50) '$.code') AS j
+          )
+        `);
+      await new sql.Request(tx)
+        .input("NoBongkarSusun", sql.VarChar(50), noBongkarSusun)
+        .query(
+          `DELETE FROM dbo.BongkarSusunInputBarangJadi WHERE NoBongkarSusun = @NoBongkarSusun`,
         );
     }
 
@@ -549,5 +1404,12 @@ exports.createBongkarSusunByCategory = async (category, payload, ctx) => {
 exports.createBongkarSusunWashing =
   createWashingHandler.createBongkarSusunWashing;
 exports.createBongkarSusunBroker = createBrokerHandler.createBongkarSusunBroker;
+exports.createBongkarSusunCrusher = createCrusherHandler.createBongkarSusunCrusher;
+exports.createBongkarSusunGilingan =
+  createGilinganHandler.createBongkarSusunGilingan;
+exports.createBongkarSusunFurnitureWip =
+  createFurnitureWipHandler.createBongkarSusunFurnitureWip;
+exports.createBongkarSusunBarangJadi =
+  createBarangJadiHandler.createBongkarSusunBarangJadi;
 exports.createBongkarSusunBonggolan =
   createBonggolanHandler.createBongkarSusunBonggolan;

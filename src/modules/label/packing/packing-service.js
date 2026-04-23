@@ -1120,14 +1120,15 @@ exports.incrementHasBeenPrinted = async (payload) => {
 exports.getByNoBJ = async (NoBJ) => {
   const pool = await poolPromise;
 
-  const result = await pool
-    .request()
-    .input("NoBJ", sql.VarChar(50), NoBJ)
+  const result = await pool.request().input("NoBJ", sql.VarChar(50), NoBJ)
     .query(`
       SELECT
         bj.NoBJ,
         bj.DateCreate,
+        bj.IdBJ,
+        bj.DateUsage,
         mbj.NamaBJ,
+        mbj.IdBJType,
         CASE
           WHEN bj.IsPartial = 1 THEN
             CASE
@@ -1194,14 +1195,17 @@ exports.getByNoBJ = async (NoBJ) => {
   }
 
   return {
-    NoBJ:           first.NoBJ,
-    DateCreate:     first.DateCreate,
-    NamaBJ:         first.NamaBJ,
-    Pcs:            first.Pcs,
-    Berat:          first.Berat,
+    NoBJ: first.NoBJ,
+    DateCreate: first.DateCreate,
+    IdBJ: first.IdBJ,
+    DateUsage: first.DateUsage,
+    NamaBJ: first.NamaBJ,
+    IdBJType: first.IdBJType,
+    Pcs: first.Pcs,
+    Berat: first.Berat,
     HasBeenPrinted: first.HasBeenPrinted,
-    CreateBy:       first.CreateBy,
-    Mesin:          first.Mesin,
-    Shift:          first.Shift,
+    CreateBy: first.CreateBy,
+    Mesin: first.Mesin,
+    Shift: first.Shift,
   };
 };

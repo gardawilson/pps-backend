@@ -280,9 +280,14 @@ exports.generatePdf = async (req, res) => {
     const printed = row.HasBeenPrinted || 0;
     const kodeLabel = printed > 0 ? `BJ${mm}${yy}CY${printed}` : `BJ${mm}${yy}`;
 
+    const namaProduk =
+      row.IdBJType !== 6 && row.Pcs != null
+        ? `${row.NamaBJ} - ${row.Pcs} pcs`
+        : row.NamaBJ;
+
     const data = {
       noLabel: row.NoBJ,
-      namaProduk: row.NamaBJ,
+      namaProduk,
       kode: row.Mesin || "-",
       berat: row.Berat != null ? `${Number(row.Berat).toFixed(2)} kg` : "-",
       pcs: row.Pcs != null ? String(row.Pcs) : "-",

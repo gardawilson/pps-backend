@@ -46,9 +46,8 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
 
 COPY package*.json ./
 
-RUN npm ci --omit=dev
-
-RUN npx puppeteer browsers install chrome
+RUN npm ci --omit=dev && \
+    npx puppeteer browsers install chrome
 
 COPY . .
 

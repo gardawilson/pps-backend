@@ -4,3 +4,16 @@ npm-debug.log
 .gitignore
 *.md
 .env
+.env.local
+.env.*.local
+.DS_Store
+dist
+build
+coverage
+*.log
+.dockerignore
+.editorconfig
+.vscode
+.idea
+.next
+.cache

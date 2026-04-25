@@ -1127,6 +1127,7 @@ exports.getByNoBJ = async (NoBJ) => {
         bj.DateCreate,
         bj.IdBJ,
         bj.DateUsage,
+        bj.IsPartial,
         mbj.NamaBJ,
         mbj.IdBJType,
         CASE
@@ -1199,6 +1200,7 @@ exports.getByNoBJ = async (NoBJ) => {
     DateCreate: first.DateCreate,
     IdBJ: first.IdBJ,
     DateUsage: first.DateUsage,
+    IsPartial: first.IsPartial,
     NamaBJ: first.NamaBJ,
     IdBJType: first.IdBJType,
     Pcs: first.Pcs,

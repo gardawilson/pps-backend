@@ -25,10 +25,15 @@ exports.createBongkarSusunBarangJadi = async (payload, ctx) => {
 
   for (let i = 0; i < outputs.length; i++) {
     const out = outputs[i];
-    if (!out.idBJ || !Number.isFinite(Number(out.idBJ)) || Number(out.idBJ) <= 0) {
-      throw badReq(`outputs[${i}].idBJ wajib diisi`);
+    const idJenis = out.idJenis ?? out.idBJ;
+    if (!idJenis || !Number.isFinite(Number(idJenis)) || Number(idJenis) <= 0) {
+      throw badReq(`outputs[${i}].idJenis wajib diisi`);
     }
-    if (out.pcs == null || !Number.isFinite(Number(out.pcs)) || Number(out.pcs) <= 0) {
+    if (
+      out.pcs == null ||
+      !Number.isFinite(Number(out.pcs)) ||
+      Number(out.pcs) <= 0
+    ) {
       throw badReq(`outputs[${i}].pcs wajib diisi dan lebih dari 0`);
     }
   }
@@ -84,9 +89,7 @@ exports.createBongkarSusunBarangJadi = async (payload, ctx) => {
 
     for (const row of inputDataRes.recordset) {
       if (Number(row.IdBJ) !== refIdBJ) {
-        throw badReq(
-          "Semua input barangJadi harus memiliki IdBJ yang sama",
-        );
+        throw badReq("Semua input barangJadi harus memiliki IdBJ yang sama");
       }
     }
 
@@ -99,10 +102,10 @@ exports.createBongkarSusunBarangJadi = async (payload, ctx) => {
 
     const outputByJenis = {};
     for (const out of outputs) {
-      const k = Number(out.idBJ);
+      const k = Number(out.idJenis ?? out.idBJ);
       if (k !== refIdBJ) {
         throw badReq(
-          `outputs.idBJ harus sama dengan IdBJ input (${refIdBJ})`,
+          `outputs.idJenis harus sama dengan IdBJ input (${refIdBJ})`,
         );
       }
       if (!outputByJenis[k]) outputByJenis[k] = { pcs: 0 };
@@ -205,12 +208,16 @@ exports.createBongkarSusunBarangJadi = async (payload, ctx) => {
       let newNoBJ = await genBj();
       const exist = await new sql.Request(tx)
         .input("No", sql.VarChar(50), newNoBJ)
-        .query(`SELECT 1 FROM dbo.BarangJadi WITH (UPDLOCK,HOLDLOCK) WHERE NoBJ=@No`);
+        .query(
+          `SELECT 1 FROM dbo.BarangJadi WITH (UPDLOCK,HOLDLOCK) WHERE NoBJ=@No`,
+        );
       if (exist.recordset.length > 0) {
         newNoBJ = await genBj();
         const exist2 = await new sql.Request(tx)
           .input("No", sql.VarChar(50), newNoBJ)
-          .query(`SELECT 1 FROM dbo.BarangJadi WITH (UPDLOCK,HOLDLOCK) WHERE NoBJ=@No`);
+          .query(
+            `SELECT 1 FROM dbo.BarangJadi WITH (UPDLOCK,HOLDLOCK) WHERE NoBJ=@No`,
+          );
         if (exist2.recordset.length > 0) {
           throw conflict("Gagal generate NoBJ unik, coba lagi");
         }
@@ -249,7 +256,7 @@ exports.createBongkarSusunBarangJadi = async (payload, ctx) => {
 
       createdOutputs.push({
         noBJ: newNoBJ,
-        idBJ: Number(out.idBJ),
+        idJenis: Number(out.idJenis ?? out.idBJ),
         pcs: Number(out.pcs),
       });
     }

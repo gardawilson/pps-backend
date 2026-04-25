@@ -496,10 +496,10 @@ exports.getByPalletForPdf = async (NoBahanBaku, NoPallet) => {
   const pool = await poolPromise;
 
   const [palletResult, detailResult] = await Promise.all([
-    pool.request()
+    pool
+      .request()
       .input("NoBahanBaku", sql.VarChar(50), NoBahanBaku)
-      .input("NoPallet", sql.VarChar(50), NoPallet)
-      .query(`
+      .input("NoPallet", sql.VarChar(50), NoPallet).query(`
         SELECT
           h.NoBahanBaku,
           h.NoPlat,
@@ -537,10 +537,10 @@ exports.getByPalletForPdf = async (NoBahanBaku, NoPallet) => {
         ) dAgg
         WHERE h.NoBahanBaku = @NoBahanBaku
       `),
-    pool.request()
+    pool
+      .request()
       .input("NoBahanBaku", sql.VarChar(50), NoBahanBaku)
-      .input("NoPallet", sql.VarChar(50), NoPallet)
-      .query(`
+      .input("NoPallet", sql.VarChar(50), NoPallet).query(`
         SELECT
           d.NoSak,
           CASE
@@ -559,23 +559,25 @@ exports.getByPalletForPdf = async (NoBahanBaku, NoPallet) => {
 
   const header = palletResult.recordset?.[0];
   if (!header || !header.NoPallet) {
-    const e = new Error(`NoPallet ${NoPallet} tidak ditemukan pada NoBahanBaku ${NoBahanBaku}`);
+    const e = new Error(
+      `NoPallet ${NoPallet} tidak ditemukan pada NoBahanBaku ${NoBahanBaku}`,
+    );
     e.statusCode = 404;
     throw e;
   }
 
   return {
-    NoBahanBaku:      header.NoBahanBaku,
-    NoPallet:         header.NoPallet,
-    NamaSupplier:     header.NamaSupplier || "-",
-    NoPlat:           header.NoPlat || "-",
-    DateCreate:       header.DateCreate,
-    CreateBy:         header.CreateBy || "-",
+    NoBahanBaku: header.NoBahanBaku,
+    NoPallet: header.NoPallet,
+    NamaSupplier: header.NamaSupplier || "-",
+    NoPlat: header.NoPlat || "-",
+    DateCreate: header.DateCreate,
+    CreateBy: header.CreateBy || "-",
     NamaJenisPlastik: header.NamaJenisPlastik || "-",
-    HasBeenPrinted:   header.HasBeenPrinted || 0,
-    SakSisa:          header.SakSisa || 0,
-    BeratSisa:        header.BeratSisa || 0,
-    details:          detailResult.recordset.map(r => ({
+    HasBeenPrinted: header.HasBeenPrinted || 0,
+    SakSisa: header.SakSisa || 0,
+    BeratSisa: header.BeratSisa || 0,
+    details: detailResult.recordset.map((r) => ({
       NoSak: r.NoSak,
       Berat: typeof r.Berat === "number" ? r.Berat : parseFloat(r.Berat) || 0,
     })),

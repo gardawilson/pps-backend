@@ -4,6 +4,7 @@ function normalizeLabelCode(labelCode) {
 
 function detectCategory(labelCode) {
   const code = normalizeLabelCode(labelCode);
+  if (code.startsWith("A.")) return "bahanBaku";
   if (code.startsWith("BA.")) return "barangJadi";
   if (code.startsWith("B.")) return "washing";
   if (code.startsWith("D.")) return "broker";
@@ -11,10 +12,12 @@ function detectCategory(labelCode) {
   if (code.startsWith("V.")) return "gilingan";
   if (code.startsWith("BB.")) return "furnitureWip";
   if (code.startsWith("M.")) return "bonggolan";
+  if (code.startsWith("H.")) return "mixer";
   return null;
 }
 
 const CREATE_METHOD_BY_CATEGORY = {
+  bahanBaku: "createBongkarSusunBahanBaku",
   washing: "createBongkarSusunWashing",
   broker: "createBongkarSusunBroker",
   crusher: "createBongkarSusunCrusher",
@@ -22,9 +25,11 @@ const CREATE_METHOD_BY_CATEGORY = {
   furnitureWip: "createBongkarSusunFurnitureWip",
   barangJadi: "createBongkarSusunBarangJadi",
   bonggolan: "createBongkarSusunBonggolan",
+  mixer: "createBongkarSusunMixer",
 };
 
 const LABEL_INFO_METHOD_BY_CATEGORY = {
+  bahanBaku: "getLabelInfoBahanBaku",
   washing: "getLabelInfoWashing",
   broker: "getLabelInfoBroker",
   crusher: "getLabelInfoCrusher",
@@ -32,6 +37,7 @@ const LABEL_INFO_METHOD_BY_CATEGORY = {
   furnitureWip: "getLabelInfoFurnitureWip",
   barangJadi: "getLabelInfoBarangJadi",
   bonggolan: "getLabelInfoBonggolan",
+  mixer: "getLabelInfoMixer",
 };
 
 module.exports = {

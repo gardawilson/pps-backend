@@ -8,12 +8,14 @@ const {
   LABEL_INFO_METHOD_BY_CATEGORY,
 } = require("./bongkar-susun-v2-category-registry");
 const getLabelInfoWashingHandler = require("./handlers/get-label-info-washing.handler");
+const getLabelInfoBahanBakuHandler = require("./handlers/get-label-info-bahan-baku.handler");
 const getLabelInfoBrokerHandler = require("./handlers/get-label-info-broker.handler");
 const getLabelInfoCrusherHandler = require("./handlers/get-label-info-crusher.handler");
 const getLabelInfoGilinganHandler = require("./handlers/get-label-info-gilingan.handler");
 const getLabelInfoFurnitureWipHandler = require("./handlers/get-label-info-furniture-wip.handler");
 const getLabelInfoBonggolanHandler = require("./handlers/get-label-info-bonggolan.handler");
 const getLabelInfoBarangJadiHandler = require("./handlers/get-label-info-barang-jadi.handler");
+const getLabelInfoMixerHandler = require("./handlers/get-label-info-mixer.handler");
 
 // GET label info dispatcher
 exports.getLabelInfo = async (labelCode) => {
@@ -34,6 +36,7 @@ exports.getLabelInfo = async (labelCode) => {
   }
 
   const handlers = {
+    getLabelInfoBahanBaku: getLabelInfoBahanBakuHandler.getLabelInfoBahanBaku,
     getLabelInfoWashing: getLabelInfoWashingHandler.getLabelInfoWashing,
     getLabelInfoBroker: getLabelInfoBrokerHandler.getLabelInfoBroker,
     getLabelInfoCrusher: getLabelInfoCrusherHandler.getLabelInfoCrusher,
@@ -43,6 +46,7 @@ exports.getLabelInfo = async (labelCode) => {
     getLabelInfoBarangJadi:
       getLabelInfoBarangJadiHandler.getLabelInfoBarangJadi,
     getLabelInfoBonggolan: getLabelInfoBonggolanHandler.getLabelInfoBonggolan,
+    getLabelInfoMixer: getLabelInfoMixerHandler.getLabelInfoMixer,
   };
 
   const fn = handlers[method];
@@ -82,18 +86,47 @@ exports.getAll = async (page = 1, pageSize = 20, search = "") => {
         h.NoBongkarSusun,
         h.Tanggal,
         h.IdUsername,
+        u.Username,
         h.Note,
         ISNULL(cat.category, '') AS category,
         ISNULL(cat.inputLabelCount, 0) AS inputLabelCount,
         ISNULL(cat.outputLabelCount, 0) AS outputLabelCount,
         ISNULL(bal.balance, CAST(0 AS bit)) AS balance
       FROM dbo.BongkarSusun_h h
+      LEFT JOIN dbo.MstUsername u
+        ON u.IdUsername = h.IdUsername
       OUTER APPLY (
         SELECT TOP (1)
           x.category,
           x.inputLabelCount,
           x.outputLabelCount
         FROM (
+          SELECT
+            'bahanBaku' AS category,
+            (
+              SELECT COUNT(DISTINCT ib.NoBahanBaku + '-' + CAST(ib.NoPallet AS varchar(20)))
+              FROM dbo.BongkarSusunInputBahanBaku ib
+              WHERE ib.NoBongkarSusun = h.NoBongkarSusun
+            ) AS inputLabelCount,
+            (
+              SELECT COUNT(DISTINCT ob.NoBahanBaku + '-' + CAST(ob.NoPallet AS varchar(20)))
+              FROM dbo.BongkarSusunOutputBahanBaku ob
+              WHERE ob.NoBongkarSusun = h.NoBongkarSusun
+            ) AS outputLabelCount,
+            1 AS priority
+          WHERE EXISTS (
+            SELECT 1
+            FROM dbo.BongkarSusunInputBahanBaku ib
+            WHERE ib.NoBongkarSusun = h.NoBongkarSusun
+          )
+          OR EXISTS (
+            SELECT 1
+            FROM dbo.BongkarSusunOutputBahanBaku ob
+            WHERE ob.NoBongkarSusun = h.NoBongkarSusun
+          )
+
+          UNION ALL
+
           SELECT
             'washing' AS category,
             (
@@ -106,7 +139,7 @@ exports.getAll = async (page = 1, pageSize = 20, search = "") => {
               FROM dbo.BongkarSusunOutputWashing ow
               WHERE ow.NoBongkarSusun = h.NoBongkarSusun
             ) AS outputLabelCount,
-            1 AS priority
+            2 AS priority
           WHERE EXISTS (
             SELECT 1
             FROM dbo.BongkarSusunInputWashing iw
@@ -132,7 +165,7 @@ exports.getAll = async (page = 1, pageSize = 20, search = "") => {
               FROM dbo.BongkarSusunOutputBroker ob
               WHERE ob.NoBongkarSusun = h.NoBongkarSusun
             ) AS outputLabelCount,
-            2 AS priority
+            3 AS priority
           WHERE EXISTS (
             SELECT 1
             FROM dbo.BongkarSusunInputBroker ib
@@ -158,7 +191,7 @@ exports.getAll = async (page = 1, pageSize = 20, search = "") => {
               FROM dbo.BongkarSusunOutputCrusher oc
               WHERE oc.NoBongkarSusun = h.NoBongkarSusun
             ) AS outputLabelCount,
-            3 AS priority
+            4 AS priority
           WHERE EXISTS (
             SELECT 1
             FROM dbo.BongkarSusunInputCrusher ic
@@ -184,7 +217,7 @@ exports.getAll = async (page = 1, pageSize = 20, search = "") => {
               FROM dbo.BongkarSusunOutputGilingan og
               WHERE og.NoBongkarSusun = h.NoBongkarSusun
             ) AS outputLabelCount,
-            4 AS priority
+            5 AS priority
           WHERE EXISTS (
             SELECT 1
             FROM dbo.BongkarSusunInputGilingan ig
@@ -195,6 +228,32 @@ exports.getAll = async (page = 1, pageSize = 20, search = "") => {
             FROM dbo.BongkarSusunOutputGilingan og
             WHERE og.NoBongkarSusun = h.NoBongkarSusun
             )
+
+          UNION ALL
+
+          SELECT
+            'mixer' AS category,
+            (
+              SELECT COUNT(DISTINCT im.NoMixer)
+              FROM dbo.BongkarSusunInputMixer im
+              WHERE im.NoBongkarSusun = h.NoBongkarSusun
+            ) AS inputLabelCount,
+            (
+              SELECT COUNT(DISTINCT om.NoMixer)
+              FROM dbo.BongkarSusunOutputMixer om
+              WHERE om.NoBongkarSusun = h.NoBongkarSusun
+            ) AS outputLabelCount,
+            6 AS priority
+          WHERE EXISTS (
+            SELECT 1
+            FROM dbo.BongkarSusunInputMixer im
+            WHERE im.NoBongkarSusun = h.NoBongkarSusun
+          )
+          OR EXISTS (
+            SELECT 1
+            FROM dbo.BongkarSusunOutputMixer om
+            WHERE om.NoBongkarSusun = h.NoBongkarSusun
+          )
 
           UNION ALL
 
@@ -210,7 +269,7 @@ exports.getAll = async (page = 1, pageSize = 20, search = "") => {
               FROM dbo.BongkarSusunOutputFurnitureWIP ofw
               WHERE ofw.NoBongkarSusun = h.NoBongkarSusun
             ) AS outputLabelCount,
-            5 AS priority
+            7 AS priority
           WHERE EXISTS (
             SELECT 1
             FROM dbo.BongkarSusunInputFurnitureWIP ifw
@@ -236,7 +295,7 @@ exports.getAll = async (page = 1, pageSize = 20, search = "") => {
               FROM dbo.BongkarSusunOutputBarangjadi obj
               WHERE obj.NoBongkarSusun = h.NoBongkarSusun
             ) AS outputLabelCount,
-            6 AS priority
+            8 AS priority
           WHERE EXISTS (
             SELECT 1
             FROM dbo.BongkarSusunInputBarangJadi ibj
@@ -262,7 +321,7 @@ exports.getAll = async (page = 1, pageSize = 20, search = "") => {
               FROM dbo.BongkarSusunOutputBonggolan obg
               WHERE obg.NoBongkarSusun = h.NoBongkarSusun
             ) AS outputLabelCount,
-            7 AS priority
+            9 AS priority
           WHERE EXISTS (
             SELECT 1
             FROM dbo.BongkarSusunInputBonggolan ibg
@@ -278,6 +337,68 @@ exports.getAll = async (page = 1, pageSize = 20, search = "") => {
       ) cat
       OUTER APPLY (
         SELECT CASE
+          WHEN cat.category = 'bahanBaku' THEN
+            CASE
+              WHEN ABS(
+                ISNULL((
+                  SELECT SUM(
+                    CASE
+                      WHEN d.IsPartial = 1 THEN
+                        CASE
+                          WHEN ISNULL(d.Berat, 0) - ISNULL(bp.PartialBerat, 0) < 0 THEN 0
+                          ELSE ISNULL(d.Berat, 0) - ISNULL(bp.PartialBerat, 0)
+                        END
+                      ELSE ISNULL(d.Berat, 0)
+                    END
+                  )
+                  FROM dbo.BongkarSusunInputBahanBaku ib
+                  INNER JOIN dbo.BahanBaku_d d
+                    ON d.NoBahanBaku = ib.NoBahanBaku
+                   AND d.NoPallet = ib.NoPallet
+                  LEFT JOIN (
+                    SELECT
+                      NoBahanBaku,
+                      NoPallet,
+                      NoSak,
+                      SUM(ISNULL(Berat, 0)) AS PartialBerat
+                    FROM dbo.BahanBakuPartial
+                    GROUP BY NoBahanBaku, NoPallet, NoSak
+                  ) bp
+                    ON bp.NoBahanBaku = d.NoBahanBaku
+                   AND bp.NoPallet = d.NoPallet
+                   AND bp.NoSak = d.NoSak
+                  WHERE ib.NoBongkarSusun = h.NoBongkarSusun
+                ), 0) -
+                ISNULL((
+                  SELECT SUM(
+                    CASE
+                      WHEN d.IsPartial = 1 THEN
+                        CASE
+                          WHEN ISNULL(d.Berat, 0) - ISNULL(bp.PartialBerat, 0) < 0 THEN 0
+                          ELSE ISNULL(d.Berat, 0) - ISNULL(bp.PartialBerat, 0)
+                        END
+                      ELSE ISNULL(d.Berat, 0)
+                    END
+                  )
+                  FROM dbo.BongkarSusunOutputBahanBaku ob
+                  INNER JOIN dbo.BahanBaku_d d
+                    ON d.NoBahanBaku = ob.NoBahanBaku
+                   AND d.NoPallet = ob.NoPallet
+                  LEFT JOIN (
+                    SELECT
+                      NoBahanBaku,
+                      NoPallet,
+                      NoSak,
+                      SUM(ISNULL(Berat, 0)) AS PartialBerat
+                    FROM dbo.BahanBakuPartial
+                    GROUP BY NoBahanBaku, NoPallet, NoSak
+                  ) bp
+                    ON bp.NoBahanBaku = d.NoBahanBaku
+                   AND bp.NoPallet = d.NoPallet
+                   AND bp.NoSak = d.NoSak
+                  WHERE ob.NoBongkarSusun = h.NoBongkarSusun
+                ), 0)
+              ) < 0.001 THEN CAST(1 AS bit) ELSE CAST(0 AS bit) END
           WHEN cat.category = 'washing' THEN
             CASE
               WHEN ABS(
@@ -376,6 +497,44 @@ exports.getAll = async (page = 1, pageSize = 20, search = "") => {
                     GROUP BY NoGilingan
                   ) gp ON gp.NoGilingan = g.NoGilingan
                   WHERE og.NoBongkarSusun = h.NoBongkarSusun
+                ), 0)
+              ) < 0.001 THEN CAST(1 AS bit) ELSE CAST(0 AS bit) END
+          WHEN cat.category = 'mixer' THEN
+            CASE
+              WHEN ABS(
+                ISNULL((
+                  SELECT SUM(
+                    ISNULL(d.Berat, 0) - ISNULL(mp.TotalPartial, 0)
+                  )
+                  FROM dbo.BongkarSusunInputMixer im
+                  INNER JOIN dbo.Mixer_d d
+                    ON d.NoMixer = im.NoMixer
+                   AND d.NoSak = im.NoSak
+                  LEFT JOIN (
+                    SELECT NoMixer, NoSak, SUM(ISNULL(Berat, 0)) AS TotalPartial
+                    FROM dbo.MixerPartial
+                    GROUP BY NoMixer, NoSak
+                  ) mp
+                    ON mp.NoMixer = d.NoMixer
+                   AND mp.NoSak = d.NoSak
+                  WHERE im.NoBongkarSusun = h.NoBongkarSusun
+                ), 0) -
+                ISNULL((
+                  SELECT SUM(
+                    ISNULL(d.Berat, 0) - ISNULL(mp.TotalPartial, 0)
+                  )
+                  FROM dbo.BongkarSusunOutputMixer om
+                  INNER JOIN dbo.Mixer_d d
+                    ON d.NoMixer = om.NoMixer
+                   AND d.NoSak = om.NoSak
+                  LEFT JOIN (
+                    SELECT NoMixer, NoSak, SUM(ISNULL(Berat, 0)) AS TotalPartial
+                    FROM dbo.MixerPartial
+                    GROUP BY NoMixer, NoSak
+                  ) mp
+                    ON mp.NoMixer = d.NoMixer
+                   AND mp.NoSak = d.NoSak
+                  WHERE om.NoBongkarSusun = h.NoBongkarSusun
                 ), 0)
               ) < 0.001 THEN CAST(1 AS bit) ELSE CAST(0 AS bit) END
           WHEN cat.category = 'furnitureWip' THEN
@@ -520,8 +679,74 @@ exports.getDetail = async (noBongkarSusun) => {
     throw e;
   }
 
+  // inputs â€” bahanBaku
+  const inputsBahanBakuDetailRes = await pool
+    .request()
+    .input("NoBongkarSusun", sql.VarChar(50), noBongkarSusun).query(`
+      WITH PartialAgg AS (
+        SELECT
+          NoBahanBaku,
+          NoPallet,
+          NoSak,
+          SUM(ISNULL(Berat, 0)) AS PartialBerat
+        FROM dbo.BahanBakuPartial
+        GROUP BY NoBahanBaku, NoPallet, NoSak
+      )
+      SELECT
+        ib.NoBahanBaku       AS noBahanBaku,
+        ib.NoPallet          AS noPallet,
+        'bahanBaku'          AS category,
+        ph.IdJenisPlastik    AS idJenis,
+        jp.Jenis             AS namaJenis,
+        ph.IdWarehouse       AS idWarehouse,
+        w.NamaWarehouse      AS namaWarehouse,
+        ph.Keterangan        AS keterangan,
+        ph.IdStatus          AS idStatus,
+        CASE
+          WHEN ph.IdStatus = 1 THEN 'PASS'
+          WHEN ph.IdStatus = 0 THEN 'HOLD'
+          ELSE ''
+        END                  AS statusText,
+        ph.Moisture          AS moisture,
+        ph.MeltingIndex      AS meltingIndex,
+        ph.Elasticity        AS elasticity,
+        ph.Tenggelam         AS tenggelam,
+        ph.Density           AS density,
+        ph.Density2          AS density2,
+        ph.Density3          AS density3,
+        ISNULL(CAST(ph.HasBeenPrinted AS int), 0) AS hasBeenPrinted,
+        ph.Blok              AS blok,
+        ph.IdLokasi          AS idLokasi,
+        d.NoSak              AS noSak,
+        CASE
+          WHEN d.IsPartial = 1 THEN
+            CASE
+              WHEN ISNULL(d.Berat, 0) - ISNULL(pa.PartialBerat, 0) < 0 THEN 0
+              ELSE ISNULL(d.Berat, 0) - ISNULL(pa.PartialBerat, 0)
+            END
+          ELSE ISNULL(d.Berat, 0)
+        END                  AS beratSak
+      FROM dbo.BongkarSusunInputBahanBaku ib
+      INNER JOIN dbo.BahanBakuPallet_h ph
+        ON ph.NoBahanBaku = ib.NoBahanBaku
+       AND ph.NoPallet = ib.NoPallet
+      INNER JOIN dbo.MstJenisPlastik jp
+        ON jp.IdJenisPlastik = ph.IdJenisPlastik
+      INNER JOIN dbo.MstWarehouse w
+        ON w.IdWarehouse = ph.IdWarehouse
+      INNER JOIN dbo.BahanBaku_d d
+        ON d.NoBahanBaku = ib.NoBahanBaku
+       AND d.NoPallet = ib.NoPallet
+      LEFT JOIN PartialAgg pa
+        ON pa.NoBahanBaku = d.NoBahanBaku
+       AND pa.NoPallet = d.NoPallet
+       AND pa.NoSak = d.NoSak
+      WHERE ib.NoBongkarSusun = @NoBongkarSusun
+      ORDER BY ib.NoBahanBaku, ib.NoPallet, d.NoSak
+    `);
+
   // inputs â€” washing
-  const inputsWashingRes = await pool
+  const inputsWashingDetailRes = await pool
     .request()
     .input("NoBongkarSusun", sql.VarChar(50), noBongkarSusun).query(`
       SELECT
@@ -529,15 +754,15 @@ exports.getDetail = async (noBongkarSusun) => {
         'washing'             AS category,
         h.IdJenisPlastik      AS idJenis,
         mw.Nama               AS namaJenis,
-        COUNT(bi.NoSak)       AS jumlahSak,
-        SUM(d.Berat)          AS totalBerat
+        bi.NoSak              AS noSak,
+        d.Berat               AS beratSak
       FROM BongkarSusunInputWashing bi
       INNER JOIN Washing_h  h  ON h.NoWashing   = bi.NoWashing
       INNER JOIN MstWashing mw ON mw.IdWashing  = h.IdJenisPlastik
       INNER JOIN Washing_d  d  ON d.NoWashing   = bi.NoWashing
                                AND d.NoSak      = bi.NoSak
       WHERE bi.NoBongkarSusun = @NoBongkarSusun
-      GROUP BY bi.NoWashing, h.IdJenisPlastik, mw.Nama
+      ORDER BY bi.NoWashing, bi.NoSak
     `);
 
   // inputs â€” bonggolan
@@ -548,9 +773,11 @@ exports.getDetail = async (noBongkarSusun) => {
         bi.NoBonggolan        AS labelCode,
         'bonggolan'           AS category,
         b.IdBonggolan         AS idJenis,
+        mb.NamaBonggolan      AS namaJenis,
         b.Berat               AS totalBerat
       FROM BongkarSusunInputBonggolan bi
       INNER JOIN dbo.Bonggolan b ON b.NoBonggolan = bi.NoBonggolan
+      INNER JOIN dbo.MstBonggolan mb ON mb.IdBonggolan = b.IdBonggolan
       WHERE bi.NoBongkarSusun = @NoBongkarSusun
     `);
 
@@ -564,7 +791,8 @@ exports.getDetail = async (noBongkarSusun) => {
         h.IdJenisPlastik      AS idJenis,
         mb.Nama               AS namaJenis,
         bi.NoSak              AS noSak,
-        d.Berat               AS beratSak
+        d.Berat               AS beratSak,
+        d.IsPartial           AS isPartial
       FROM BongkarSusunInputBroker bi
       INNER JOIN dbo.Broker_h h ON h.NoBroker = bi.NoBroker
       INNER JOIN dbo.MstBroker mb ON mb.IdBroker = h.IdJenisPlastik
@@ -575,6 +803,40 @@ exports.getDetail = async (noBongkarSusun) => {
       ORDER BY bi.NoBroker, bi.NoSak
     `);
 
+  // inputs â€” mixer
+  const inputsMixerDetailRes = await pool
+    .request()
+    .input("NoBongkarSusun", sql.VarChar(50), noBongkarSusun).query(`
+      SELECT
+        im.NoMixer            AS labelCode,
+        'mixer'               AS category,
+        h.IdMixer             AS idJenis,
+        mx.Jenis              AS namaJenis,
+        im.NoSak              AS noSak,
+        CASE
+          WHEN d.IsPartial = 1 THEN
+            CASE
+              WHEN ISNULL(d.Berat, 0) - ISNULL(mp.TotalPartial, 0) < 0
+                THEN 0
+              ELSE ISNULL(d.Berat, 0) - ISNULL(mp.TotalPartial, 0)
+            END
+          ELSE ISNULL(d.Berat, 0)
+        END AS beratSak
+      FROM BongkarSusunInputMixer im
+      INNER JOIN dbo.Mixer_h h ON h.NoMixer = im.NoMixer
+      INNER JOIN dbo.MstMixer mx ON mx.IdMixer = h.IdMixer
+      INNER JOIN dbo.Mixer_d d
+        ON d.NoMixer = im.NoMixer
+       AND d.NoSak = im.NoSak
+      LEFT JOIN (
+        SELECT NoMixer, NoSak, SUM(ISNULL(Berat, 0)) AS TotalPartial
+        FROM dbo.MixerPartial
+        GROUP BY NoMixer, NoSak
+      ) mp ON mp.NoMixer = d.NoMixer AND mp.NoSak = d.NoSak
+      WHERE im.NoBongkarSusun = @NoBongkarSusun
+      ORDER BY im.NoMixer, im.NoSak
+    `);
+
   // inputs â€” crusher
   const inputsCrusherRes = await pool
     .request()
@@ -582,8 +844,8 @@ exports.getDetail = async (noBongkarSusun) => {
       SELECT
         ic.NoCrusher          AS labelCode,
         'crusher'             AS category,
-        c.IdCrusher           AS idCrusher,
-        mc.NamaCrusher        AS namaCrusher,
+        c.IdCrusher           AS idJenis,
+        mc.NamaCrusher        AS namaJenis,
         c.Berat               AS totalBerat
       FROM BongkarSusunInputCrusher ic
       INNER JOIN dbo.Crusher c ON c.NoCrusher = ic.NoCrusher
@@ -627,8 +889,8 @@ exports.getDetail = async (noBongkarSusun) => {
       SELECT
         ifw.NoFurnitureWIP    AS labelCode,
         'furnitureWip'        AS category,
-        f.IdFurnitureWIP      AS idFurnitureWIP,
-        cw.Nama               AS namaFurnitureWIP,
+        f.IdFurnitureWIP      AS idJenis,
+        cw.Nama               AS namaJenis,
         CASE
           WHEN f.IsPartial = 1 THEN
             CASE
@@ -655,8 +917,8 @@ exports.getDetail = async (noBongkarSusun) => {
       SELECT
         ibj.NoBJ              AS labelCode,
         'barangJadi'          AS category,
-        b.IdBJ                AS idBJ,
-        mbj.NamaBJ            AS namaBJ,
+        b.IdBJ                AS idJenis,
+        mbj.NamaBJ            AS namaJenis,
         CASE
           WHEN b.IsPartial = 1 THEN
             CASE
@@ -678,7 +940,7 @@ exports.getDetail = async (noBongkarSusun) => {
       WHERE ibj.NoBongkarSusun = @NoBongkarSusun
     `);
 
-  const outputsWashingRes = await pool
+  const outputsWashingDetailRes = await pool
     .request()
     .input("NoBongkarSusun", sql.VarChar(50), noBongkarSusun).query(`
       SELECT
@@ -686,15 +948,80 @@ exports.getDetail = async (noBongkarSusun) => {
         'washing'             AS category,
         h.IdJenisPlastik      AS idJenis,
         mw.Nama               AS namaJenis,
-        COUNT(bo.NoSak)       AS jumlahSak,
-        SUM(d.Berat)          AS totalBerat
+        bo.NoSak              AS noSak,
+        d.Berat               AS beratSak
       FROM BongkarSusunOutputWashing bo
       INNER JOIN Washing_h  h  ON h.NoWashing   = bo.NoWashing
       INNER JOIN MstWashing mw ON mw.IdWashing  = h.IdJenisPlastik
       INNER JOIN Washing_d  d  ON d.NoWashing   = bo.NoWashing
                                AND d.NoSak      = bo.NoSak
       WHERE bo.NoBongkarSusun = @NoBongkarSusun
-      GROUP BY bo.NoWashing, h.IdJenisPlastik, mw.Nama
+      ORDER BY bo.NoWashing, bo.NoSak
+    `);
+
+  const outputsBahanBakuDetailRes = await pool
+    .request()
+    .input("NoBongkarSusun", sql.VarChar(50), noBongkarSusun).query(`
+      WITH PartialAgg AS (
+        SELECT
+          NoBahanBaku,
+          NoPallet,
+          NoSak,
+          SUM(ISNULL(Berat, 0)) AS PartialBerat
+        FROM dbo.BahanBakuPartial
+        GROUP BY NoBahanBaku, NoPallet, NoSak
+      )
+      SELECT
+        ob.NoBahanBaku       AS noBahanBaku,
+        ob.NoPallet          AS noPallet,
+        'bahanBaku'          AS category,
+        ph.IdJenisPlastik    AS idJenis,
+        jp.Jenis             AS namaJenis,
+        ph.IdWarehouse       AS idWarehouse,
+        w.NamaWarehouse      AS namaWarehouse,
+        ph.Keterangan        AS keterangan,
+        ph.IdStatus          AS idStatus,
+        CASE
+          WHEN ph.IdStatus = 1 THEN 'PASS'
+          WHEN ph.IdStatus = 0 THEN 'HOLD'
+          ELSE ''
+        END                  AS statusText,
+        ph.Moisture          AS moisture,
+        ph.MeltingIndex      AS meltingIndex,
+        ph.Elasticity        AS elasticity,
+        ph.Tenggelam         AS tenggelam,
+        ph.Density           AS density,
+        ph.Density2          AS density2,
+        ph.Density3          AS density3,
+        ISNULL(CAST(ph.HasBeenPrinted AS int), 0) AS hasBeenPrinted,
+        ph.Blok              AS blok,
+        ph.IdLokasi          AS idLokasi,
+        d.NoSak              AS noSak,
+        CASE
+          WHEN d.IsPartial = 1 THEN
+            CASE
+              WHEN ISNULL(d.Berat, 0) - ISNULL(pa.PartialBerat, 0) < 0 THEN 0
+              ELSE ISNULL(d.Berat, 0) - ISNULL(pa.PartialBerat, 0)
+            END
+          ELSE ISNULL(d.Berat, 0)
+        END                  AS beratSak
+      FROM dbo.BongkarSusunOutputBahanBaku ob
+      INNER JOIN dbo.BahanBakuPallet_h ph
+        ON ph.NoBahanBaku = ob.NoBahanBaku
+       AND ph.NoPallet = ob.NoPallet
+      INNER JOIN dbo.MstJenisPlastik jp
+        ON jp.IdJenisPlastik = ph.IdJenisPlastik
+      INNER JOIN dbo.MstWarehouse w
+        ON w.IdWarehouse = ph.IdWarehouse
+      INNER JOIN dbo.BahanBaku_d d
+        ON d.NoBahanBaku = ob.NoBahanBaku
+       AND d.NoPallet = ob.NoPallet
+      LEFT JOIN PartialAgg pa
+        ON pa.NoBahanBaku = d.NoBahanBaku
+       AND pa.NoPallet = d.NoPallet
+       AND pa.NoSak = d.NoSak
+      WHERE ob.NoBongkarSusun = @NoBongkarSusun
+      ORDER BY ob.NoBahanBaku, ob.NoPallet, d.NoSak
     `);
 
   // outputs â€” bonggolan
@@ -705,9 +1032,11 @@ exports.getDetail = async (noBongkarSusun) => {
         bo.NoBonggolan        AS labelCode,
         'bonggolan'           AS category,
         b.IdBonggolan         AS idJenis,
+        mb.NamaBonggolan      AS namaJenis,
         b.Berat               AS totalBerat
       FROM BongkarSusunOutputBonggolan bo
       INNER JOIN dbo.Bonggolan b ON b.NoBonggolan = bo.NoBonggolan
+      INNER JOIN dbo.MstBonggolan mb ON mb.IdBonggolan = b.IdBonggolan
       WHERE bo.NoBongkarSusun = @NoBongkarSusun
     `);
 
@@ -718,8 +1047,8 @@ exports.getDetail = async (noBongkarSusun) => {
       SELECT
         oc.NoCrusher          AS labelCode,
         'crusher'             AS category,
-        c.IdCrusher           AS idCrusher,
-        mc.NamaCrusher        AS namaCrusher,
+        c.IdCrusher           AS idJenis,
+        mc.NamaCrusher        AS namaJenis,
         c.Berat               AS totalBerat
       FROM BongkarSusunOutputCrusher oc
       INNER JOIN dbo.Crusher c ON c.NoCrusher = oc.NoCrusher
@@ -763,8 +1092,8 @@ exports.getDetail = async (noBongkarSusun) => {
       SELECT
         ofw.NoFurnitureWIP    AS labelCode,
         'furnitureWip'        AS category,
-        f.IdFurnitureWIP      AS idFurnitureWIP,
-        cw.Nama               AS namaFurnitureWIP,
+        f.IdFurnitureWIP      AS idJenis,
+        cw.Nama               AS namaJenis,
         CASE
           WHEN f.IsPartial = 1 THEN
             CASE
@@ -791,8 +1120,8 @@ exports.getDetail = async (noBongkarSusun) => {
       SELECT
         obj.NoBJ              AS labelCode,
         'barangJadi'          AS category,
-        b.IdBJ                AS idBJ,
-        mbj.NamaBJ            AS namaBJ,
+        b.IdBJ                AS idJenis,
+        mbj.NamaBJ            AS namaJenis,
         CASE
           WHEN b.IsPartial = 1 THEN
             CASE
@@ -823,7 +1152,8 @@ exports.getDetail = async (noBongkarSusun) => {
         h.IdJenisPlastik      AS idJenis,
         mb.Nama               AS namaJenis,
         bo.NoSak              AS noSak,
-        d.Berat               AS beratSak
+        d.Berat               AS beratSak,
+        d.IsPartial           AS isPartial
       FROM BongkarSusunOutputBroker bo
       INNER JOIN dbo.Broker_h h ON h.NoBroker = bo.NoBroker
       INNER JOIN dbo.MstBroker mb ON mb.IdBroker = h.IdJenisPlastik
@@ -833,6 +1163,95 @@ exports.getDetail = async (noBongkarSusun) => {
       WHERE bo.NoBongkarSusun = @NoBongkarSusun
       ORDER BY bo.NoBroker, bo.NoSak
     `);
+
+  const brokerHasPartial = [
+    ...(inputsBrokerDetailRes.recordset || []),
+    ...(outputsBrokerDetailRes.recordset || []),
+  ].some((row) => row.isPartial === true || row.isPartial === 1);
+
+  if (brokerHasPartial) {
+    throw conflict("Tidak dapat bongkar susun label yang sudah di partial");
+  }
+
+  // outputs â€” mixer
+  const outputsMixerDetailRes = await pool
+    .request()
+    .input("NoBongkarSusun", sql.VarChar(50), noBongkarSusun).query(`
+      SELECT
+        om.NoMixer            AS labelCode,
+        'mixer'               AS category,
+        h.IdMixer             AS idJenis,
+        mx.Jenis              AS namaJenis,
+        om.NoSak              AS noSak,
+        CASE
+          WHEN d.IsPartial = 1 THEN
+            CASE
+              WHEN ISNULL(d.Berat, 0) - ISNULL(mp.TotalPartial, 0) < 0
+                THEN 0
+              ELSE ISNULL(d.Berat, 0) - ISNULL(mp.TotalPartial, 0)
+            END
+          ELSE ISNULL(d.Berat, 0)
+        END AS beratSak
+      FROM BongkarSusunOutputMixer om
+      INNER JOIN dbo.Mixer_h h ON h.NoMixer = om.NoMixer
+      INNER JOIN dbo.MstMixer mx ON mx.IdMixer = h.IdMixer
+      INNER JOIN dbo.Mixer_d d
+        ON d.NoMixer = om.NoMixer
+       AND d.NoSak = om.NoSak
+      LEFT JOIN (
+        SELECT NoMixer, NoSak, SUM(ISNULL(Berat, 0)) AS TotalPartial
+        FROM dbo.MixerPartial
+        GROUP BY NoMixer, NoSak
+      ) mp ON mp.NoMixer = d.NoMixer AND mp.NoSak = d.NoSak
+      WHERE om.NoBongkarSusun = @NoBongkarSusun
+      ORDER BY om.NoMixer, om.NoSak
+    `);
+
+  const groupBahanBakuRows = (rows) => {
+    const grouped = new Map();
+
+    for (const row of rows) {
+      const key = `${row.noBahanBaku}-${row.noPallet}`;
+      if (!grouped.has(key)) {
+        grouped.set(key, {
+          labelCode: key,
+          category: row.category,
+          noBahanBaku: row.noBahanBaku,
+          noPallet: row.noPallet,
+          idJenis: row.idJenis,
+          namaJenis: row.namaJenis,
+          idWarehouse: row.idWarehouse,
+          namaWarehouse: row.namaWarehouse,
+          keterangan: row.keterangan,
+          idStatus: row.idStatus,
+          statusText: row.statusText,
+          moisture: row.moisture,
+          meltingIndex: row.meltingIndex,
+          elasticity: row.elasticity,
+          tenggelam: row.tenggelam,
+          density: row.density,
+          density2: row.density2,
+          density3: row.density3,
+          hasBeenPrinted: row.hasBeenPrinted,
+          blok: row.blok,
+          idLokasi: row.idLokasi,
+          jumlahSak: 0,
+          totalBerat: 0,
+          saks: [],
+        });
+      }
+
+      const item = grouped.get(key);
+      item.saks.push({
+        noSak: row.noSak,
+        berat: row.beratSak,
+      });
+      item.jumlahSak += 1;
+      item.totalBerat += Number(row.beratSak || 0);
+    }
+
+    return Array.from(grouped.values());
+  };
 
   const groupBrokerRows = (rows) => {
     const grouped = new Map();
@@ -863,24 +1282,48 @@ exports.getDetail = async (noBongkarSusun) => {
     return Array.from(grouped.values());
   };
 
-  const inputsBrokerRes = groupBrokerRows(inputsBrokerDetailRes.recordset || []);
-  const outputsBrokerRes = groupBrokerRows(outputsBrokerDetailRes.recordset || []);
+  const inputsBahanBakuRes = groupBahanBakuRows(
+    inputsBahanBakuDetailRes.recordset || [],
+  );
+  const inputsBrokerRes = groupBrokerRows(
+    inputsBrokerDetailRes.recordset || [],
+  );
+  const inputsWashingRes = groupBrokerRows(
+    inputsWashingDetailRes.recordset || [],
+  );
+  const inputsMixerRes = groupBrokerRows(inputsMixerDetailRes.recordset || []);
+  const outputsWashingRes = groupBrokerRows(
+    outputsWashingDetailRes.recordset || [],
+  );
+  const outputsBahanBakuRes = groupBahanBakuRows(
+    outputsBahanBakuDetailRes.recordset || [],
+  );
+  const outputsBrokerRes = groupBrokerRows(
+    outputsBrokerDetailRes.recordset || [],
+  );
+  const outputsMixerRes = groupBrokerRows(
+    outputsMixerDetailRes.recordset || [],
+  );
 
   return {
     header: headerRes.recordset[0],
     inputs: [
-      ...inputsWashingRes.recordset,
+      ...inputsBahanBakuRes,
+      ...inputsWashingRes,
       ...inputsBonggolanRes.recordset,
       ...inputsBrokerRes,
+      ...inputsMixerRes,
       ...inputsCrusherRes.recordset,
       ...inputsGilinganRes.recordset,
       ...inputsFurnitureWipRes.recordset,
       ...inputsBarangJadiRes.recordset,
     ],
     outputs: [
-      ...outputsWashingRes.recordset,
+      ...outputsBahanBakuRes,
+      ...outputsWashingRes,
       ...outputsBonggolanRes.recordset,
       ...outputsBrokerRes,
+      ...outputsMixerRes,
       ...outputsCrusherRes.recordset,
       ...outputsGilinganRes.recordset,
       ...outputsFurnitureWipRes.recordset,
@@ -891,12 +1334,14 @@ exports.getDetail = async (noBongkarSusun) => {
 
 // create handlers
 const createWashingHandler = require("./handlers/create-washing.handler");
+const createBahanBakuHandler = require("./handlers/create-bahan-baku.handler");
 const createBrokerHandler = require("./handlers/create-broker.handler");
 const createCrusherHandler = require("./handlers/create-crusher.handler");
 const createGilinganHandler = require("./handlers/create-gilingan.handler");
 const createFurnitureWipHandler = require("./handlers/create-furniture-wip.handler");
 const createBarangJadiHandler = require("./handlers/create-barang-jadi.handler");
 const createBonggolanHandler = require("./handlers/create-bonggolan.handler");
+const createMixerHandler = require("./handlers/create-mixer.handler");
 exports.deleteBongkarSusun = async (noBongkarSusun, ctx) => {
   const { actorId, requestId } = ctx;
   const pool = await poolPromise;
@@ -928,9 +1373,11 @@ exports.deleteBongkarSusun = async (noBongkarSusun, ctx) => {
       throw e;
     }
 
-    const outputGuard = await new sql.Request(tx)
-      .input("NoBongkarSusun", sql.VarChar(50), noBongkarSusun)
-      .query(`
+    const outputGuard = await new sql.Request(tx).input(
+      "NoBongkarSusun",
+      sql.VarChar(50),
+      noBongkarSusun,
+    ).query(`
         SELECT CASE WHEN
           EXISTS (SELECT 1 FROM dbo.BongkarSusunOutputWashing      WITH (NOLOCK) WHERE NoBongkarSusun = @NoBongkarSusun)
           OR EXISTS (SELECT 1 FROM dbo.BongkarSusunOutputBroker    WITH (NOLOCK) WHERE NoBongkarSusun = @NoBongkarSusun)
@@ -1132,6 +1579,99 @@ exports.deleteBongkarSusun = async (noBongkarSusun, ctx) => {
         );
     }
 
+    const outputsMixerRes = await new sql.Request(tx)
+      .input("NoBongkarSusun", sql.VarChar(50), noBongkarSusun)
+      .query(
+        `SELECT DISTINCT NoMixer FROM dbo.BongkarSusunOutputMixer WHERE NoBongkarSusun = @NoBongkarSusun`,
+      );
+
+    if (outputsMixerRes.recordset.length > 0) {
+      const outputMixerCodes = outputsMixerRes.recordset.map((r) => r.NoMixer);
+      const outMixerJson = JSON.stringify(
+        outputMixerCodes.map((c) => ({ code: c })),
+      );
+
+      const usedMixer = await new sql.Request(tx).input(
+        "CodesJson",
+        sql.NVarChar(sql.MAX),
+        outMixerJson,
+      ).query(`
+          SELECT TOP 1 NoMixer FROM dbo.Mixer_d
+          WHERE NoMixer IN (
+            SELECT j.code FROM OPENJSON(@CodesJson) WITH (code varchar(50) '$.code') AS j
+          )
+          AND DateUsage IS NOT NULL
+        `);
+      if (usedMixer.recordset.length > 0)
+        throw conflict(
+          "Tidak bisa hapus: label output mixer sudah digunakan di proses lain",
+        );
+
+      await new sql.Request(tx)
+        .input("NoBongkarSusun", sql.VarChar(50), noBongkarSusun)
+        .query(
+          `DELETE FROM dbo.BongkarSusunOutputMixer WHERE NoBongkarSusun = @NoBongkarSusun`,
+        );
+
+      await new sql.Request(tx).input(
+        "CodesJson",
+        sql.NVarChar(sql.MAX),
+        outMixerJson,
+      ).query(`
+          DELETE FROM dbo.Mixer_d
+          WHERE NoMixer IN (
+            SELECT j.code FROM OPENJSON(@CodesJson) WITH (code varchar(50) '$.code') AS j
+          )
+        `);
+
+      await new sql.Request(tx).input(
+        "CodesJson",
+        sql.NVarChar(sql.MAX),
+        outMixerJson,
+      ).query(`
+          DELETE FROM dbo.Mixer_h
+          WHERE NoMixer IN (
+            SELECT j.code FROM OPENJSON(@CodesJson) WITH (code varchar(50) '$.code') AS j
+          )
+        `);
+    }
+
+    const inputsMixerRes = await new sql.Request(tx)
+      .input("NoBongkarSusun", sql.VarChar(50), noBongkarSusun)
+      .query(
+        `SELECT NoMixer, NoSak FROM dbo.BongkarSusunInputMixer WHERE NoBongkarSusun = @NoBongkarSusun`,
+      );
+
+    if (inputsMixerRes.recordset.length > 0) {
+      const inMixerJson = JSON.stringify(
+        inputsMixerRes.recordset.map((r) => ({
+          noMixer: r.NoMixer,
+          noSak: r.NoSak,
+        })),
+      );
+      await new sql.Request(tx).input(
+        "PairsJson",
+        sql.NVarChar(sql.MAX),
+        inMixerJson,
+      ).query(`
+          UPDATE d
+          SET DateUsage = NULL
+          FROM dbo.Mixer_d d
+          INNER JOIN OPENJSON(@PairsJson)
+          WITH (
+            noMixer varchar(50) '$.noMixer',
+            noSak int '$.noSak'
+          ) j
+            ON j.noMixer = d.NoMixer
+           AND j.noSak = d.NoSak
+        `);
+      await new sql.Request(tx)
+        .input("NoBongkarSusun", sql.VarChar(50), noBongkarSusun)
+        .query(
+          `DELETE FROM dbo.BongkarSusunInputMixer WHERE NoBongkarSusun = @NoBongkarSusun`,
+        );
+    }
+
     const outputsFurnitureWipRes = await new sql.Request(tx)
       .input("NoBongkarSusun", sql.VarChar(50), noBongkarSusun)
       .query(
@@ -1188,7 +1728,9 @@ exports.deleteBongkarSusun = async (noBongkarSusun, ctx) => {
 
     if (inputsFurnitureWipRes.recordset.length > 0) {
       const inFurnitureWipJson = JSON.stringify(
-        inputsFurnitureWipRes.recordset.map((r) => ({ code: r.NoFurnitureWIP })),
+        inputsFurnitureWipRes.recordset.map((r) => ({
+          code: r.NoFurnitureWIP,
+        })),
       );
       await new sql.Request(tx).input(
         "CodesJson",
@@ -1403,8 +1945,11 @@ exports.createBongkarSusunByCategory = async (category, payload, ctx) => {
 
 exports.createBongkarSusunWashing =
   createWashingHandler.createBongkarSusunWashing;
+exports.createBongkarSusunBahanBaku =
+  createBahanBakuHandler.createBongkarSusunBahanBaku;
 exports.createBongkarSusunBroker = createBrokerHandler.createBongkarSusunBroker;
-exports.createBongkarSusunCrusher = createCrusherHandler.createBongkarSusunCrusher;
+exports.createBongkarSusunCrusher =
+  createCrusherHandler.createBongkarSusunCrusher;
 exports.createBongkarSusunGilingan =
   createGilinganHandler.createBongkarSusunGilingan;
 exports.createBongkarSusunFurnitureWip =
@@ -1413,3 +1958,4 @@ exports.createBongkarSusunBarangJadi =
   createBarangJadiHandler.createBongkarSusunBarangJadi;
 exports.createBongkarSusunBonggolan =
   createBonggolanHandler.createBongkarSusunBonggolan;
+exports.createBongkarSusunMixer = createMixerHandler.createBongkarSusunMixer;

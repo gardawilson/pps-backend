@@ -6,14 +6,17 @@ exports.getLabelInfoBonggolan = async (labelCode) => {
     .request()
     .input("NoBonggolan", sql.VarChar(50), labelCode).query(`
       SELECT
-        NoBonggolan   AS labelCode,
-        IdBonggolan   AS idJenis,
-        IdWarehouse,
-        IdStatus,
-        Berat         AS totalBerat
-      FROM dbo.Bonggolan
-      WHERE NoBonggolan = @NoBonggolan
-        AND DateUsage IS NULL
+        b.NoBonggolan   AS labelCode,
+        b.IdBonggolan   AS idJenis,
+        mb.NamaBonggolan AS namaJenis,
+        b.IdWarehouse,
+        b.IdStatus,
+        b.Berat         AS totalBerat
+      FROM dbo.Bonggolan b
+      INNER JOIN dbo.MstBonggolan mb
+        ON mb.IdBonggolan = b.IdBonggolan
+      WHERE b.NoBonggolan = @NoBonggolan
+        AND b.DateUsage IS NULL
     `);
 
   if (!result.recordset.length) {
@@ -29,6 +32,7 @@ exports.getLabelInfoBonggolan = async (labelCode) => {
     labelCode: row.labelCode,
     category: "bonggolan",
     idJenis: row.idJenis,
+    namaJenis: row.namaJenis,
     idWarehouse: row.IdWarehouse,
     idStatus: row.IdStatus,
     totalBerat: row.totalBerat,

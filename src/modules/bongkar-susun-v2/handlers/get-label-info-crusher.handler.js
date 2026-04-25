@@ -10,8 +10,8 @@ exports.getLabelInfoCrusher = async (labelCode) => {
       SELECT
         A.NoCrusher,
         A.DateCreate,
-        A.IdCrusher,
-        B.NamaCrusher,
+        A.IdCrusher AS idJenis,
+        B.NamaCrusher AS namaJenis,
         A.DateUsage,
         A.Berat,
           A.CreateBy,
@@ -22,13 +22,13 @@ exports.getLabelInfoCrusher = async (labelCode) => {
           ON B.IdCrusher = A.IdCrusher
         LEFT JOIN dbo.MstWarehouse G
           ON G.IdWarehouse = A.IdWarehouse
-        WHERE A.NoCrusher = @NoCrusher
+        WHERE A.NoCrusher = @NoCrusher AND A.DateUsage IS NULL
       )
       SELECT
         A.NoCrusher,
         A.DateCreate,
-        A.IdCrusher,
-        A.NamaCrusher,
+        A.idJenis,
+        A.namaJenis,
         A.DateUsage,
         A.Berat,
         ISNULL(K.Mesin, '') AS Mesin,
@@ -79,8 +79,8 @@ exports.getLabelInfoCrusher = async (labelCode) => {
     labelCode: first.NoCrusher,
     category: "crusher",
     dateCreate: first.DateCreate,
-    idCrusher: first.IdCrusher,
-    namaCrusher: first.NamaCrusher,
+    idJenis: first.idJenis,
+    namaJenis: first.namaJenis,
     dateUsage: first.DateUsage,
     berat: first.Berat,
     mesin: first.Mesin,

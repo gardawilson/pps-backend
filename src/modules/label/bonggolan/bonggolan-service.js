@@ -853,8 +853,7 @@ exports.getByNoBonggolan = async (NoBonggolan) => {
 
   const result = await pool
     .request()
-    .input("NoBonggolan", sql.VarChar(50), NoBonggolan)
-    .query(`
+    .input("NoBonggolan", sql.VarChar(50), NoBonggolan).query(`
       ;WITH Base AS (
         SELECT
           A.NoBonggolan,
@@ -945,16 +944,15 @@ exports.getByNoBonggolan = async (NoBonggolan) => {
   }
 
   return {
-    NoBonggolan:    first.NoBonggolan,
-    Tanggal:        first.Tanggal,
-    Jenis:          first.Jenis,
-    Berat:          first.Berat,
-    Warehouse:      first.Warehouse,
-    CreateBy:       first.CreateBy,
-    Ket:            first.Ket,
-    Shift:          first.Shift,
-    NamaOperator:   first.NamaOperator,
+    NoBonggolan: first.NoBonggolan,
+    Tanggal: first.Tanggal,
+    Jenis: first.Jenis,
+    Berat: first.Berat,
+    Warehouse: first.Warehouse,
+    CreateBy: first.CreateBy,
+    Ket: first.Ket,
+    Shift: first.Shift,
+    NamaOperator: first.NamaOperator,
     HasBeenPrinted: first.HasBeenPrinted ?? 0,
   };
 };
-

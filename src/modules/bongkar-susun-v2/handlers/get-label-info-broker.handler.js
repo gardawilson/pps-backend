@@ -1,4 +1,5 @@
 const { sql, poolPromise } = require("../../../core/config/db");
+const { conflict } = require("../../../core/utils/http-error");
 
 exports.getLabelInfoBroker = async (labelCode) => {
   const pool = await poolPromise;
@@ -8,6 +9,7 @@ exports.getLabelInfoBroker = async (labelCode) => {
       SELECT
         h.NoBroker        AS labelCode,
         h.IdJenisPlastik  AS idJenis,
+        mb.Nama           AS namaJenis,
         h.IdWarehouse,
         h.IdStatus,
         h.Density,
@@ -24,6 +26,8 @@ exports.getLabelInfoBroker = async (labelCode) => {
         h.IdLokasi,
         h.HasBeenPrinted
       FROM dbo.Broker_h h
+      INNER JOIN dbo.MstBroker mb
+        ON mb.IdBroker = h.IdJenisPlastik
       WHERE h.NoBroker = @NoBroker
     `);
 
@@ -38,7 +42,7 @@ exports.getLabelInfoBroker = async (labelCode) => {
   const saksRes = await pool
     .request()
     .input("NoBroker", sql.VarChar(50), labelCode).query(`
-      SELECT NoSak, Berat
+      SELECT NoSak, Berat, IsPartial
       FROM dbo.Broker_d
       WHERE NoBroker = @NoBroker AND DateUsage IS NULL
       ORDER BY NoSak
@@ -52,6 +56,10 @@ exports.getLabelInfoBroker = async (labelCode) => {
     throw e;
   }
 
+  if (saksRes.recordset.some((s) => s.IsPartial === true || s.IsPartial === 1)) {
+    throw conflict("Tidak dapat bongkar susun label yang sudah di partial");
+  }
+
   const row = result.recordset[0];
   const saks = saksRes.recordset.map((s) => ({
     noSak: s.NoSak,
@@ -61,6 +69,7 @@ exports.getLabelInfoBroker = async (labelCode) => {
     labelCode: row.labelCode,
     category: "broker",
     idJenis: row.idJenis,
+    namaJenis: row.namaJenis,
     idWarehouse: row.IdWarehouse,
     idStatus: row.IdStatus,
     density: row.Density,

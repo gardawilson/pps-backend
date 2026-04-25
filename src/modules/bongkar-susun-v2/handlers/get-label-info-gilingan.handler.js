@@ -1,4 +1,5 @@
 const { sql, poolPromise } = require("../../../core/config/db");
+const { conflict } = require("../../../core/utils/http-error");
 
 exports.getLabelInfoGilingan = async (labelCode) => {
   const pool = await poolPromise;
@@ -11,6 +12,7 @@ exports.getLabelInfoGilingan = async (labelCode) => {
         g.DateCreate,
         g.IdGilingan AS idJenis,
         mg.NamaGilingan AS namaJenis,
+        g.IsPartial,
         CASE
           WHEN g.IsPartial = 1 THEN
             CASE
@@ -56,6 +58,10 @@ exports.getLabelInfoGilingan = async (labelCode) => {
     const e = new Error(`NoGilingan ${labelCode} tidak ditemukan`);
     e.statusCode = 404;
     throw e;
+  }
+
+  if (first.IsPartial === true || first.IsPartial === 1) {
+    throw conflict("Tidak dapat bongkar susun label yang sudah di partial");
   }
 
   return {

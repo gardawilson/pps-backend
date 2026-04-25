@@ -1423,7 +1423,10 @@ exports.getByNoMixer = async (NoMixer) => {
 SELECT
   h.NoMixer,
   h.DateCreate,
+  h.IdMixer,
   mx.Jenis,
+  mx.Jenis AS NamaMixer,
+  MAX(CAST(ISNULL(d.IsPartial, 0) AS int)) AS IsPartial,
   COUNT(d.NoSak)                           AS JumlahSak,
   SUM(d.Berat) - ISNULL(SUM(mp.Berat), 0) AS SisaBerat,
   h.CreateBy,
@@ -1478,6 +1481,7 @@ WHERE h.NoMixer = @NoMixer
 GROUP BY 
   h.NoMixer, 
   h.DateCreate, 
+  h.IdMixer,
   mx.Jenis, 
   h.CreateBy, 
   h.HasBeenPrinted,
@@ -1495,7 +1499,10 @@ GROUP BY
   return {
     NoMixer: first.NoMixer,
     DateCreate: first.DateCreate,
+    IdMixer: first.IdMixer,
     Jenis: first.Jenis,
+    NamaMixer: first.NamaMixer,
+    IsPartial: first.IsPartial,
     JumlahSak: first.JumlahSak,
     SisaBerat: first.SisaBerat,
     CreateBy: first.CreateBy,

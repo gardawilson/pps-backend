@@ -1324,14 +1324,15 @@ exports.getByNoFurnitureWip = async (NoFurnitureWIP) => {
   const result = await pool
     .request()
     .input("NoFurnitureWIP", sql.VarChar(50), NoFurnitureWIP).query(`
-      SELECT
-        f.NoFurnitureWIP,
-        f.DateCreate,
-        f.IdFurnitureWIP,
-        cw.Nama AS NamaFurnitureWIP,
-        CASE
-          WHEN f.IsPartial = 1 THEN
-            CASE
+        SELECT
+          f.NoFurnitureWIP,
+          f.DateCreate,
+          f.IdFurnitureWIP,
+          cw.Nama AS NamaFurnitureWIP,
+          f.IsPartial,
+          CASE
+            WHEN f.IsPartial = 1 THEN
+              CASE
               WHEN ISNULL(f.Pcs, 0) - ISNULL(fp.TotalPartialPcs, 0) < 0
                 THEN 0
               ELSE ISNULL(f.Pcs, 0) - ISNULL(fp.TotalPartialPcs, 0)
@@ -1416,6 +1417,7 @@ exports.getByNoFurnitureWip = async (NoFurnitureWIP) => {
     DateCreate: first.DateCreate,
     IdFurnitureWIP: first.IdFurnitureWIP,
     NamaFurnitureWIP: first.NamaFurnitureWIP,
+    IsPartial: first.IsPartial,
     Pcs: first.Pcs,
     Berat: first.Berat,
     HasBeenPrinted: first.HasBeenPrinted,

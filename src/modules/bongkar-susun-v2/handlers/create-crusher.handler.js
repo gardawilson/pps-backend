@@ -25,12 +25,9 @@ exports.createBongkarSusunCrusher = async (payload, ctx) => {
 
   for (let i = 0; i < outputs.length; i++) {
     const out = outputs[i];
-    if (
-      !out.idCrusher ||
-      !Number.isFinite(Number(out.idCrusher)) ||
-      Number(out.idCrusher) <= 0
-    ) {
-      throw badReq(`outputs[${i}].idCrusher wajib diisi`);
+    const idJenis = out.idJenis ?? out.idCrusher;
+    if (!idJenis || !Number.isFinite(Number(idJenis)) || Number(idJenis) <= 0) {
+      throw badReq(`outputs[${i}].idJenis wajib diisi`);
     }
     if (
       out.berat == null ||
@@ -99,7 +96,7 @@ exports.createBongkarSusunCrusher = async (payload, ctx) => {
 
     const outputByJenis = {};
     for (const out of outputs) {
-      const k = Number(out.idCrusher);
+      const k = Number(out.idJenis ?? out.idCrusher);
       const beratOut = Number(out.berat);
       outputByJenis[k] = (outputByJenis[k] || 0) + beratOut;
     }
@@ -109,19 +106,19 @@ exports.createBongkarSusunCrusher = async (payload, ctx) => {
       0,
     );
 
-    for (const idCrusher of Object.keys(outputByJenis)) {
-      if (!(idCrusher in inputByJenis)) {
+    for (const idJenis of Object.keys(outputByJenis)) {
+      if (!(idJenis in inputByJenis)) {
         throw badReq(
-          `idCrusher=${idCrusher} pada output tidak ada di input manapun`,
+          `idJenis=${idJenis} pada output tidak ada di input manapun`,
         );
       }
     }
 
-    for (const [idCrusher, beratInput] of Object.entries(inputByJenis)) {
-      const beratOutput = outputByJenis[idCrusher] || 0;
+    for (const [idJenis, beratInput] of Object.entries(inputByJenis)) {
+      const beratOutput = outputByJenis[idJenis] || 0;
       if (Math.abs(beratInput - beratOutput) > 0.001) {
         throw badReq(
-          `Berat tidak balance untuk idCrusher=${idCrusher}: input=${beratInput}kg, output=${beratOutput}kg`,
+          `Berat tidak balance untuk idJenis=${idJenis}: input=${beratInput}kg, output=${beratOutput}kg`,
         );
       }
     }
@@ -222,7 +219,11 @@ exports.createBongkarSusunCrusher = async (payload, ctx) => {
       await new sql.Request(tx)
         .input("NoCrusher", sql.VarChar(50), newNoCrusher)
         .input("DateCreate", sql.Date, nowDate)
-        .input("IdCrusher", sql.Int, Math.trunc(Number(out.idCrusher)))
+        .input(
+          "IdCrusher",
+          sql.Int,
+          Math.trunc(Number(out.idJenis ?? out.idCrusher)),
+        )
         .input("IdWarehouse", sql.Int, refRow.IdWarehouse)
         .input("DateUsage", sql.DateTime, null)
         .input("Berat", sql.Decimal(18, 3), Number(out.berat))
@@ -250,7 +251,7 @@ exports.createBongkarSusunCrusher = async (payload, ctx) => {
 
       createdOutputs.push({
         noCrusher: newNoCrusher,
-        idCrusher: Number(out.idCrusher),
+        idJenis: Number(out.idJenis ?? out.idCrusher),
         berat: Number(out.berat),
       });
     }

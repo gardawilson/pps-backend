@@ -8,12 +8,16 @@ exports.getLabelInfoBarangJadi = async (labelCode) => {
     throw conflict(`Label ${row.NoBJ} sudah terpakai`);
   }
 
+  if (row.IsPartial === true || row.IsPartial === 1) {
+    throw conflict("Tidak dapat bongkar susun label yang sudah di partial");
+  }
+
   return {
     labelCode: row.NoBJ,
     category: "barangJadi",
     dateCreate: row.DateCreate,
-    idBJ: row.IdBJ,
-    namaBJ: row.NamaBJ,
+    idJenis: row.IdBJ,
+    namaJenis: row.NamaBJ,
     pcs: row.Pcs,
     hasBeenPrinted: row.HasBeenPrinted ?? 0,
     createBy: row.CreateBy,

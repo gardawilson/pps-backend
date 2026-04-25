@@ -25,12 +25,9 @@ exports.createBongkarSusunFurnitureWip = async (payload, ctx) => {
 
   for (let i = 0; i < outputs.length; i++) {
     const out = outputs[i];
-    if (
-      !out.idFurnitureWIP ||
-      !Number.isFinite(Number(out.idFurnitureWIP)) ||
-      Number(out.idFurnitureWIP) <= 0
-    ) {
-      throw badReq(`outputs[${i}].idFurnitureWIP wajib diisi`);
+    const idJenis = out.idJenis ?? out.idFurnitureWIP;
+    if (!idJenis || !Number.isFinite(Number(idJenis)) || Number(idJenis) <= 0) {
+      throw badReq(`outputs[${i}].idJenis wajib diisi`);
     }
     if (
       out.pcs == null ||
@@ -99,7 +96,7 @@ exports.createBongkarSusunFurnitureWip = async (payload, ctx) => {
 
     const outputByJenis = {};
     for (const out of outputs) {
-      const k = Number(out.idFurnitureWIP);
+      const k = Number(out.idJenis ?? out.idFurnitureWIP);
       if (!outputByJenis[k]) {
         outputByJenis[k] = { pcs: 0 };
       }
@@ -114,7 +111,7 @@ exports.createBongkarSusunFurnitureWip = async (payload, ctx) => {
     for (const idJenis of Object.keys(outputByJenis)) {
       if (!(idJenis in inputByJenis)) {
         throw badReq(
-          `idFurnitureWIP=${idJenis} pada output tidak ada di input manapun`,
+          `idJenis=${idJenis} pada output tidak ada di input manapun`,
         );
       }
     }
@@ -123,7 +120,7 @@ exports.createBongkarSusunFurnitureWip = async (payload, ctx) => {
       const valOutput = outputByJenis[idJenis] || { pcs: 0 };
       if (Math.abs(valInput.pcs - valOutput.pcs) > 0.001) {
         throw badReq(
-          `Pcs tidak balance untuk idFurnitureWIP=${idJenis}: input=${valInput.pcs}, output=${valOutput.pcs}`,
+          `Pcs tidak balance untuk idJenis=${idJenis}: input=${valInput.pcs}, output=${valOutput.pcs}`,
         );
       }
     }
@@ -226,21 +223,20 @@ exports.createBongkarSusunFurnitureWip = async (payload, ctx) => {
         .input(
           "IdFurnitureWIP",
           sql.Int,
-          Math.trunc(Number(out.idFurnitureWIP)),
+          Math.trunc(Number(out.idJenis ?? out.idFurnitureWIP)),
         )
         .input("Pcs", sql.Int, Math.trunc(Number(out.pcs)))
-        .input("IdWarna", sql.Int, refRow.IdWarna ?? null)
         .input("Blok", sql.VarChar(50), refRow.Blok ?? null)
         .input("IdLokasi", sql.Int, refRow.IdLokasi ?? null)
         .input("CreateBy", sql.VarChar(50), actorUsername)
         .input("DateTimeCreate", sql.DateTime, nowDate).query(`
           INSERT INTO dbo.FurnitureWIP (
             NoFurnitureWIP, DateCreate, IdFurnitureWIP, Pcs,
-            IdWarna, Blok, IdLokasi, CreateBy, DateTimeCreate
+            Blok, IdLokasi, CreateBy, DateTimeCreate
           )
           VALUES (
             @NoFurnitureWIP, @DateCreate, @IdFurnitureWIP, @Pcs,
-            @IdWarna, @Blok, @IdLokasi, @CreateBy, @DateTimeCreate
+            @Blok, @IdLokasi, @CreateBy, @DateTimeCreate
           )
         `);
 
@@ -253,7 +249,7 @@ exports.createBongkarSusunFurnitureWip = async (payload, ctx) => {
 
       createdOutputs.push({
         noFurnitureWIP: newNoFurnitureWIP,
-        idFurnitureWIP: Number(out.idFurnitureWIP),
+        idJenis: Number(out.idJenis ?? out.idFurnitureWIP),
         pcs: Number(out.pcs),
       });
     }

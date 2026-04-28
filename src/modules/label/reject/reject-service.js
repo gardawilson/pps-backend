@@ -1137,8 +1137,7 @@ exports.getByNoReject = async (NoReject) => {
 
   const result = await pool
     .request()
-    .input("NoReject", sql.VarChar(50), NoReject)
-    .query(`
+    .input("NoReject", sql.VarChar(50), NoReject).query(`
       ;WITH RejectPartialAgg AS (
         SELECT NoReject, SUM(ISNULL(Berat, 0)) AS TotalPartialBerat
         FROM dbo.RejectV2Partial
@@ -1205,13 +1204,13 @@ exports.getByNoReject = async (NoReject) => {
   }
 
   return {
-    NoReject:       first.NoReject,
-    DateCreate:     first.DateCreate,
-    NamaReject:     first.NamaReject,
-    Berat:          first.Berat,
+    NoReject: first.NoReject,
+    DateCreate: first.DateCreate,
+    NamaReject: first.NamaReject,
+    Berat: first.Berat,
     HasBeenPrinted: first.HasBeenPrinted,
-    CreateBy:       first.CreateBy,
-    Mesin:          first.Mesin,
-    Shift:          first.Shift,
+    CreateBy: first.CreateBy,
+    Mesin: first.Mesin,
+    Shift: first.Shift,
   };
 };

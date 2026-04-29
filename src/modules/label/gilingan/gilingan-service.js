@@ -415,11 +415,10 @@ exports.updateGilinganCascade = async (payload) => {
 
   // Identify outputType from outputCode (optional)
   const hasOutput = outputCode.length > 0;
-  let outputType = null; // 'PRODUKSI' | 'BONGKAR' | null
+  let outputType = null; // 'PRODUKSI' | null
   if (hasOutput) {
     if (outputCode.startsWith("W.")) outputType = "PRODUKSI";
-    else if (outputCode.startsWith("BG.")) outputType = "BONGKAR";
-    else throw badReq("outputCode prefix tidak dikenali (pakai W. atau BG.)");
+    else throw badReq("outputCode prefix tidak dikenali (pakai W.)");
   }
 
   try {
@@ -447,8 +446,20 @@ exports.updateGilinganCascade = async (payload) => {
       `);
 
     if (exist.recordset.length === 0) {
-      // ✅ FIX: jangan pakai \` dan \${} (itu invalid di JS)
       throw notFound(`NoGilingan ${NoGilingan} tidak ditemukan`);
+    }
+
+    // Cek apakah NoGilingan berasal dari BongkarSusun — jika ya, tolak edit
+    const bsoCheck = await new sql.Request(tx)
+      .input("NoGilingan", sql.VarChar(50), NoGilingan)
+      .query(
+        `SELECT TOP 1 1 FROM dbo.BongkarSusunOutputGilingan WHERE NoGilingan = @NoGilingan`,
+      );
+
+    if (bsoCheck.recordset.length > 0) {
+      throw conflict(
+        "Data tidak dapat diubah: label ini berasal dari Bongkar Susun.",
+      );
     }
 
     const existingDateCreate = exist.recordset[0]?.DateCreate;
@@ -573,31 +584,15 @@ exports.updateGilinganCascade = async (payload) => {
           `DELETE FROM dbo.GilinganProduksiOutput WHERE NoGilingan = @NoGilingan`,
         );
 
-      await new sql.Request(tx)
-        .input("NoGilingan", sql.VarChar(50), NoGilingan)
-        .query(
-          `DELETE FROM dbo.BongkarSusunOutputGilingan WHERE NoGilingan = @NoGilingan`,
-        );
-
-      if (hasOutput) {
-        if (outputType === "PRODUKSI") {
-          await new sql.Request(tx)
-            .input("NoProduksi", sql.VarChar(50), outputCode)
-            .input("NoGilingan", sql.VarChar(50), NoGilingan)
-            .input("Berat", sql.Decimal(18, 3), header.Berat ?? null).query(`
-              INSERT INTO dbo.GilinganProduksiOutput (NoProduksi, NoGilingan, Berat)
-              VALUES (@NoProduksi, @NoGilingan, @Berat);
-            `);
-          mappingTable = "GilinganProduksiOutput";
-        } else if (outputType === "BONGKAR") {
-          await new sql.Request(tx)
-            .input("NoBongkarSusun", sql.VarChar(50), outputCode)
-            .input("NoGilingan", sql.VarChar(50), NoGilingan).query(`
-              INSERT INTO dbo.BongkarSusunOutputGilingan (NoBongkarSusun, NoGilingan)
-              VALUES (@NoBongkarSusun, @NoGilingan);
-            `);
-          mappingTable = "BongkarSusunOutputGilingan";
-        }
+      if (hasOutput && outputType === "PRODUKSI") {
+        await new sql.Request(tx)
+          .input("NoProduksi", sql.VarChar(50), outputCode)
+          .input("NoGilingan", sql.VarChar(50), NoGilingan)
+          .input("Berat", sql.Decimal(18, 3), header.Berat ?? null).query(`
+            INSERT INTO dbo.GilinganProduksiOutput (NoProduksi, NoGilingan, Berat)
+            VALUES (@NoProduksi, @NoGilingan, @Berat);
+          `);
+        mappingTable = "GilinganProduksiOutput";
       }
     }
 

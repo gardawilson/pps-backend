@@ -643,13 +643,8 @@ exports.updateBrokerCascade = async (payload) => {
   const details = Array.isArray(payload?.details) ? payload.details : null; // null => tidak sentuh details
 
   const NoProduksi = payload?.NoProduksi?.toString().trim() || null;
-  const NoBongkarSusun = payload?.NoBongkarSusun?.toString().trim() || null;
 
   const hasProduksi = !!NoProduksi;
-  const hasBongkar = !!NoBongkarSusun;
-  if (hasProduksi && hasBongkar) {
-    throw badReq("NoProduksi dan NoBongkarSusun tidak boleh diisi bersamaan");
-  }
 
   // =====================================================
   // [AUDIT] actorId + requestId (ID only)
@@ -763,6 +758,19 @@ exports.updateBrokerCascade = async (payload) => {
       const e = new Error(`NoBroker ${NoBroker} tidak ditemukan`);
       e.statusCode = 404;
       throw e;
+    }
+
+    // Cek apakah NoBroker berasal dari BongkarSusun — jika ya, tolak edit
+    const bsoCheck = await new sql.Request(tx)
+      .input("NoBroker", sql.VarChar(50), NoBroker)
+      .query(
+        `SELECT TOP 1 1 FROM dbo.BongkarSusunOutputBroker WHERE NoBroker = @NoBroker`,
+      );
+
+    if (bsoCheck.recordset.length > 0) {
+      throw conflict(
+        "Data tidak dapat diubah: label ini berasal dari Bongkar Susun.",
+      );
     }
 
     const existingDateCreate = exist.recordset[0]?.DateCreate;
@@ -896,12 +904,6 @@ exports.updateBrokerCascade = async (payload) => {
         .query(
           `DELETE FROM dbo.BrokerProduksiOutput WHERE NoBroker = @NoBroker`,
         );
-
-      await new sql.Request(tx)
-        .input("NoBroker", sql.VarChar(50), NoBroker)
-        .query(
-          `DELETE FROM dbo.BongkarSusunOutputBroker WHERE NoBroker = @NoBroker`,
-        );
     }
 
     // 2) Replace details (DateUsage IS NULL) — BULK (kalau dikirim)
@@ -944,9 +946,10 @@ exports.updateBrokerCascade = async (payload) => {
     let outputTarget = null;
     let outputCount = 0;
 
-    const sentAnyOutputField =
-      Object.prototype.hasOwnProperty.call(payload, "NoProduksi") ||
-      Object.prototype.hasOwnProperty.call(payload, "NoBongkarSusun");
+    const sentAnyOutputField = Object.prototype.hasOwnProperty.call(
+      payload,
+      "NoProduksi",
+    );
 
     if (sentAnyOutputField) {
       // reset outputs (idempotent)
@@ -954,12 +957,6 @@ exports.updateBrokerCascade = async (payload) => {
         .input("NoBroker", sql.VarChar(50), NoBroker)
         .query(
           `DELETE FROM dbo.BrokerProduksiOutput WHERE NoBroker = @NoBroker`,
-        );
-
-      await new sql.Request(tx)
-        .input("NoBroker", sql.VarChar(50), NoBroker)
-        .query(
-          `DELETE FROM dbo.BongkarSusunOutputBroker WHERE NoBroker = @NoBroker`,
         );
 
       // Ambil NoSak sumber:
@@ -1008,25 +1005,6 @@ exports.updateBrokerCascade = async (payload) => {
 
         outputCount = noSakCount;
         outputTarget = "BrokerProduksiOutput";
-      } else if (hasBongkar) {
-        const insertBsoBulkSql = `
-          INSERT INTO dbo.BongkarSusunOutputBroker (NoBongkarSusun, NoBroker, NoSak)
-          SELECT
-            @NoBongkarSusun,
-            @NoBroker,
-            j.NoSak
-          FROM OPENJSON(@NoSakJson)
-          WITH (NoSak int '$.NoSak') AS j;
-        `;
-
-        await new sql.Request(tx)
-          .input("NoBongkarSusun", sql.VarChar(50), NoBongkarSusun)
-          .input("NoBroker", sql.VarChar(50), NoBroker)
-          .input("NoSakJson", sql.NVarChar(sql.MAX), noSakJson)
-          .query(insertBsoBulkSql);
-
-        outputCount = noSakCount;
-        outputTarget = "BongkarSusunOutputBroker";
       }
     }
 

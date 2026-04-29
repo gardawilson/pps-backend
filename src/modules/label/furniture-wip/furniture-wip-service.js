@@ -778,6 +778,19 @@ exports.updateFurnitureWip = async (noFurnitureWip, payload) => {
       throw notFound("Furniture WIP not found");
     }
 
+    // Cek apakah NoFurnitureWIP berasal dari BongkarSusun — jika ya, tolak edit
+    const bsoCheck = await new sql.Request(tx)
+      .input("NoFurnitureWIP", sql.VarChar(50), noFurnitureWip)
+      .query(
+        `SELECT TOP 1 1 FROM dbo.BongkarSusunOutputFurnitureWIP WHERE NoFurnitureWIP = @NoFurnitureWIP`,
+      );
+
+    if (bsoCheck.recordset.length > 0) {
+      throw conflict(
+        "Data tidak dapat diubah: label ini berasal dari Bongkar Susun.",
+      );
+    }
+
     const current = existingRes.recordset[0];
 
     // ===============================
@@ -906,9 +919,6 @@ exports.updateFurnitureWip = async (noFurnitureWip, payload) => {
         } else if (outputCode.startsWith("BI.")) {
           outputType = "PASANG_KUNCI";
           mappingTable = "PasangKunciOutputLabelFWIP";
-        } else if (outputCode.startsWith("BG.")) {
-          outputType = "BONGKAR_SUSUN";
-          mappingTable = "BongkarSusunOutputFurnitureWIP";
         } else if (outputCode.startsWith("L.")) {
           outputType = "RETUR";
           mappingTable = "BJReturFurnitureWIP_d";
@@ -920,7 +930,7 @@ exports.updateFurnitureWip = async (noFurnitureWip, payload) => {
           mappingTable = "InjectProduksiOutputFurnitureWIP";
         } else
           throw badReq(
-            "outputCode prefix not recognized (supported: BH., BI., BG., L., BJ., S.)",
+            "outputCode prefix not recognized (supported: BH., BI., L., BJ., S.)",
           );
 
         await deleteAllMappings(tx, noFurnitureWip);
@@ -937,11 +947,6 @@ exports.updateFurnitureWip = async (noFurnitureWip, payload) => {
         } else if (mappingTable === "PasangKunciOutputLabelFWIP") {
           await rqMap.query(`
             INSERT INTO dbo.PasangKunciOutputLabelFWIP (NoProduksi, NoFurnitureWIP)
-            VALUES (@OutputCode, @NoFurnitureWIP);
-          `);
-        } else if (mappingTable === "BongkarSusunOutputFurnitureWIP") {
-          await rqMap.query(`
-            INSERT INTO dbo.BongkarSusunOutputFurnitureWIP (NoBongkarSusun, NoFurnitureWIP)
             VALUES (@OutputCode, @NoFurnitureWIP);
           `);
         } else if (mappingTable === "BJReturFurnitureWIP_d") {

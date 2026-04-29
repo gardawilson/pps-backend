@@ -494,13 +494,8 @@ exports.updateWashingCascade = async (payload) => {
   const details = Array.isArray(payload?.details) ? payload.details : null; // null => tidak sentuh details
 
   const NoProduksi = payload?.NoProduksi?.toString().trim() || null;
-  const NoBongkarSusun = payload?.NoBongkarSusun?.toString().trim() || null;
 
   const hasProduksi = !!NoProduksi;
-  const hasBongkar = !!NoBongkarSusun;
-  if (hasProduksi && hasBongkar) {
-    throw badReq("NoProduksi dan NoBongkarSusun tidak boleh diisi bersamaan");
-  }
 
   // =====================================================
   // [AUDIT] actorId + requestId (ID only)
@@ -612,6 +607,19 @@ exports.updateWashingCascade = async (payload) => {
       throw e;
     }
 
+    // Cek apakah NoWashing berasal dari BongkarSusun — jika ya, tolak edit
+    const bsiCheck = await new sql.Request(tx)
+      .input("NoWashing", sql.VarChar(50), NoWashing)
+      .query(
+        `SELECT TOP 1 1 FROM dbo.BongkarSusunOutputWashing WHERE NoWashing = @NoWashing`,
+      );
+
+    if (bsiCheck.recordset.length > 0) {
+      throw conflict(
+        "Data tidak dapat diubah: label ini berasal dari Bongkar Susun.",
+      );
+    }
+
     const existingDateCreate = exist.recordset[0]?.DateCreate;
     const existingDateOnly = toDateOnly(existingDateCreate);
 
@@ -718,12 +726,6 @@ exports.updateWashingCascade = async (payload) => {
         .query(
           `DELETE FROM dbo.WashingProduksiOutput WHERE NoWashing = @NoWashing`,
         );
-
-      await new sql.Request(tx)
-        .input("NoWashing", sql.VarChar(50), NoWashing)
-        .query(
-          `DELETE FROM dbo.BongkarSusunOutputWashing WHERE NoWashing = @NoWashing`,
-        );
     }
 
     // 2) Replace details (DateUsage IS NULL) — BULK (kalau dikirim)
@@ -764,9 +766,10 @@ exports.updateWashingCascade = async (payload) => {
     let outputTarget = null;
     let outputCount = 0;
 
-    const sentAnyOutputField =
-      Object.prototype.hasOwnProperty.call(payload, "NoProduksi") ||
-      Object.prototype.hasOwnProperty.call(payload, "NoBongkarSusun");
+    const sentAnyOutputField = Object.prototype.hasOwnProperty.call(
+      payload,
+      "NoProduksi",
+    );
 
     if (sentAnyOutputField) {
       // reset outputs (idempotent)
@@ -774,12 +777,6 @@ exports.updateWashingCascade = async (payload) => {
         .input("NoWashing", sql.VarChar(50), NoWashing)
         .query(
           `DELETE FROM dbo.WashingProduksiOutput WHERE NoWashing = @NoWashing`,
-        );
-
-      await new sql.Request(tx)
-        .input("NoWashing", sql.VarChar(50), NoWashing)
-        .query(
-          `DELETE FROM dbo.BongkarSusunOutputWashing WHERE NoWashing = @NoWashing`,
         );
 
       // Ambil NoSak sumber:
@@ -828,25 +825,6 @@ exports.updateWashingCascade = async (payload) => {
 
         outputCount = noSakCount;
         outputTarget = "WashingProduksiOutput";
-      } else if (hasBongkar) {
-        const insertBsoBulkSql = `
-          INSERT INTO dbo.BongkarSusunOutputWashing (NoBongkarSusun, NoWashing, NoSak)
-          SELECT
-            @NoBongkarSusun,
-            @NoWashing,
-            j.NoSak
-          FROM OPENJSON(@NoSakJson)
-          WITH (NoSak int '$.NoSak') AS j;
-        `;
-
-        await new sql.Request(tx)
-          .input("NoBongkarSusun", sql.VarChar(50), NoBongkarSusun)
-          .input("NoWashing", sql.VarChar(50), NoWashing)
-          .input("NoSakJson", sql.NVarChar(sql.MAX), noSakJson)
-          .query(insertBsoBulkSql);
-
-        outputCount = noSakCount;
-        outputTarget = "BongkarSusunOutputWashing";
       }
     }
 

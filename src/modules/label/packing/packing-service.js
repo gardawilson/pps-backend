@@ -55,35 +55,41 @@ exports.getAll = async ({ page, limit, search, includeUsed = false }) => {
       bj.Blok,
       bj.IdLokasi,
 
-      -- 🔗 TIPE SUMBER (PACKING / INJECT / BONGKAR_SUSUN / RETUR)
+      -- 🔗 TIPE SUMBER (PACKING / INJECT / BONGKAR_SUSUN / RETUR / SORTIR_REJECT)
       CASE
         WHEN MAX(packmap.NoPacking)        IS NOT NULL THEN 'PACKING'
         WHEN MAX(injmap.NoProduksi)       IS NOT NULL THEN 'INJECT'
         WHEN MAX(bsmap.NoBongkarSusun)    IS NOT NULL THEN 'BONGKAR_SUSUN'
         WHEN MAX(retmap.NoRetur)          IS NOT NULL THEN 'RETUR'
+        WHEN MAX(srmap.NoBJSortir)        IS NOT NULL THEN 'SORTIR_REJECT'
         ELSE NULL
       END AS OutputType,
 
-      -- 🔗 KODE SUMBER (NoPacking / NoProduksi / NoBongkarSusun / NoRetur)
+      -- 🔗 KODE SUMBER
       MAX(
         COALESCE(
           packmap.NoPacking,
           injmap.NoProduksi,
           bsmap.NoBongkarSusun,
-          retmap.NoRetur
+          retmap.NoRetur,
+          srmap.NoBJSortir
         )
       ) AS OutputCode,
 
-      -- 🔗 NAMA MESIN / NAMA PEMBELI / 'Bongkar Susun'
+      -- 🔗 NAMA MESIN / NAMA PEMBELI / 'Bongkar Susun' / 'Sortir Reject'
       MAX(
         COALESCE(
           mPack.NamaMesin,
           mInj.NamaMesin,
-          CASE 
-            WHEN bsmap.NoBongkarSusun IS NOT NULL 
-              THEN 'Bongkar Susun' 
+          CASE
+            WHEN bsmap.NoBongkarSusun IS NOT NULL
+              THEN 'Bongkar Susun'
           END,
-          pemb.NamaPembeli
+          pemb.NamaPembeli,
+          CASE
+            WHEN srmap.NoBJSortir IS NOT NULL
+              THEN 'Sortir Reject'
+          END
         )
       ) AS OutputNamaMesin
 
@@ -139,6 +145,12 @@ exports.getAll = async ({ page, limit, search, includeUsed = false }) => {
     LEFT JOIN [dbo].[BongkarSusunOutputBarangjadi] bsmap
            ON bsmap.NoBJ = bj.NoBJ
 
+    ----------------------------------------------------------------------
+    -- 🔗 MAPPING SORTIR REJECT
+    ----------------------------------------------------------------------
+    LEFT JOIN [dbo].[BJSortirRejectOutputLabelBarangJadi] srmap
+           ON srmap.NoBJ = bj.NoBJ
+
     WHERE 1=1
       ${dateUsageFilter}
       ${
@@ -155,6 +167,7 @@ exports.getAll = async ({ page, limit, search, includeUsed = false }) => {
                OR ISNULL(injmap.NoProduksi,'')        LIKE @search
                OR ISNULL(bsmap.NoBongkarSusun,'')     LIKE @search
                OR ISNULL(retmap.NoRetur,'')           LIKE @search
+               OR ISNULL(srmap.NoBJSortir,'')         LIKE @search
 
                -- cari berdasarkan nama mesin / pembeli
                OR ISNULL(mPack.NamaMesin,'')          LIKE @search
@@ -209,6 +222,9 @@ exports.getAll = async ({ page, limit, search, includeUsed = false }) => {
     LEFT JOIN [dbo].[BongkarSusunOutputBarangjadi] bsmap
            ON bsmap.NoBJ = bj.NoBJ
 
+    LEFT JOIN [dbo].[BJSortirRejectOutputLabelBarangJadi] srmap
+           ON srmap.NoBJ = bj.NoBJ
+
     WHERE 1=1
       ${dateUsageFilter}
       ${
@@ -223,6 +239,7 @@ exports.getAll = async ({ page, limit, search, includeUsed = false }) => {
                OR ISNULL(injmap.NoProduksi,'')        LIKE @search
                OR ISNULL(bsmap.NoBongkarSusun,'')     LIKE @search
                OR ISNULL(retmap.NoRetur,'')           LIKE @search
+               OR ISNULL(srmap.NoBJSortir,'')         LIKE @search
                OR ISNULL(mPack.NamaMesin,'')          LIKE @search
                OR ISNULL(mInj.NamaMesin,'')           LIKE @search
                OR ISNULL(pemb.NamaPembeli,'')         LIKE @search
@@ -671,6 +688,17 @@ exports.updatePacking = async (noBJ, payload) => {
       throw notFound("Barang Jadi not found");
     }
 
+    const bsoCheck = await new sql.Request(tx)
+      .input("NoBJ", sql.VarChar(50), noBJ)
+      .query(
+        `SELECT TOP 1 1 FROM dbo.BongkarSusunOutputBarangjadi WHERE NoBJ = @NoBJ`,
+      );
+    if (bsoCheck.recordset.length > 0) {
+      throw conflict(
+        "Data tidak dapat diubah: label ini berasal dari Bongkar Susun.",
+      );
+    }
+
     const current = existingRes.recordset[0];
 
     const existingDateCreate = current.DateCreate
@@ -774,15 +802,12 @@ exports.updatePacking = async (noBJ, payload) => {
         } else if (outputCode.startsWith("S.")) {
           outputType = "INJECT";
           mappingTable = "InjectProduksiOutputBarangJadi";
-        } else if (outputCode.startsWith("BG.")) {
-          outputType = "BONGKAR_SUSUN";
-          mappingTable = "BongkarSusunOutputBarangjadi";
         } else if (outputCode.startsWith("L.")) {
           outputType = "RETUR";
           mappingTable = "BJReturBarangJadi_d";
         } else
           throw badReq(
-            "outputCode prefix not recognized (supported: BD., S., BG., L.)",
+            "outputCode prefix not recognized (supported: BD., S., L.)",
           );
 
         await deleteAllMappingsBJ(tx, noBJ);
@@ -799,11 +824,6 @@ exports.updatePacking = async (noBJ, payload) => {
         } else if (mappingTable === "InjectProduksiOutputBarangJadi") {
           await rqMap.query(`
             INSERT INTO [dbo].[InjectProduksiOutputBarangJadi] (NoProduksi, NoBJ)
-            VALUES (@OutputCode, @NoBJ);
-          `);
-        } else if (mappingTable === "BongkarSusunOutputBarangjadi") {
-          await rqMap.query(`
-            INSERT INTO [dbo].[BongkarSusunOutputBarangjadi] (NoBongkarSusun, NoBJ)
             VALUES (@OutputCode, @NoBJ);
           `);
         } else if (mappingTable === "BJReturBarangJadi_d") {

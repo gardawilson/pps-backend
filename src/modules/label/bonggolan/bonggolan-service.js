@@ -412,14 +412,13 @@ exports.updateBonggolanCascade = async (payload) => {
 
   // Identify processedType from ProcessedCode (optional)
   const hasProcessed = processedCode.length > 0;
-  let processedType = null; // 'BROKER' | 'INJECT' | 'BONGKAR' | null
+  let processedType = null; // 'BROKER' | 'INJECT' | null
   if (hasProcessed) {
     if (processedCode.startsWith("E.")) processedType = "BROKER";
     else if (processedCode.startsWith("S.")) processedType = "INJECT";
-    else if (processedCode.startsWith("BG.")) processedType = "BONGKAR";
     else
       throw badReq(
-        "ProcessedCode prefix tidak dikenali (pakai E., S., atau BG.)",
+        "ProcessedCode prefix tidak dikenali (pakai E. atau S.)",
       );
   }
 
@@ -449,6 +448,19 @@ exports.updateBonggolanCascade = async (payload) => {
 
     if (exist.recordset.length === 0) {
       throw notFound(`NoBonggolan ${NoBonggolan} tidak ditemukan`);
+    }
+
+    // Cek apakah NoBonggolan berasal dari BongkarSusun — jika ya, tolak edit
+    const bsoCheck = await new sql.Request(tx)
+      .input("NoBonggolan", sql.VarChar(50), NoBonggolan)
+      .query(
+        `SELECT TOP 1 1 FROM dbo.BongkarSusunOutputBonggolan WHERE NoBonggolan = @NoBonggolan`,
+      );
+
+    if (bsoCheck.recordset.length > 0) {
+      throw conflict(
+        "Data tidak dapat diubah: label ini berasal dari Bongkar Susun.",
+      );
     }
 
     const existingDateCreate = exist.recordset[0]?.DateCreate;
@@ -580,12 +592,6 @@ exports.updateBonggolanCascade = async (payload) => {
           `DELETE FROM dbo.InjectProduksiOutputBonggolan WHERE NoBonggolan = @NoBonggolan`,
         );
 
-      await new sql.Request(tx)
-        .input("NoBonggolan", sql.VarChar(50), NoBonggolan)
-        .query(
-          `DELETE FROM dbo.BongkarSusunInputBonggolan WHERE NoBonggolan = @NoBonggolan`,
-        );
-
       // kalau processedCode kosong => user ingin "lepas relasi"
       if (hasProcessed) {
         if (processedType === "BROKER") {
@@ -604,14 +610,6 @@ exports.updateBonggolanCascade = async (payload) => {
               VALUES (@NoProduksi, @NoBonggolan);
             `);
           mappingTable = "InjectProduksiOutputBonggolan";
-        } else if (processedType === "BONGKAR") {
-          await new sql.Request(tx)
-            .input("NoBongkarSusun", sql.VarChar(50), processedCode)
-            .input("NoBonggolan", sql.VarChar(50), NoBonggolan).query(`
-              INSERT INTO dbo.BongkarSusunInputBonggolan (NoBongkarSusun, NoBonggolan)
-              VALUES (@NoBongkarSusun, @NoBonggolan);
-            `);
-          mappingTable = "BongkarSusunInputBonggolan";
         }
       }
     }

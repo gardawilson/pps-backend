@@ -405,12 +405,11 @@ exports.updateCrusherCascade = async (payload) => {
 
   // Identify processedType from ProcessedCode (optional)
   const hasProcessed = processedCode.length > 0;
-  let processedType = null; // 'PRODUKSI' | 'BONGKAR' | null
+  let processedType = null; // 'PRODUKSI' | null
   if (hasProcessed) {
     if (processedCode.startsWith("G.")) processedType = "PRODUKSI";
-    else if (processedCode.startsWith("BG.")) processedType = "BONGKAR";
     else
-      throw badReq("ProcessedCode prefix tidak dikenali (pakai G. atau BG.)");
+      throw badReq("ProcessedCode prefix tidak dikenali (pakai G.)");
   }
 
   try {
@@ -439,6 +438,19 @@ exports.updateCrusherCascade = async (payload) => {
 
     if (exist.recordset.length === 0) {
       throw notFound(`NoCrusher ${NoCrusher} tidak ditemukan`);
+    }
+
+    // Cek apakah NoCrusher berasal dari BongkarSusun — jika ya, tolak edit
+    const bsoCheck = await new sql.Request(tx)
+      .input("NoCrusher", sql.VarChar(50), NoCrusher)
+      .query(
+        `SELECT TOP 1 1 FROM dbo.BongkarSusunOutputCrusher WHERE NoCrusher = @NoCrusher`,
+      );
+
+    if (bsoCheck.recordset.length > 0) {
+      throw conflict(
+        "Data tidak dapat diubah: label ini berasal dari Bongkar Susun.",
+      );
     }
 
     const existingDateCreate = exist.recordset[0]?.DateCreate;
@@ -553,31 +565,15 @@ exports.updateCrusherCascade = async (payload) => {
           `DELETE FROM dbo.CrusherProduksiOutput WHERE NoCrusher = @NoCrusher`,
         );
 
-      await new sql.Request(tx)
-        .input("NoCrusher", sql.VarChar(50), NoCrusher)
-        .query(
-          `DELETE FROM dbo.BongkarSusunOutputCrusher WHERE NoCrusher = @NoCrusher`,
-        );
-
       // kalau processedCode kosong => artinya user ingin "lepas relasi"
-      if (hasProcessed) {
-        if (processedType === "PRODUKSI") {
-          await new sql.Request(tx)
-            .input("NoCrusherProduksi", sql.VarChar(50), processedCode)
-            .input("NoCrusher", sql.VarChar(50), NoCrusher).query(`
-              INSERT INTO dbo.CrusherProduksiOutput (NoCrusherProduksi, NoCrusher)
-              VALUES (@NoCrusherProduksi, @NoCrusher);
-            `);
-          mappingTable = "CrusherProduksiOutput";
-        } else if (processedType === "BONGKAR") {
-          await new sql.Request(tx)
-            .input("NoBongkarSusun", sql.VarChar(50), processedCode)
-            .input("NoCrusher", sql.VarChar(50), NoCrusher).query(`
-              INSERT INTO dbo.BongkarSusunOutputCrusher (NoBongkarSusun, NoCrusher)
-              VALUES (@NoBongkarSusun, @NoCrusher);
-            `);
-          mappingTable = "BongkarSusunOutputCrusher";
-        }
+      if (hasProcessed && processedType === "PRODUKSI") {
+        await new sql.Request(tx)
+          .input("NoCrusherProduksi", sql.VarChar(50), processedCode)
+          .input("NoCrusher", sql.VarChar(50), NoCrusher).query(`
+            INSERT INTO dbo.CrusherProduksiOutput (NoCrusherProduksi, NoCrusher)
+            VALUES (@NoCrusherProduksi, @NoCrusher);
+          `);
+        mappingTable = "CrusherProduksiOutput";
       }
     }
 

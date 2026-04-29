@@ -660,10 +660,7 @@ exports.updateMixerCascade = async (payload) => {
     if (rawOutputCode) {
       const upper = rawOutputCode.toUpperCase();
 
-      if (upper.startsWith("BG.")) {
-        NoBongkarSusun = rawOutputCode;
-        outputKind = "BONGKAR";
-      } else if (upper.startsWith("I.")) {
+      if (upper.startsWith("I.")) {
         NoProduksiMixer = rawOutputCode;
         outputKind = "MIXER_PRODUKSI";
       } else if (upper.startsWith("S.")) {
@@ -671,7 +668,7 @@ exports.updateMixerCascade = async (payload) => {
         outputKind = "INJECT";
       } else {
         const e = new Error(
-          'outputCode must start with "BG.", "I." or "S." if provided',
+          'outputCode must start with "I." or "S." if provided',
         );
         e.statusCode = 400;
         throw e;
@@ -763,6 +760,19 @@ exports.updateMixerCascade = async (payload) => {
       const e = new Error(`NoMixer ${NoMixer} not found`);
       e.statusCode = 404;
       throw e;
+    }
+
+    // Cek apakah NoMixer berasal dari BongkarSusun — jika ya, tolak edit
+    const bsoCheck = await new sql.Request(tx)
+      .input("NoMixer", sql.VarChar(50), NoMixer)
+      .query(
+        `SELECT TOP 1 1 FROM dbo.BongkarSusunOutputMixer WHERE NoMixer = @NoMixer`,
+      );
+
+    if (bsoCheck.recordset.length > 0) {
+      throw conflict(
+        "Data tidak dapat diubah: label ini berasal dari Bongkar Susun.",
+      );
     }
 
     const existingDateCreate = head.recordset[0]?.DateCreate
@@ -929,7 +939,6 @@ exports.updateMixerCascade = async (payload) => {
       await new sql.Request(tx).input("NoMixer", sql.VarChar(50), NoMixer)
         .query(`
           DELETE FROM dbo.MixerProduksiOutput WHERE NoMixer = @NoMixer;
-          DELETE FROM dbo.BongkarSusunOutputMixer WHERE NoMixer = @NoMixer;
           DELETE FROM dbo.InjectProduksiOutputMixer WHERE NoMixer = @NoMixer;
         `);
 
@@ -977,37 +986,6 @@ exports.updateMixerCascade = async (payload) => {
           }
 
           outputTarget = "MixerProduksiOutput";
-        } else if (NoBongkarSusun) {
-          if (sourceMode === "JSON") {
-            const q = `
-              INSERT INTO dbo.BongkarSusunOutputMixer (NoBongkarSusun, NoMixer, NoSak)
-              SELECT @NoBongkarSusun, @NoMixer, j.NoSak
-              FROM OPENJSON(@DetailsJson)
-              WITH (NoSak int '$.NoSak') AS j;
-            `;
-            await new sql.Request(tx)
-              .input("NoBongkarSusun", sql.VarChar(50), NoBongkarSusun)
-              .input("NoMixer", sql.VarChar(50), NoMixer)
-              .input("DetailsJson", sql.NVarChar(sql.MAX), detailsJson)
-              .query(q);
-
-            outputCount = hasDetailsField ? normalizedDetails.length : 0;
-          } else {
-            const q = `
-              INSERT INTO dbo.BongkarSusunOutputMixer (NoBongkarSusun, NoMixer, NoSak)
-              SELECT @NoBongkarSusun, @NoMixer, d.NoSak
-              FROM dbo.Mixer_d d
-              WHERE d.NoMixer=@NoMixer AND d.DateUsage IS NULL;
-            `;
-            const r = await new sql.Request(tx)
-              .input("NoBongkarSusun", sql.VarChar(50), NoBongkarSusun)
-              .input("NoMixer", sql.VarChar(50), NoMixer)
-              .query(q);
-
-            outputCount = r.rowsAffected?.[0] || 0;
-          }
-
-          outputTarget = "BongkarSusunOutputMixer";
         } else if (NoProduksiInject) {
           if (sourceMode === "JSON") {
             const q = `

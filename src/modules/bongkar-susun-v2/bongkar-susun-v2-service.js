@@ -337,6 +337,17 @@ exports.getAll = async (page = 1, pageSize = 20, search = "") => {
       ) cat
       OUTER APPLY (
         SELECT CASE
+          WHEN (
+            (CASE WHEN EXISTS(SELECT 1 FROM dbo.BongkarSusunInputBahanBaku  WHERE NoBongkarSusun = h.NoBongkarSusun) OR EXISTS(SELECT 1 FROM dbo.BongkarSusunOutputBahanBaku   WHERE NoBongkarSusun = h.NoBongkarSusun) THEN 1 ELSE 0 END) +
+            (CASE WHEN EXISTS(SELECT 1 FROM dbo.BongkarSusunInputWashing    WHERE NoBongkarSusun = h.NoBongkarSusun) OR EXISTS(SELECT 1 FROM dbo.BongkarSusunOutputWashing      WHERE NoBongkarSusun = h.NoBongkarSusun) THEN 1 ELSE 0 END) +
+            (CASE WHEN EXISTS(SELECT 1 FROM dbo.BongkarSusunInputBroker     WHERE NoBongkarSusun = h.NoBongkarSusun) OR EXISTS(SELECT 1 FROM dbo.BongkarSusunOutputBroker       WHERE NoBongkarSusun = h.NoBongkarSusun) THEN 1 ELSE 0 END) +
+            (CASE WHEN EXISTS(SELECT 1 FROM dbo.BongkarSusunInputCrusher    WHERE NoBongkarSusun = h.NoBongkarSusun) OR EXISTS(SELECT 1 FROM dbo.BongkarSusunOutputCrusher      WHERE NoBongkarSusun = h.NoBongkarSusun) THEN 1 ELSE 0 END) +
+            (CASE WHEN EXISTS(SELECT 1 FROM dbo.BongkarSusunInputGilingan   WHERE NoBongkarSusun = h.NoBongkarSusun) OR EXISTS(SELECT 1 FROM dbo.BongkarSusunOutputGilingan     WHERE NoBongkarSusun = h.NoBongkarSusun) THEN 1 ELSE 0 END) +
+            (CASE WHEN EXISTS(SELECT 1 FROM dbo.BongkarSusunInputMixer      WHERE NoBongkarSusun = h.NoBongkarSusun) OR EXISTS(SELECT 1 FROM dbo.BongkarSusunOutputMixer        WHERE NoBongkarSusun = h.NoBongkarSusun) THEN 1 ELSE 0 END) +
+            (CASE WHEN EXISTS(SELECT 1 FROM dbo.BongkarSusunInputFurnitureWIP WHERE NoBongkarSusun = h.NoBongkarSusun) OR EXISTS(SELECT 1 FROM dbo.BongkarSusunOutputFurnitureWIP WHERE NoBongkarSusun = h.NoBongkarSusun) THEN 1 ELSE 0 END) +
+            (CASE WHEN EXISTS(SELECT 1 FROM dbo.BongkarSusunInputBarangJadi WHERE NoBongkarSusun = h.NoBongkarSusun) OR EXISTS(SELECT 1 FROM dbo.BongkarSusunOutputBarangjadi  WHERE NoBongkarSusun = h.NoBongkarSusun) THEN 1 ELSE 0 END) +
+            (CASE WHEN EXISTS(SELECT 1 FROM dbo.BongkarSusunInputBonggolan  WHERE NoBongkarSusun = h.NoBongkarSusun) OR EXISTS(SELECT 1 FROM dbo.BongkarSusunOutputBonggolan   WHERE NoBongkarSusun = h.NoBongkarSusun) THEN 1 ELSE 0 END)
+          ) > 1 THEN CAST(0 AS bit)
           WHEN cat.category = 'bahanBaku' THEN
             CASE
               WHEN ABS(

@@ -737,6 +737,7 @@ exports.getDetail = async (noBongkarSusun) => {
       INNER JOIN dbo.BahanBaku_d d
         ON d.NoBahanBaku = ib.NoBahanBaku
        AND d.NoPallet = ib.NoPallet
+       AND d.NoSak = ib.NoSak
       LEFT JOIN PartialAgg pa
         ON pa.NoBahanBaku = d.NoBahanBaku
        AND pa.NoPallet = d.NoPallet
@@ -1016,6 +1017,7 @@ exports.getDetail = async (noBongkarSusun) => {
       INNER JOIN dbo.BahanBaku_d d
         ON d.NoBahanBaku = ob.NoBahanBaku
        AND d.NoPallet = ob.NoPallet
+       AND d.NoSak = ob.NoSak
       LEFT JOIN PartialAgg pa
         ON pa.NoBahanBaku = d.NoBahanBaku
        AND pa.NoPallet = d.NoPallet

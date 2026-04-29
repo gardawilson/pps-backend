@@ -59,7 +59,7 @@ exports.getLabelInfo = async (labelCode) => {
   return fn(code);
 };
 
-// â”€â”€â”€ GET list BongkarSusun v2 â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
+// â”€â”€â”€ GET list BongkarSusun v2
 exports.getAll = async (page = 1, pageSize = 20, search = "") => {
   const pool = await poolPromise;
   const p = Math.max(1, Number(page) || 1);
@@ -350,64 +350,62 @@ exports.getAll = async (page = 1, pageSize = 20, search = "") => {
           ) > 1 THEN CAST(0 AS bit)
           WHEN cat.category = 'bahanBaku' THEN
             CASE
+              WHEN EXISTS (
+                SELECT ph.IdJenisPlastik FROM dbo.BongkarSusunInputBahanBaku ib
+                INNER JOIN dbo.BahanBakuPallet_h ph ON ph.NoBahanBaku = ib.NoBahanBaku AND ph.NoPallet = ib.NoPallet
+                WHERE ib.NoBongkarSusun = h.NoBongkarSusun
+                EXCEPT
+                SELECT ph.IdJenisPlastik FROM dbo.BongkarSusunOutputBahanBaku ob
+                INNER JOIN dbo.BahanBakuPallet_h ph ON ph.NoBahanBaku = ob.NoBahanBaku AND ph.NoPallet = ob.NoPallet
+                WHERE ob.NoBongkarSusun = h.NoBongkarSusun
+              ) OR EXISTS (
+                SELECT ph.IdJenisPlastik FROM dbo.BongkarSusunOutputBahanBaku ob
+                INNER JOIN dbo.BahanBakuPallet_h ph ON ph.NoBahanBaku = ob.NoBahanBaku AND ph.NoPallet = ob.NoPallet
+                WHERE ob.NoBongkarSusun = h.NoBongkarSusun
+                EXCEPT
+                SELECT ph.IdJenisPlastik FROM dbo.BongkarSusunInputBahanBaku ib
+                INNER JOIN dbo.BahanBakuPallet_h ph ON ph.NoBahanBaku = ib.NoBahanBaku AND ph.NoPallet = ib.NoPallet
+                WHERE ib.NoBongkarSusun = h.NoBongkarSusun
+              ) THEN CAST(0 AS bit)
               WHEN ABS(
                 ISNULL((
-                  SELECT SUM(
-                    CASE
-                      WHEN d.IsPartial = 1 THEN
-                        CASE
-                          WHEN ISNULL(d.Berat, 0) - ISNULL(pa.PartialBerat, 0) < 0 THEN 0
-                          ELSE ISNULL(d.Berat, 0) - ISNULL(pa.PartialBerat, 0)
-                        END
-                      ELSE ISNULL(d.Berat, 0)
-                    END
-                  )
+                  SELECT SUM(ISNULL(d.Berat, 0))
                   FROM dbo.BongkarSusunInputBahanBaku ib
                   INNER JOIN dbo.BahanBaku_d d
                     ON d.NoBahanBaku = ib.NoBahanBaku
                    AND d.NoPallet = ib.NoPallet
                    AND d.NoSak = ib.NoSak
-                  LEFT JOIN (
-                    SELECT NoBahanBaku, NoPallet, NoSak,
-                           SUM(ISNULL(Berat, 0)) AS PartialBerat
-                    FROM dbo.BahanBakuPartial
-                    GROUP BY NoBahanBaku, NoPallet, NoSak
-                  ) pa
-                    ON pa.NoBahanBaku = d.NoBahanBaku
-                   AND pa.NoPallet = d.NoPallet
-                   AND pa.NoSak = d.NoSak
                   WHERE ib.NoBongkarSusun = h.NoBongkarSusun
                 ), 0) -
                 ISNULL((
-                  SELECT SUM(
-                    CASE
-                      WHEN d.IsPartial = 1 THEN
-                        CASE
-                          WHEN ISNULL(d.Berat, 0) - ISNULL(pa.PartialBerat, 0) < 0 THEN 0
-                          ELSE ISNULL(d.Berat, 0) - ISNULL(pa.PartialBerat, 0)
-                        END
-                      ELSE ISNULL(d.Berat, 0)
-                    END
-                  )
+                  SELECT SUM(ISNULL(d.Berat, 0))
                   FROM dbo.BongkarSusunOutputBahanBaku ob
-                  INNER JOIN dbo.BahanBaku_d d
+                  LEFT JOIN dbo.BahanBaku_d d
                     ON d.NoBahanBaku = ob.NoBahanBaku
                    AND d.NoPallet = ob.NoPallet
                    AND d.NoSak = ob.NoSak
-                  LEFT JOIN (
-                    SELECT NoBahanBaku, NoPallet, NoSak,
-                           SUM(ISNULL(Berat, 0)) AS PartialBerat
-                    FROM dbo.BahanBakuPartial
-                    GROUP BY NoBahanBaku, NoPallet, NoSak
-                  ) pa
-                    ON pa.NoBahanBaku = d.NoBahanBaku
-                   AND pa.NoPallet = d.NoPallet
-                   AND pa.NoSak = d.NoSak
                   WHERE ob.NoBongkarSusun = h.NoBongkarSusun
                 ), 0)
               ) < 0.001 THEN CAST(1 AS bit) ELSE CAST(0 AS bit) END
           WHEN cat.category = 'washing' THEN
             CASE
+              WHEN EXISTS (
+                SELECT wh.IdJenisPlastik FROM dbo.BongkarSusunInputWashing iw
+                INNER JOIN dbo.Washing_h wh ON wh.NoWashing = iw.NoWashing
+                WHERE iw.NoBongkarSusun = h.NoBongkarSusun
+                EXCEPT
+                SELECT wh.IdJenisPlastik FROM dbo.BongkarSusunOutputWashing ow
+                INNER JOIN dbo.Washing_h wh ON wh.NoWashing = ow.NoWashing
+                WHERE ow.NoBongkarSusun = h.NoBongkarSusun
+              ) OR EXISTS (
+                SELECT wh.IdJenisPlastik FROM dbo.BongkarSusunOutputWashing ow
+                INNER JOIN dbo.Washing_h wh ON wh.NoWashing = ow.NoWashing
+                WHERE ow.NoBongkarSusun = h.NoBongkarSusun
+                EXCEPT
+                SELECT wh.IdJenisPlastik FROM dbo.BongkarSusunInputWashing iw
+                INNER JOIN dbo.Washing_h wh ON wh.NoWashing = iw.NoWashing
+                WHERE iw.NoBongkarSusun = h.NoBongkarSusun
+              ) THEN CAST(0 AS bit)
               WHEN ABS(
                 ISNULL((
                   SELECT SUM(ISNULL(d.Berat, 0))
@@ -428,6 +426,23 @@ exports.getAll = async (page = 1, pageSize = 20, search = "") => {
               ) < 0.001 THEN CAST(1 AS bit) ELSE CAST(0 AS bit) END
           WHEN cat.category = 'broker' THEN
             CASE
+              WHEN EXISTS (
+                SELECT bh.IdJenisPlastik FROM dbo.BongkarSusunInputBroker ib
+                INNER JOIN dbo.Broker_h bh ON bh.NoBroker = ib.NoBroker
+                WHERE ib.NoBongkarSusun = h.NoBongkarSusun
+                EXCEPT
+                SELECT bh.IdJenisPlastik FROM dbo.BongkarSusunOutputBroker ob
+                INNER JOIN dbo.Broker_h bh ON bh.NoBroker = ob.NoBroker
+                WHERE ob.NoBongkarSusun = h.NoBongkarSusun
+              ) OR EXISTS (
+                SELECT bh.IdJenisPlastik FROM dbo.BongkarSusunOutputBroker ob
+                INNER JOIN dbo.Broker_h bh ON bh.NoBroker = ob.NoBroker
+                WHERE ob.NoBongkarSusun = h.NoBongkarSusun
+                EXCEPT
+                SELECT bh.IdJenisPlastik FROM dbo.BongkarSusunInputBroker ib
+                INNER JOIN dbo.Broker_h bh ON bh.NoBroker = ib.NoBroker
+                WHERE ib.NoBongkarSusun = h.NoBongkarSusun
+              ) THEN CAST(0 AS bit)
               WHEN ABS(
                 ISNULL((
                   SELECT SUM(ISNULL(d.Berat, 0))
@@ -448,6 +463,23 @@ exports.getAll = async (page = 1, pageSize = 20, search = "") => {
               ) < 0.001 THEN CAST(1 AS bit) ELSE CAST(0 AS bit) END
           WHEN cat.category = 'crusher' THEN
             CASE
+              WHEN EXISTS (
+                SELECT c.IdCrusher FROM dbo.BongkarSusunInputCrusher ic
+                INNER JOIN dbo.Crusher c ON c.NoCrusher = ic.NoCrusher
+                WHERE ic.NoBongkarSusun = h.NoBongkarSusun
+                EXCEPT
+                SELECT c.IdCrusher FROM dbo.BongkarSusunOutputCrusher oc
+                INNER JOIN dbo.Crusher c ON c.NoCrusher = oc.NoCrusher
+                WHERE oc.NoBongkarSusun = h.NoBongkarSusun
+              ) OR EXISTS (
+                SELECT c.IdCrusher FROM dbo.BongkarSusunOutputCrusher oc
+                INNER JOIN dbo.Crusher c ON c.NoCrusher = oc.NoCrusher
+                WHERE oc.NoBongkarSusun = h.NoBongkarSusun
+                EXCEPT
+                SELECT c.IdCrusher FROM dbo.BongkarSusunInputCrusher ic
+                INNER JOIN dbo.Crusher c ON c.NoCrusher = ic.NoCrusher
+                WHERE ic.NoBongkarSusun = h.NoBongkarSusun
+              ) THEN CAST(0 AS bit)
               WHEN ABS(
                 ISNULL((
                   SELECT SUM(ISNULL(c.Berat, 0))
@@ -464,6 +496,23 @@ exports.getAll = async (page = 1, pageSize = 20, search = "") => {
               ) < 0.001 THEN CAST(1 AS bit) ELSE CAST(0 AS bit) END
           WHEN cat.category = 'gilingan' THEN
             CASE
+              WHEN EXISTS (
+                SELECT g.IdGilingan FROM dbo.BongkarSusunInputGilingan ig
+                INNER JOIN dbo.Gilingan g ON g.NoGilingan = ig.NoGilingan
+                WHERE ig.NoBongkarSusun = h.NoBongkarSusun
+                EXCEPT
+                SELECT g.IdGilingan FROM dbo.BongkarSusunOutputGilingan og
+                INNER JOIN dbo.Gilingan g ON g.NoGilingan = og.NoGilingan
+                WHERE og.NoBongkarSusun = h.NoBongkarSusun
+              ) OR EXISTS (
+                SELECT g.IdGilingan FROM dbo.BongkarSusunOutputGilingan og
+                INNER JOIN dbo.Gilingan g ON g.NoGilingan = og.NoGilingan
+                WHERE og.NoBongkarSusun = h.NoBongkarSusun
+                EXCEPT
+                SELECT g.IdGilingan FROM dbo.BongkarSusunInputGilingan ig
+                INNER JOIN dbo.Gilingan g ON g.NoGilingan = ig.NoGilingan
+                WHERE ig.NoBongkarSusun = h.NoBongkarSusun
+              ) THEN CAST(0 AS bit)
               WHEN ABS(
                 ISNULL((
                   SELECT SUM(
@@ -486,28 +535,31 @@ exports.getAll = async (page = 1, pageSize = 20, search = "") => {
                   WHERE ig.NoBongkarSusun = h.NoBongkarSusun
                 ), 0) -
                 ISNULL((
-                  SELECT SUM(
-                    CASE
-                      WHEN g.IsPartial = 1 THEN
-                        CASE
-                          WHEN ISNULL(g.Berat, 0) - ISNULL(gp.TotalPartial, 0) < 0 THEN 0
-                          ELSE ISNULL(g.Berat, 0) - ISNULL(gp.TotalPartial, 0)
-                        END
-                      ELSE ISNULL(g.Berat, 0)
-                    END
-                  )
+                  SELECT SUM(ISNULL(g.Berat, 0))
                   FROM dbo.BongkarSusunOutputGilingan og
                   INNER JOIN dbo.Gilingan g ON g.NoGilingan = og.NoGilingan
-                  LEFT JOIN (
-                    SELECT NoGilingan, SUM(ISNULL(Berat, 0)) AS TotalPartial
-                    FROM dbo.GilinganPartial
-                    GROUP BY NoGilingan
-                  ) gp ON gp.NoGilingan = g.NoGilingan
                   WHERE og.NoBongkarSusun = h.NoBongkarSusun
                 ), 0)
               ) < 0.001 THEN CAST(1 AS bit) ELSE CAST(0 AS bit) END
           WHEN cat.category = 'mixer' THEN
             CASE
+              WHEN EXISTS (
+                SELECT mh.IdMixer FROM dbo.BongkarSusunInputMixer im
+                INNER JOIN dbo.Mixer_h mh ON mh.NoMixer = im.NoMixer
+                WHERE im.NoBongkarSusun = h.NoBongkarSusun
+                EXCEPT
+                SELECT mh.IdMixer FROM dbo.BongkarSusunOutputMixer om
+                INNER JOIN dbo.Mixer_h mh ON mh.NoMixer = om.NoMixer
+                WHERE om.NoBongkarSusun = h.NoBongkarSusun
+              ) OR EXISTS (
+                SELECT mh.IdMixer FROM dbo.BongkarSusunOutputMixer om
+                INNER JOIN dbo.Mixer_h mh ON mh.NoMixer = om.NoMixer
+                WHERE om.NoBongkarSusun = h.NoBongkarSusun
+                EXCEPT
+                SELECT mh.IdMixer FROM dbo.BongkarSusunInputMixer im
+                INNER JOIN dbo.Mixer_h mh ON mh.NoMixer = im.NoMixer
+                WHERE im.NoBongkarSusun = h.NoBongkarSusun
+              ) THEN CAST(0 AS bit)
               WHEN ABS(
                 ISNULL((
                   SELECT SUM(
@@ -527,25 +579,33 @@ exports.getAll = async (page = 1, pageSize = 20, search = "") => {
                   WHERE im.NoBongkarSusun = h.NoBongkarSusun
                 ), 0) -
                 ISNULL((
-                  SELECT SUM(
-                    ISNULL(d.Berat, 0) - ISNULL(mp.TotalPartial, 0)
-                  )
+                  SELECT SUM(ISNULL(d.Berat, 0))
                   FROM dbo.BongkarSusunOutputMixer om
                   INNER JOIN dbo.Mixer_d d
                     ON d.NoMixer = om.NoMixer
                    AND d.NoSak = om.NoSak
-                  LEFT JOIN (
-                    SELECT NoMixer, NoSak, SUM(ISNULL(Berat, 0)) AS TotalPartial
-                    FROM dbo.MixerPartial
-                    GROUP BY NoMixer, NoSak
-                  ) mp
-                    ON mp.NoMixer = d.NoMixer
-                   AND mp.NoSak = d.NoSak
                   WHERE om.NoBongkarSusun = h.NoBongkarSusun
                 ), 0)
               ) < 0.001 THEN CAST(1 AS bit) ELSE CAST(0 AS bit) END
           WHEN cat.category = 'furnitureWip' THEN
             CASE
+              WHEN EXISTS (
+                SELECT f.IdFurnitureWIP FROM dbo.BongkarSusunInputFurnitureWIP ifw
+                INNER JOIN dbo.FurnitureWIP f ON f.NoFurnitureWIP = ifw.NoFurnitureWIP
+                WHERE ifw.NoBongkarSusun = h.NoBongkarSusun
+                EXCEPT
+                SELECT f.IdFurnitureWIP FROM dbo.BongkarSusunOutputFurnitureWIP ofw
+                INNER JOIN dbo.FurnitureWIP f ON f.NoFurnitureWIP = ofw.NoFurnitureWIP
+                WHERE ofw.NoBongkarSusun = h.NoBongkarSusun
+              ) OR EXISTS (
+                SELECT f.IdFurnitureWIP FROM dbo.BongkarSusunOutputFurnitureWIP ofw
+                INNER JOIN dbo.FurnitureWIP f ON f.NoFurnitureWIP = ofw.NoFurnitureWIP
+                WHERE ofw.NoBongkarSusun = h.NoBongkarSusun
+                EXCEPT
+                SELECT f.IdFurnitureWIP FROM dbo.BongkarSusunInputFurnitureWIP ifw
+                INNER JOIN dbo.FurnitureWIP f ON f.NoFurnitureWIP = ifw.NoFurnitureWIP
+                WHERE ifw.NoBongkarSusun = h.NoBongkarSusun
+              ) THEN CAST(0 AS bit)
               WHEN ABS(
                 ISNULL((
                   SELECT SUM(
@@ -568,28 +628,31 @@ exports.getAll = async (page = 1, pageSize = 20, search = "") => {
                   WHERE ifw.NoBongkarSusun = h.NoBongkarSusun
                 ), 0) -
                 ISNULL((
-                  SELECT SUM(
-                    CASE
-                      WHEN f.IsPartial = 1 THEN
-                        CASE
-                          WHEN ISNULL(f.Pcs, 0) - ISNULL(fp.TotalPartialPcs, 0) < 0 THEN 0
-                          ELSE ISNULL(f.Pcs, 0) - ISNULL(fp.TotalPartialPcs, 0)
-                        END
-                      ELSE ISNULL(f.Pcs, 0)
-                    END
-                  )
+                  SELECT SUM(ISNULL(f.Pcs, 0))
                   FROM dbo.BongkarSusunOutputFurnitureWIP ofw
                   INNER JOIN dbo.FurnitureWIP f ON f.NoFurnitureWIP = ofw.NoFurnitureWIP
-                  LEFT JOIN (
-                    SELECT NoFurnitureWIP, SUM(ISNULL(Pcs, 0)) AS TotalPartialPcs
-                    FROM dbo.FurnitureWIPPartial
-                    GROUP BY NoFurnitureWIP
-                  ) fp ON fp.NoFurnitureWIP = f.NoFurnitureWIP
                   WHERE ofw.NoBongkarSusun = h.NoBongkarSusun
                 ), 0)
               ) < 0.001 THEN CAST(1 AS bit) ELSE CAST(0 AS bit) END
           WHEN cat.category = 'barangJadi' THEN
             CASE
+              WHEN EXISTS (
+                SELECT b.IdBJ FROM dbo.BongkarSusunInputBarangJadi ibj
+                INNER JOIN dbo.BarangJadi b ON b.NoBJ = ibj.NoBJ
+                WHERE ibj.NoBongkarSusun = h.NoBongkarSusun
+                EXCEPT
+                SELECT b.IdBJ FROM dbo.BongkarSusunOutputBarangjadi obj
+                INNER JOIN dbo.BarangJadi b ON b.NoBJ = obj.NoBJ
+                WHERE obj.NoBongkarSusun = h.NoBongkarSusun
+              ) OR EXISTS (
+                SELECT b.IdBJ FROM dbo.BongkarSusunOutputBarangjadi obj
+                INNER JOIN dbo.BarangJadi b ON b.NoBJ = obj.NoBJ
+                WHERE obj.NoBongkarSusun = h.NoBongkarSusun
+                EXCEPT
+                SELECT b.IdBJ FROM dbo.BongkarSusunInputBarangJadi ibj
+                INNER JOIN dbo.BarangJadi b ON b.NoBJ = ibj.NoBJ
+                WHERE ibj.NoBongkarSusun = h.NoBongkarSusun
+              ) THEN CAST(0 AS bit)
               WHEN ABS(
                 ISNULL((
                   SELECT SUM(
@@ -612,28 +675,31 @@ exports.getAll = async (page = 1, pageSize = 20, search = "") => {
                   WHERE ibj.NoBongkarSusun = h.NoBongkarSusun
                 ), 0) -
                 ISNULL((
-                  SELECT SUM(
-                    CASE
-                      WHEN b.IsPartial = 1 THEN
-                        CASE
-                          WHEN ISNULL(b.Pcs, 0) - ISNULL(bp.TotalPartialPcs, 0) < 0 THEN 0
-                          ELSE ISNULL(b.Pcs, 0) - ISNULL(bp.TotalPartialPcs, 0)
-                        END
-                      ELSE ISNULL(b.Pcs, 0)
-                    END
-                  )
+                  SELECT SUM(ISNULL(b.Pcs, 0))
                   FROM dbo.BongkarSusunOutputBarangjadi obj
                   INNER JOIN dbo.BarangJadi b ON b.NoBJ = obj.NoBJ
-                  LEFT JOIN (
-                    SELECT NoBJ, SUM(ISNULL(Pcs, 0)) AS TotalPartialPcs
-                    FROM dbo.BarangJadiPartial
-                    GROUP BY NoBJ
-                  ) bp ON bp.NoBJ = b.NoBJ
                   WHERE obj.NoBongkarSusun = h.NoBongkarSusun
                 ), 0)
               ) < 0.001 THEN CAST(1 AS bit) ELSE CAST(0 AS bit) END
           WHEN cat.category = 'bonggolan' THEN
             CASE
+              WHEN EXISTS (
+                SELECT b.IdBonggolan FROM dbo.BongkarSusunInputBonggolan ibg
+                INNER JOIN dbo.Bonggolan b ON b.NoBonggolan = ibg.NoBonggolan
+                WHERE ibg.NoBongkarSusun = h.NoBongkarSusun
+                EXCEPT
+                SELECT b.IdBonggolan FROM dbo.BongkarSusunOutputBonggolan obg
+                INNER JOIN dbo.Bonggolan b ON b.NoBonggolan = obg.NoBonggolan
+                WHERE obg.NoBongkarSusun = h.NoBongkarSusun
+              ) OR EXISTS (
+                SELECT b.IdBonggolan FROM dbo.BongkarSusunOutputBonggolan obg
+                INNER JOIN dbo.Bonggolan b ON b.NoBonggolan = obg.NoBonggolan
+                WHERE obg.NoBongkarSusun = h.NoBongkarSusun
+                EXCEPT
+                SELECT b.IdBonggolan FROM dbo.BongkarSusunInputBonggolan ibg
+                INNER JOIN dbo.Bonggolan b ON b.NoBonggolan = ibg.NoBonggolan
+                WHERE ibg.NoBongkarSusun = h.NoBongkarSusun
+              ) THEN CAST(0 AS bit)
               WHEN ABS(
                 ISNULL((
                   SELECT SUM(ISNULL(b.Berat, 0))
@@ -970,15 +1036,6 @@ exports.getDetail = async (noBongkarSusun) => {
   const outputsBahanBakuDetailRes = await pool
     .request()
     .input("NoBongkarSusun", sql.VarChar(50), noBongkarSusun).query(`
-      WITH PartialAgg AS (
-        SELECT
-          NoBahanBaku,
-          NoPallet,
-          NoSak,
-          SUM(ISNULL(Berat, 0)) AS PartialBerat
-        FROM dbo.BahanBakuPartial
-        GROUP BY NoBahanBaku, NoPallet, NoSak
-      )
       SELECT
         ob.NoBahanBaku       AS noBahanBaku,
         ob.NoPallet          AS noPallet,
@@ -1004,33 +1061,22 @@ exports.getDetail = async (noBongkarSusun) => {
         ISNULL(CAST(ph.HasBeenPrinted AS int), 0) AS hasBeenPrinted,
         ph.Blok              AS blok,
         ph.IdLokasi          AS idLokasi,
-        d.NoSak              AS noSak,
-        CASE
-          WHEN d.IsPartial = 1 THEN
-            CASE
-              WHEN ISNULL(d.Berat, 0) - ISNULL(pa.PartialBerat, 0) < 0 THEN 0
-              ELSE ISNULL(d.Berat, 0) - ISNULL(pa.PartialBerat, 0)
-            END
-          ELSE ISNULL(d.Berat, 0)
-        END                  AS beratSak
+        ISNULL(d.NoSak, ob.NoSak) AS noSak,
+        ISNULL(d.Berat, 0)   AS beratSak
       FROM dbo.BongkarSusunOutputBahanBaku ob
-      INNER JOIN dbo.BahanBakuPallet_h ph
+      LEFT JOIN dbo.BahanBakuPallet_h ph
         ON ph.NoBahanBaku = ob.NoBahanBaku
        AND ph.NoPallet = ob.NoPallet
-      INNER JOIN dbo.MstJenisPlastik jp
+      LEFT JOIN dbo.MstJenisPlastik jp
         ON jp.IdJenisPlastik = ph.IdJenisPlastik
-      INNER JOIN dbo.MstWarehouse w
+      LEFT JOIN dbo.MstWarehouse w
         ON w.IdWarehouse = ph.IdWarehouse
-      INNER JOIN dbo.BahanBaku_d d
+      LEFT JOIN dbo.BahanBaku_d d
         ON d.NoBahanBaku = ob.NoBahanBaku
        AND d.NoPallet = ob.NoPallet
        AND d.NoSak = ob.NoSak
-      LEFT JOIN PartialAgg pa
-        ON pa.NoBahanBaku = d.NoBahanBaku
-       AND pa.NoPallet = d.NoPallet
-       AND pa.NoSak = d.NoSak
       WHERE ob.NoBongkarSusun = @NoBongkarSusun
-      ORDER BY ob.NoBahanBaku, ob.NoPallet, d.NoSak
+      ORDER BY ob.NoBahanBaku, ob.NoPallet, ob.NoSak
     `);
 
   // outputs â€” bonggolan
@@ -1074,23 +1120,10 @@ exports.getDetail = async (noBongkarSusun) => {
         'gilingan'            AS category,
         g.IdGilingan          AS idJenis,
         mg.NamaGilingan       AS namaJenis,
-        CASE
-          WHEN g.IsPartial = 1 THEN
-            CASE
-              WHEN ISNULL(g.Berat, 0) - ISNULL(gp.TotalPartial, 0) < 0
-                THEN 0
-              ELSE ISNULL(g.Berat, 0) - ISNULL(gp.TotalPartial, 0)
-            END
-          ELSE ISNULL(g.Berat, 0)
-        END AS totalBerat
+        ISNULL(g.Berat, 0) AS totalBerat
       FROM BongkarSusunOutputGilingan og
       INNER JOIN dbo.Gilingan g ON g.NoGilingan = og.NoGilingan
       INNER JOIN dbo.MstGilingan mg ON mg.IdGilingan = g.IdGilingan
-      LEFT JOIN (
-        SELECT NoGilingan, SUM(ISNULL(Berat, 0)) AS TotalPartial
-        FROM dbo.GilinganPartial
-        GROUP BY NoGilingan
-      ) gp ON gp.NoGilingan = g.NoGilingan
       WHERE og.NoBongkarSusun = @NoBongkarSusun
     `);
 
@@ -1103,23 +1136,10 @@ exports.getDetail = async (noBongkarSusun) => {
         'furnitureWip'        AS category,
         f.IdFurnitureWIP      AS idJenis,
         cw.Nama               AS namaJenis,
-        CASE
-          WHEN f.IsPartial = 1 THEN
-            CASE
-              WHEN ISNULL(f.Pcs, 0) - ISNULL(fp.TotalPartialPcs, 0) < 0
-                THEN 0
-              ELSE ISNULL(f.Pcs, 0) - ISNULL(fp.TotalPartialPcs, 0)
-            END
-          ELSE ISNULL(f.Pcs, 0)
-        END AS pcs
+        ISNULL(f.Pcs, 0) AS pcs
       FROM dbo.BongkarSusunOutputFurnitureWIP ofw
       INNER JOIN dbo.FurnitureWIP f ON f.NoFurnitureWIP = ofw.NoFurnitureWIP
       INNER JOIN dbo.MstCabinetWIP cw ON cw.IdCabinetWIP = f.IdFurnitureWIP
-      LEFT JOIN (
-        SELECT NoFurnitureWIP, SUM(ISNULL(Pcs, 0)) AS TotalPartialPcs
-        FROM dbo.FurnitureWIPPartial
-        GROUP BY NoFurnitureWIP
-      ) fp ON fp.NoFurnitureWIP = f.NoFurnitureWIP
       WHERE ofw.NoBongkarSusun = @NoBongkarSusun
     `);
 
@@ -1131,24 +1151,11 @@ exports.getDetail = async (noBongkarSusun) => {
         'barangJadi'          AS category,
         b.IdBJ                AS idJenis,
         mbj.NamaBJ            AS namaJenis,
-        CASE
-          WHEN b.IsPartial = 1 THEN
-            CASE
-              WHEN ISNULL(b.Pcs, 0) - ISNULL(bp.TotalPartialPcs, 0) < 0
-                THEN 0
-              ELSE ISNULL(b.Pcs, 0) - ISNULL(bp.TotalPartialPcs, 0)
-            END
-          ELSE ISNULL(b.Pcs, 0)
-        END AS pcs,
+        ISNULL(b.Pcs, 0)      AS pcs,
         ISNULL(b.Berat, 0)    AS berat
       FROM dbo.BongkarSusunOutputBarangjadi obj
       INNER JOIN dbo.BarangJadi b ON b.NoBJ = obj.NoBJ
       INNER JOIN dbo.MstBarangJadi mbj ON mbj.IdBJ = b.IdBJ
-      LEFT JOIN (
-        SELECT NoBJ, SUM(ISNULL(Pcs, 0)) AS TotalPartialPcs
-        FROM dbo.BarangJadiPartial
-        GROUP BY NoBJ
-      ) bp ON bp.NoBJ = b.NoBJ
       WHERE obj.NoBongkarSusun = @NoBongkarSusun
     `);
 
@@ -1192,26 +1199,13 @@ exports.getDetail = async (noBongkarSusun) => {
         h.IdMixer             AS idJenis,
         mx.Jenis              AS namaJenis,
         om.NoSak              AS noSak,
-        CASE
-          WHEN d.IsPartial = 1 THEN
-            CASE
-              WHEN ISNULL(d.Berat, 0) - ISNULL(mp.TotalPartial, 0) < 0
-                THEN 0
-              ELSE ISNULL(d.Berat, 0) - ISNULL(mp.TotalPartial, 0)
-            END
-          ELSE ISNULL(d.Berat, 0)
-        END AS beratSak
+        ISNULL(d.Berat, 0) AS beratSak
       FROM BongkarSusunOutputMixer om
       INNER JOIN dbo.Mixer_h h ON h.NoMixer = om.NoMixer
       INNER JOIN dbo.MstMixer mx ON mx.IdMixer = h.IdMixer
       INNER JOIN dbo.Mixer_d d
         ON d.NoMixer = om.NoMixer
        AND d.NoSak = om.NoSak
-      LEFT JOIN (
-        SELECT NoMixer, NoSak, SUM(ISNULL(Berat, 0)) AS TotalPartial
-        FROM dbo.MixerPartial
-        GROUP BY NoMixer, NoSak
-      ) mp ON mp.NoMixer = d.NoMixer AND mp.NoSak = d.NoSak
       WHERE om.NoBongkarSusun = @NoBongkarSusun
       ORDER BY om.NoMixer, om.NoSak
     `);

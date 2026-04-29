@@ -345,8 +345,8 @@ exports.getAll = async (page = 1, pageSize = 20, search = "") => {
                     CASE
                       WHEN d.IsPartial = 1 THEN
                         CASE
-                          WHEN ISNULL(d.Berat, 0) - ISNULL(bp.PartialBerat, 0) < 0 THEN 0
-                          ELSE ISNULL(d.Berat, 0) - ISNULL(bp.PartialBerat, 0)
+                          WHEN ISNULL(d.Berat, 0) - ISNULL(pa.PartialBerat, 0) < 0 THEN 0
+                          ELSE ISNULL(d.Berat, 0) - ISNULL(pa.PartialBerat, 0)
                         END
                       ELSE ISNULL(d.Berat, 0)
                     END
@@ -355,18 +355,16 @@ exports.getAll = async (page = 1, pageSize = 20, search = "") => {
                   INNER JOIN dbo.BahanBaku_d d
                     ON d.NoBahanBaku = ib.NoBahanBaku
                    AND d.NoPallet = ib.NoPallet
+                   AND d.NoSak = ib.NoSak
                   LEFT JOIN (
-                    SELECT
-                      NoBahanBaku,
-                      NoPallet,
-                      NoSak,
-                      SUM(ISNULL(Berat, 0)) AS PartialBerat
+                    SELECT NoBahanBaku, NoPallet, NoSak,
+                           SUM(ISNULL(Berat, 0)) AS PartialBerat
                     FROM dbo.BahanBakuPartial
                     GROUP BY NoBahanBaku, NoPallet, NoSak
-                  ) bp
-                    ON bp.NoBahanBaku = d.NoBahanBaku
-                   AND bp.NoPallet = d.NoPallet
-                   AND bp.NoSak = d.NoSak
+                  ) pa
+                    ON pa.NoBahanBaku = d.NoBahanBaku
+                   AND pa.NoPallet = d.NoPallet
+                   AND pa.NoSak = d.NoSak
                   WHERE ib.NoBongkarSusun = h.NoBongkarSusun
                 ), 0) -
                 ISNULL((
@@ -374,8 +372,8 @@ exports.getAll = async (page = 1, pageSize = 20, search = "") => {
                     CASE
                       WHEN d.IsPartial = 1 THEN
                         CASE
-                          WHEN ISNULL(d.Berat, 0) - ISNULL(bp.PartialBerat, 0) < 0 THEN 0
-                          ELSE ISNULL(d.Berat, 0) - ISNULL(bp.PartialBerat, 0)
+                          WHEN ISNULL(d.Berat, 0) - ISNULL(pa.PartialBerat, 0) < 0 THEN 0
+                          ELSE ISNULL(d.Berat, 0) - ISNULL(pa.PartialBerat, 0)
                         END
                       ELSE ISNULL(d.Berat, 0)
                     END
@@ -384,18 +382,16 @@ exports.getAll = async (page = 1, pageSize = 20, search = "") => {
                   INNER JOIN dbo.BahanBaku_d d
                     ON d.NoBahanBaku = ob.NoBahanBaku
                    AND d.NoPallet = ob.NoPallet
+                   AND d.NoSak = ob.NoSak
                   LEFT JOIN (
-                    SELECT
-                      NoBahanBaku,
-                      NoPallet,
-                      NoSak,
-                      SUM(ISNULL(Berat, 0)) AS PartialBerat
+                    SELECT NoBahanBaku, NoPallet, NoSak,
+                           SUM(ISNULL(Berat, 0)) AS PartialBerat
                     FROM dbo.BahanBakuPartial
                     GROUP BY NoBahanBaku, NoPallet, NoSak
-                  ) bp
-                    ON bp.NoBahanBaku = d.NoBahanBaku
-                   AND bp.NoPallet = d.NoPallet
-                   AND bp.NoSak = d.NoSak
+                  ) pa
+                    ON pa.NoBahanBaku = d.NoBahanBaku
+                   AND pa.NoPallet = d.NoPallet
+                   AND pa.NoSak = d.NoSak
                   WHERE ob.NoBongkarSusun = h.NoBongkarSusun
                 ), 0)
               ) < 0.001 THEN CAST(1 AS bit) ELSE CAST(0 AS bit) END

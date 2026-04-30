@@ -2,11 +2,6 @@ const service = require("./master-barang-jadi-service");
 
 async function getAllActive(req, res) {
   const { username } = req;
-  const page = Math.max(parseInt(req.query.page, 10) || 1, 1);
-  const pageSize = Math.min(
-    Math.max(parseInt(req.query.pageSize, 10) || 20, 1),
-    100,
-  );
   const search = String(req.query.search || req.query.namaBJ || "").trim();
 
   console.log(
@@ -15,24 +10,12 @@ async function getAllActive(req, res) {
   );
 
   try {
-    const { data, total } = await service.getAllActive({
-      page,
-      pageSize,
-      search,
-    });
+    const data = await service.getAllActive({ search });
     return res.status(200).json({
       success: true,
       message: "Data MstBarangJadi (active) berhasil diambil",
-      totalData: total,
+      totalData: data.length,
       data,
-      meta: {
-        page,
-        pageSize,
-        totalPages: Math.max(Math.ceil(total / pageSize), 1),
-        hasNextPage: page * pageSize < total,
-        hasPrevPage: page > 1,
-        search,
-      },
     });
   } catch (error) {
     console.error("Error fetching MstBarangJadi (active):", error);

@@ -2,9 +2,48 @@ const { sql, poolPromise } = require("../../core/config/db");
 const { formatDate } = require("../../core/utils/date-helper");
 // const { insertLogMappingLokasi } = require("../../core/shared/log"); // sesuaikan path
 
-async function getNoStockOpname() {
+async function getNoStockOpname(
+  page = 1,
+  limit = 10,
+  isAscend = null,
+  search = "",
+) {
   try {
     const pool = await poolPromise;
+    const offset = (page - 1) * limit;
+
+    // Build WHERE clause for filter
+    let whereClause = isAscend !== null ? `AND soh.IsAscend = ${isAscend}` : "";
+
+    // Build search clause - hanya cari berdasarkan NoSO
+    if (search && search.trim()) {
+      const searchTerm = search.trim().replace(/'/g, "''");
+      whereClause += `AND soh.NoSO LIKE '%${searchTerm}%'`;
+    }
+
+    // Get total count
+    const totalQuery = `
+      SELECT COUNT(*) as total FROM (
+        SELECT soh.NoSO
+        FROM StockOpname_h soh
+        LEFT JOIN StockOpname_h_WarehouseID sohw 
+          ON soh.NoSO = sohw.NoSO
+        LEFT JOIN MstWarehouse wh 
+          ON sohw.IdWarehouse = wh.IdWarehouse
+         AND soh.IsAscend = 0
+        LEFT JOIN [AS_GSU].[dbo].[IC_Warehouses] icw
+          ON sohw.IdWarehouse = icw.WarehouseID
+         AND soh.IsAscend = 1
+        WHERE soh.Tanggal > (
+          SELECT ISNULL(MAX(PeriodHarian), '2000-01-01') 
+          FROM MstTutupTransaksiHarian
+        )
+        ${whereClause}
+        GROUP BY soh.NoSO
+      ) as sub
+    `;
+    const totalResult = await pool.request().query(totalQuery);
+    const total = totalResult.recordset[0].total;
 
     const result = await pool.request().query(`
       SELECT
@@ -54,6 +93,7 @@ async function getNoStockOpname() {
         SELECT ISNULL(MAX(PeriodHarian), '2000-01-01') 
         FROM MstTutupTransaksiHarian
       )
+      ${whereClause}
       GROUP BY
         soh.NoSO,
         soh.Tanggal,
@@ -69,11 +109,14 @@ async function getNoStockOpname() {
         soh.IsReject,
         soh.IsAscend
       ORDER BY soh.NoSO DESC
+      OFFSET ${offset} ROWS FETCH NEXT ${limit} ROWS ONLY
     `);
 
-    if (!result.recordset || result.recordset.length === 0) return null;
+    if (!result.recordset || result.recordset.length === 0) {
+      return { data: [], total: 0, page, limit };
+    }
 
-    return result.recordset.map(
+    const data = result.recordset.map(
       ({
         NoSO,
         Tanggal,
@@ -109,6 +152,8 @@ async function getNoStockOpname() {
         IsAscend,
       }),
     );
+
+    return { data, total, page, limit };
   } catch (err) {
     throw new Error(`Stock Opname Service Error: ${err.message}`);
   }

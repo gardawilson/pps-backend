@@ -490,19 +490,57 @@ async function fetchOutputs(noProduksi) {
   req.input("no", sql.VarChar(50), noProduksi);
 
   const q = `
-    SELECT DISTINCT
+    SELECT
       o.NoProduksi,
       o.NoBroker,
-      ISNULL(h.HasBeenPrinted, 0) AS HasBeenPrinted
+      h.IdJenisPlastik AS IdJenis,
+      COALESCE(mb.Nama, jp.Jenis) AS NamaJenis,
+      ISNULL(h.HasBeenPrinted, 0) AS HasBeenPrinted,
+      o.NoSak,
+      d.Berat,
+      d.DateUsage,
+      d.IsPartial,
+      d.IdLokasi
     FROM dbo.BrokerProduksiOutput o WITH (NOLOCK)
     LEFT JOIN dbo.Broker_h h WITH (NOLOCK)
       ON h.NoBroker = o.NoBroker
+    LEFT JOIN dbo.MstBroker mb WITH (NOLOCK)
+      ON mb.IdBroker = h.IdJenisPlastik
+    LEFT JOIN dbo.MstJenisPlastik jp WITH (NOLOCK)
+      ON jp.IdJenisPlastik = h.IdJenisPlastik
+    LEFT JOIN dbo.Broker_d d WITH (NOLOCK)
+      ON d.NoBroker = o.NoBroker
+     AND d.NoSak = o.NoSak
     WHERE o.NoProduksi = @no
-    ORDER BY o.NoBroker DESC;
+    ORDER BY o.NoBroker DESC, o.NoSak;
   `;
 
   const rs = await req.query(q);
-  return rs.recordset || [];
+  const rows = rs.recordset || [];
+  const byBroker = new Map();
+
+  for (const row of rows) {
+    if (!byBroker.has(row.NoBroker)) {
+      byBroker.set(row.NoBroker, {
+        NoProduksi: row.NoProduksi,
+        NoBroker: row.NoBroker,
+        IdJenis: row.IdJenis ?? null,
+        NamaJenis: row.NamaJenis ?? null,
+        HasBeenPrinted: row.HasBeenPrinted,
+        DetailSak: [],
+      });
+    }
+
+    byBroker.get(row.NoBroker).DetailSak.push({
+      NoSak: row.NoSak,
+      Berat: row.Berat ?? null,
+      DateUsage: row.DateUsage ?? null,
+      IsPartial: row.IsPartial ?? null,
+      IdLokasi: row.IdLokasi ?? null,
+    });
+  }
+
+  return Array.from(byBroker.values());
 }
 
 async function fetchOutputsBonggolan(noProduksi) {
@@ -514,10 +552,15 @@ async function fetchOutputsBonggolan(noProduksi) {
     SELECT DISTINCT
       o.NoProduksi,
       o.NoBonggolan,
+      b.IdBonggolan,
+      mb.NamaBonggolan,
+      b.Berat,
       ISNULL(b.HasBeenPrinted, 0) AS HasBeenPrinted
     FROM dbo.BrokerProduksiOutputBonggolan o WITH (NOLOCK)
     LEFT JOIN dbo.Bonggolan b WITH (NOLOCK)
       ON b.NoBonggolan = o.NoBonggolan
+    LEFT JOIN dbo.MstBonggolan mb WITH (NOLOCK)
+      ON mb.IdBonggolan = b.IdBonggolan
     WHERE o.NoProduksi = @no
     ORDER BY o.NoBonggolan DESC;
   `;

@@ -57,6 +57,22 @@ router.get(
   brokerProduksiController.getOutputsBonggolanByNoProduksi,
 );
 
+// PATCH /broker/:noProduksi/outputs/move
+// Body: { targetNoProduksi: "E.xxx", items: [{ noBroker: "D.xxx", noSak: 1 }] }
+router.patch(
+  "/broker/:noProduksi/outputs/move",
+  verifyToken,
+  brokerProduksiController.moveOutputs,
+);
+
+// PATCH /broker/:noProduksi/outputs/bonggolan/move
+// Body: { targetNoProduksi: "E.xxx", noBonggolanList: ["M.xxx", "M.yyy"] }
+router.patch(
+  "/broker/:noProduksi/outputs/bonggolan/move",
+  verifyToken,
+  brokerProduksiController.moveOutputsBonggolan,
+);
+
 // routes/broker-production-route.js
 router.post(
   "/broker/:noProduksi/inputs",

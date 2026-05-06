@@ -2100,6 +2100,201 @@ async function deleteInputsAndPartials(noProduksi, payload, ctx) {
   );
 }
 
+/**
+ * Pindahkan output broker (rows di BrokerProduksiOutput) dari satu NoProduksi ke NoProduksi lain.
+ *
+ * @param {string} fromNoProduksi  - NoProduksi asal (dari URL param)
+ * @param {string} targetNoProduksi - NoProduksi tujuan (dari body)
+ * @param {Array<{noBroker:string, noSak:number|string}>} items - daftar output yang dipindahkan
+ * @param {object} ctx - { actorId, actorUsername, requestId }
+ */
+async function moveOutputs(fromNoProduksi, targetNoProduksi, items, ctx) {
+  if (!fromNoProduksi) throw badReq("fromNoProduksi wajib");
+  if (!targetNoProduksi) throw badReq("targetNoProduksi wajib");
+  if (fromNoProduksi === targetNoProduksi)
+    throw badReq("targetNoProduksi harus berbeda dengan NoProduksi asal");
+  if (!Array.isArray(items) || items.length === 0)
+    throw badReq("items wajib berupa array dan tidak boleh kosong");
+
+  const actorIdNum = Number(ctx?.actorId);
+  if (!Number.isFinite(actorIdNum) || actorIdNum <= 0)
+    throw badReq("ctx.actorId wajib. Controller harus inject dari token.");
+
+  const actorUsername = String(ctx?.actorUsername || "").trim() || "system";
+  const requestId = String(ctx?.requestId || "").trim();
+
+  const pool = await poolPromise;
+  const tx = new sql.Transaction(pool);
+  await tx.begin(sql.ISOLATION_LEVEL.SERIALIZABLE);
+
+  try {
+    const auditReq = new sql.Request(tx);
+    await applyAuditContext(auditReq, {
+      actorId: Math.trunc(actorIdNum),
+      actorUsername,
+      requestId,
+    });
+
+    // Ambil tanggal dari kedua header (sekaligus lock row)
+    const { docDateOnly: fromDate } = await loadDocDateOnlyFromConfig({
+      entityKey: "brokerProduksi",
+      codeValue: fromNoProduksi,
+      runner: tx,
+      useLock: true,
+      throwIfNotFound: true,
+    });
+
+    const { docDateOnly: targetDate } = await loadDocDateOnlyFromConfig({
+      entityKey: "brokerProduksi",
+      codeValue: targetNoProduksi,
+      runner: tx,
+      useLock: true,
+      throwIfNotFound: true,
+    });
+
+    await assertNotLocked({
+      date: fromDate,
+      runner: tx,
+      action: "move output BrokerProduksi (asal)",
+      useLock: true,
+    });
+
+    await assertNotLocked({
+      date: targetDate,
+      runner: tx,
+      action: "move output BrokerProduksi (tujuan)",
+      useLock: true,
+    });
+
+    // Bangun kondisi WHERE untuk setiap pasangan (NoBroker, NoSak)
+    const rqMove = new sql.Request(tx);
+    rqMove.input("FromNoProduksi", sql.VarChar(50), fromNoProduksi);
+    rqMove.input("TargetNoProduksi", sql.VarChar(50), targetNoProduksi);
+
+    const pairConditions = items.map((item, i) => {
+      rqMove.input(`nb${i}`, sql.VarChar(50), String(item.noBroker || ""));
+      rqMove.input(`ns${i}`, sql.Int, Number(item.noSak));
+      return `(NoBroker = @nb${i} AND NoSak = @ns${i})`;
+    });
+
+    const moveSql = `
+      UPDATE dbo.BrokerProduksiOutput
+      SET NoProduksi = @TargetNoProduksi
+      WHERE NoProduksi = @FromNoProduksi
+        AND (${pairConditions.join(" OR ")});
+
+      SELECT @@ROWCOUNT AS MovedCount;
+    `;
+
+    const moveRes = await rqMove.query(moveSql);
+    const movedCount = moveRes.recordset?.[0]?.MovedCount ?? 0;
+
+    await tx.commit();
+    return { movedCount, fromNoProduksi, targetNoProduksi };
+  } catch (e) {
+    try {
+      await tx.rollback();
+    } catch (_) {}
+    throw e;
+  }
+}
+
+/**
+ * Pindahkan output bonggolan (rows di BrokerProduksiOutputBonggolan) dari satu NoProduksi ke NoProduksi lain.
+ *
+ * @param {string} fromNoProduksi
+ * @param {string} targetNoProduksi
+ * @param {string[]} noBonggolanList - array NoBonggolan yang dipindahkan
+ * @param {object} ctx - { actorId, actorUsername, requestId }
+ */
+async function moveOutputsBonggolan(fromNoProduksi, targetNoProduksi, noBonggolanList, ctx) {
+  if (!fromNoProduksi) throw badReq("fromNoProduksi wajib");
+  if (!targetNoProduksi) throw badReq("targetNoProduksi wajib");
+  if (fromNoProduksi === targetNoProduksi)
+    throw badReq("targetNoProduksi harus berbeda dengan NoProduksi asal");
+  if (!Array.isArray(noBonggolanList) || noBonggolanList.length === 0)
+    throw badReq("noBonggolanList wajib berupa array dan tidak boleh kosong");
+
+  const actorIdNum = Number(ctx?.actorId);
+  if (!Number.isFinite(actorIdNum) || actorIdNum <= 0)
+    throw badReq("ctx.actorId wajib. Controller harus inject dari token.");
+
+  const actorUsername = String(ctx?.actorUsername || "").trim() || "system";
+  const requestId = String(ctx?.requestId || "").trim();
+
+  const pool = await poolPromise;
+  const tx = new sql.Transaction(pool);
+  await tx.begin(sql.ISOLATION_LEVEL.SERIALIZABLE);
+
+  try {
+    const auditReq = new sql.Request(tx);
+    await applyAuditContext(auditReq, {
+      actorId: Math.trunc(actorIdNum),
+      actorUsername,
+      requestId,
+    });
+
+    const { docDateOnly: fromDate } = await loadDocDateOnlyFromConfig({
+      entityKey: "brokerProduksi",
+      codeValue: fromNoProduksi,
+      runner: tx,
+      useLock: true,
+      throwIfNotFound: true,
+    });
+
+    const { docDateOnly: targetDate } = await loadDocDateOnlyFromConfig({
+      entityKey: "brokerProduksi",
+      codeValue: targetNoProduksi,
+      runner: tx,
+      useLock: true,
+      throwIfNotFound: true,
+    });
+
+    await assertNotLocked({
+      date: fromDate,
+      runner: tx,
+      action: "move output bonggolan BrokerProduksi (asal)",
+      useLock: true,
+    });
+
+    await assertNotLocked({
+      date: targetDate,
+      runner: tx,
+      action: "move output bonggolan BrokerProduksi (tujuan)",
+      useLock: true,
+    });
+
+    const rqMove = new sql.Request(tx);
+    rqMove.input("FromNoProduksi", sql.VarChar(50), fromNoProduksi);
+    rqMove.input("TargetNoProduksi", sql.VarChar(50), targetNoProduksi);
+
+    const placeholders = noBonggolanList.map((nb, i) => {
+      rqMove.input(`nb${i}`, sql.VarChar(50), String(nb));
+      return `@nb${i}`;
+    });
+
+    const moveSql = `
+      UPDATE dbo.BrokerProduksiOutputBonggolan
+      SET NoProduksi = @TargetNoProduksi
+      WHERE NoProduksi = @FromNoProduksi
+        AND NoBonggolan IN (${placeholders.join(", ")});
+
+      SELECT @@ROWCOUNT AS MovedCount;
+    `;
+
+    const moveRes = await rqMove.query(moveSql);
+    const movedCount = moveRes.recordset?.[0]?.MovedCount ?? 0;
+
+    await tx.commit();
+    return { movedCount, fromNoProduksi, targetNoProduksi };
+  } catch (e) {
+    try {
+      await tx.rollback();
+    } catch (_) {}
+    throw e;
+  }
+}
+
 module.exports = {
   getAllProduksi,
   getProduksiByDate,
@@ -2112,4 +2307,6 @@ module.exports = {
   validateLabel,
   upsertInputsAndPartials,
   deleteInputsAndPartials,
+  moveOutputs,
+  moveOutputsBonggolan,
 };

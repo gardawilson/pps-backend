@@ -759,6 +759,116 @@ async function deleteInputsAndPartials(req, res) {
   }
 }
 
+async function moveOutputs(req, res) {
+  const fromNoProduksi = String(req.params.noProduksi || "").trim();
+  if (!fromNoProduksi) {
+    return res.status(400).json({ success: false, message: "noProduksi is required" });
+  }
+
+  const body = req.body && typeof req.body === "object" ? req.body : {};
+  const targetNoProduksi = String(body.targetNoProduksi || "").trim();
+  const items = body.items;
+
+  if (!targetNoProduksi) {
+    return res.status(400).json({ success: false, message: "targetNoProduksi is required" });
+  }
+  if (!Array.isArray(items) || items.length === 0) {
+    return res.status(400).json({ success: false, message: "items harus array dan tidak boleh kosong" });
+  }
+
+  const actorId = getActorId(req);
+  if (!actorId) {
+    return res.status(401).json({ success: false, message: "Unauthorized (idUsername missing)" });
+  }
+
+  const actorUsername = getActorUsername(req) || req.username || req.user?.username || "system";
+  const requestId = String(makeRequestId(req) || "").trim();
+  if (requestId) res.setHeader("x-request-id", requestId);
+
+  try {
+    const ctx = { actorId, actorUsername, requestId };
+    const result = await brokerProduksiService.moveOutputs(
+      fromNoProduksi,
+      targetNoProduksi,
+      items,
+      ctx,
+    );
+
+    return res.status(200).json({
+      success: true,
+      message: `${result.movedCount} output berhasil dipindahkan ke ${targetNoProduksi}`,
+      data: result,
+      meta: { audit: { actorId, actorUsername, requestId } },
+    });
+  } catch (err) {
+    console.error("[moveOutputs]", err);
+    const status = err.statusCode || err.status || 500;
+    return res.status(status).json({
+      success: false,
+      message: status === 500 ? "Internal Server Error" : err.message || "Error",
+      error: {
+        message: err.message,
+        details: process.env.NODE_ENV === "development" ? err.stack : undefined,
+      },
+    });
+  }
+}
+
+async function moveOutputsBonggolan(req, res) {
+  const fromNoProduksi = String(req.params.noProduksi || "").trim();
+  if (!fromNoProduksi) {
+    return res.status(400).json({ success: false, message: "noProduksi is required" });
+  }
+
+  const body = req.body && typeof req.body === "object" ? req.body : {};
+  const targetNoProduksi = String(body.targetNoProduksi || "").trim();
+  const noBonggolanList = body.noBonggolanList;
+
+  if (!targetNoProduksi) {
+    return res.status(400).json({ success: false, message: "targetNoProduksi is required" });
+  }
+  if (!Array.isArray(noBonggolanList) || noBonggolanList.length === 0) {
+    return res.status(400).json({ success: false, message: "noBonggolanList harus array dan tidak boleh kosong" });
+  }
+
+  const actorId = getActorId(req);
+  if (!actorId) {
+    return res.status(401).json({ success: false, message: "Unauthorized (idUsername missing)" });
+  }
+
+  const actorUsername = getActorUsername(req) || req.username || req.user?.username || "system";
+  const requestId = String(makeRequestId(req) || "").trim();
+  if (requestId) res.setHeader("x-request-id", requestId);
+
+  try {
+    const ctx = { actorId, actorUsername, requestId };
+    const result = await brokerProduksiService.moveOutputsBonggolan(
+      fromNoProduksi,
+      targetNoProduksi,
+      noBonggolanList,
+      ctx,
+    );
+
+    return res.status(200).json({
+      success: true,
+      message: `${result.movedCount} output bonggolan berhasil dipindahkan ke ${targetNoProduksi}`,
+      data: result,
+      meta: { audit: { actorId, actorUsername, requestId } },
+    });
+  } catch (err) {
+    console.error("[moveOutputsBonggolan]", err);
+    const status = err.statusCode || err.status || 500;
+    return res.status(status).json({
+      success: false,
+      message: status === 500 ? "Internal Server Error" : err.message || "Error",
+      error: {
+        message: err.message,
+        details: process.env.NODE_ENV === "development" ? err.stack : undefined,
+      },
+    });
+  }
+}
+
 module.exports = {
   getProduksiByDate,
   getInputsByNoProduksi,
@@ -771,4 +881,6 @@ module.exports = {
   validateLabel,
   upsertInputsAndPartials,
   deleteInputsAndPartials,
+  moveOutputs,
+  moveOutputsBonggolan,
 };

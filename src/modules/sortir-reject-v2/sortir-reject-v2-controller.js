@@ -70,10 +70,7 @@ async function create(req, res) {
   }
 
   try {
-    const result = await service.create(
-      { idWarehouse, inputs, outputs },
-      ctx,
-    );
+    const result = await service.create({ idWarehouse, inputs, outputs }, ctx);
 
     return res.status(201).json({ success: true, data: result });
   } catch (e) {
@@ -107,6 +104,29 @@ async function createReject(req, res) {
   }
 }
 
+async function updateSortirReject(req, res) {
+  const ctx = makeCtx(req);
+
+  if (!ctx.actorId) {
+    return res
+      .status(401)
+      .json({ success: false, message: "actorId tidak ditemukan dari token" });
+  }
+
+  try {
+    const result = await service.updateSortirReject(
+      req.params.noBJSortir,
+      req.body || {},
+      ctx,
+    );
+    return res.status(200).json({ success: true, data: result });
+  } catch (e) {
+    return res
+      .status(e.statusCode || 500)
+      .json({ success: false, message: e.message });
+  }
+}
+
 async function deleteSortirReject(req, res) {
   const ctx = makeCtx(req);
 
@@ -117,10 +137,7 @@ async function deleteSortirReject(req, res) {
   }
 
   try {
-    const result = await service.deleteSortirReject(
-      req.params.noBJSortir,
-      ctx,
-    );
+    const result = await service.deleteSortirReject(req.params.noBJSortir, ctx);
     return res.status(200).json({ success: true, data: result });
   } catch (e) {
     return res
@@ -135,5 +152,6 @@ module.exports = {
   getDetail,
   create,
   createReject,
+  updateSortirReject,
   deleteSortirReject,
 };

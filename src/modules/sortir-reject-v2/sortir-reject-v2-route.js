@@ -8,6 +8,7 @@ router.get("/", verifyToken, ctrl.getAll);
 router.get("/:noBJSortir", verifyToken, ctrl.getDetail);
 router.post("/", verifyToken, ctrl.create);
 router.post("/:noBJSortir/reject", verifyToken, ctrl.createReject);
+router.put("/:noBJSortir", verifyToken, ctrl.updateSortirReject);
 router.delete("/:noBJSortir", verifyToken, ctrl.deleteSortirReject);
 
 module.exports = router;

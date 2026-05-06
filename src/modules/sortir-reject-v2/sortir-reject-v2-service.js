@@ -1,9 +1,7 @@
 const { sql, poolPromise } = require("../../core/config/db");
 const { badReq, conflict } = require("../../core/utils/http-error");
 const { formatYMD } = require("../../core/shared/tutup-transaksi-guard");
-const {
-  detectCategory,
-} = require("./sortir-reject-v2-category-registry");
+const { detectCategory } = require("./sortir-reject-v2-category-registry");
 const {
   getLabelInfoBarangJadi,
 } = require("./handlers/get-label-info-barang-jadi.handler");
@@ -77,7 +75,9 @@ exports.getAll = async (page = 1, pageSize = 20, search = "") => {
   const countRes = await pool
     .request()
     .input("search", sql.VarChar(100), searchTerm)
-    .query(`SELECT COUNT(1) AS total FROM dbo.BJSortirReject_h h ${whereClause}`);
+    .query(
+      `SELECT COUNT(1) AS total FROM dbo.BJSortirReject_h h ${whereClause}`,
+    );
 
   const total = countRes.recordset?.[0]?.total || 0;
   if (total === 0) return { data: [], total: 0 };
@@ -180,8 +180,9 @@ exports.getDetail = async (noBJSortir) => {
   const no = String(noBJSortir || "").trim();
   if (!no) throw badReq("noBJSortir wajib diisi");
 
-  const headerRes = await pool.request().input("NoBJSortir", sql.VarChar(50), no)
-    .query(`
+  const headerRes = await pool
+    .request()
+    .input("NoBJSortir", sql.VarChar(50), no).query(`
       SELECT
         h.NoBJSortir,
         h.TglBJSortir,
@@ -262,8 +263,9 @@ exports.getDetail = async (noBJSortir) => {
       ORDER BY map.NoReject ASC
     `);
 
-  const outputsRes = await pool.request().input("NoBJSortir", sql.VarChar(50), no)
-    .query(`
+  const outputsRes = await pool
+    .request()
+    .input("NoBJSortir", sql.VarChar(50), no).query(`
       SELECT
         map.NoBJ,
         bj.DateCreate,
@@ -403,8 +405,7 @@ exports.getDetail = async (noBJSortir) => {
     ...header,
     TglBJSortir: formatYMD(header.TglBJSortir),
     category: isBarangJadi ? "barangJadi" : "furnitureWip",
-    balance:
-      !isBarangJadi || Math.abs(totalPcsInput - totalPcsOutput) < 0.001,
+    balance: !isBarangJadi || Math.abs(totalPcsInput - totalPcsOutput) < 0.001,
     inputs: inputsRes.recordset || [],
     outputs: outputRows,
   };
@@ -447,6 +448,160 @@ exports.create = async (payload, ctx) => {
 exports.createReject = async (noBJSortir, payload, ctx) =>
   createSortirRejectReject(noBJSortir, payload, ctx);
 
+exports.updateSortirReject = async (noBJSortir, payload, ctx) => {
+  const pool = await poolPromise;
+  const tx = new sql.Transaction(pool);
+  const no = String(noBJSortir || "").trim();
+  if (!no) throw badReq("noBJSortir wajib diisi");
+
+  const { idWarehouse, tglBJSortir } = payload || {};
+  if (idWarehouse == null && tglBJSortir == null)
+    throw badReq("Minimal satu field harus diisi: idWarehouse atau tglBJSortir");
+
+  const { actorId, requestId } = ctx;
+
+  try {
+    await tx.begin(sql.ISOLATION_LEVEL.SERIALIZABLE);
+
+    await new sql.Request(tx)
+      .input("actorId", sql.Int, actorId)
+      .input("rid", sql.NVarChar(64), requestId).query(`
+        EXEC sys.sp_set_session_context @key=N'actor_id', @value=@actorId;
+        EXEC sys.sp_set_session_context @key=N'request_id', @value=@rid;
+      `);
+
+    const headerRes = await new sql.Request(tx)
+      .input("NoBJSortir", sql.VarChar(50), no)
+      .query(
+        `SELECT IdWarehouse, TglBJSortir FROM dbo.BJSortirReject_h WITH (UPDLOCK,HOLDLOCK) WHERE NoBJSortir=@NoBJSortir`,
+      );
+    if (headerRes.recordset.length === 0) {
+      const e = new Error(`NoBJSortir ${no} tidak ditemukan`);
+      e.statusCode = 404;
+      throw e;
+    }
+
+    const newWarehouse =
+      idWarehouse != null ? idWarehouse : headerRes.recordset[0].IdWarehouse;
+    const newTgl =
+      tglBJSortir != null ? tglBJSortir : headerRes.recordset[0].TglBJSortir;
+    const tglChanged =
+      tglBJSortir != null &&
+      formatYMD(new Date(tglBJSortir)) !==
+        formatYMD(new Date(headerRes.recordset[0].TglBJSortir));
+
+    if (tglChanged) {
+      const newDate = new Date(tglBJSortir);
+
+      const inputsBJRes = await new sql.Request(tx)
+        .input("NoBJSortir", sql.VarChar(50), no)
+        .query(
+          `SELECT NoBJ FROM dbo.BJSortirRejectInputLabelBarangJadi WHERE NoBJSortir=@NoBJSortir`,
+        );
+
+      if (inputsBJRes.recordset.length > 0) {
+        const codesJson = JSON.stringify(
+          inputsBJRes.recordset.map((r) => ({ code: r.NoBJ })),
+        );
+        await new sql.Request(tx)
+          .input("CodesJson", sql.NVarChar(sql.MAX), codesJson)
+          .input("NewDate", sql.DateTime, newDate).query(`
+            UPDATE dbo.BarangJadi
+            SET DateUsage = @NewDate
+            WHERE NoBJ IN (
+              SELECT j.code FROM OPENJSON(@CodesJson)
+              WITH (code varchar(50) '$.code') AS j
+            )
+          `);
+      }
+
+      const inputsFWRes = await new sql.Request(tx)
+        .input("NoBJSortir", sql.VarChar(50), no)
+        .query(
+          `SELECT NoFurnitureWIP FROM dbo.BJSortirRejectInputLabelFurnitureWIP WHERE NoBJSortir=@NoBJSortir`,
+        );
+
+      if (inputsFWRes.recordset.length > 0) {
+        const codesJson = JSON.stringify(
+          inputsFWRes.recordset.map((r) => ({ code: r.NoFurnitureWIP })),
+        );
+        await new sql.Request(tx)
+          .input("CodesJson", sql.NVarChar(sql.MAX), codesJson)
+          .input("NewDate", sql.DateTime, newDate).query(`
+            UPDATE dbo.FurnitureWIP
+            SET DateUsage = @NewDate
+            WHERE NoFurnitureWIP IN (
+              SELECT j.code FROM OPENJSON(@CodesJson)
+              WITH (code varchar(50) '$.code') AS j
+            )
+          `);
+      }
+
+      const outputsBJRes = await new sql.Request(tx)
+        .input("NoBJSortir", sql.VarChar(50), no)
+        .query(
+          `SELECT NoBJ FROM dbo.BJSortirRejectOutputLabelBarangJadi WHERE NoBJSortir=@NoBJSortir`,
+        );
+
+      if (outputsBJRes.recordset.length > 0) {
+        const codesJson = JSON.stringify(
+          outputsBJRes.recordset.map((r) => ({ code: r.NoBJ })),
+        );
+        await new sql.Request(tx)
+          .input("CodesJson", sql.NVarChar(sql.MAX), codesJson)
+          .input("NewDate", sql.DateTime, newDate).query(`
+            UPDATE dbo.BarangJadi
+            SET DateCreate = @NewDate
+            WHERE NoBJ IN (
+              SELECT j.code FROM OPENJSON(@CodesJson)
+              WITH (code varchar(50) '$.code') AS j
+            )
+          `);
+      }
+
+      const outputsRejectRes = await new sql.Request(tx)
+        .input("NoBJSortir", sql.VarChar(50), no)
+        .query(
+          `SELECT NoReject FROM dbo.BJSortirRejectOutputLabelReject WHERE NoBJSortir=@NoBJSortir`,
+        );
+
+      if (outputsRejectRes.recordset.length > 0) {
+        const codesJson = JSON.stringify(
+          outputsRejectRes.recordset.map((r) => ({ code: r.NoReject })),
+        );
+        await new sql.Request(tx)
+          .input("CodesJson", sql.NVarChar(sql.MAX), codesJson)
+          .input("NewDate", sql.DateTime, newDate).query(`
+            UPDATE dbo.RejectV2
+            SET DateCreate = @NewDate
+            WHERE NoReject IN (
+              SELECT j.code FROM OPENJSON(@CodesJson)
+              WITH (code varchar(50) '$.code') AS j
+            )
+          `);
+      }
+    }
+
+    await new sql.Request(tx)
+      .input("NoBJSortir", sql.VarChar(50), no)
+      .input("IdWarehouse", sql.Int, newWarehouse)
+      .input("TglBJSortir", sql.Date, new Date(newTgl)).query(`
+        UPDATE dbo.BJSortirReject_h
+        SET IdWarehouse = @IdWarehouse, TglBJSortir = @TglBJSortir
+        WHERE NoBJSortir = @NoBJSortir
+      `);
+
+    await tx.commit();
+
+    return { success: true, noBJSortir: no, audit: { actorId, requestId } };
+  } catch (e) {
+    try {
+      await tx.rollback();
+    } catch (_) {}
+    throw e;
+  }
+};
+
 exports.deleteSortirReject = async (noBJSortir, ctx) => {
   const pool = await poolPromise;
   const tx = new sql.Transaction(pool);
@@ -479,12 +634,48 @@ exports.deleteSortirReject = async (noBJSortir, ctx) => {
     const rejectOutputRes = await new sql.Request(tx)
       .input("NoBJSortir", sql.VarChar(50), no)
       .query(
-        `SELECT TOP 1 NoReject FROM dbo.BJSortirRejectOutputLabelReject WHERE NoBJSortir=@NoBJSortir`,
+        `SELECT NoReject FROM dbo.BJSortirRejectOutputLabelReject WHERE NoBJSortir=@NoBJSortir`,
       );
+
     if (rejectOutputRes.recordset.length > 0) {
-      throw conflict(
-        "Tidak bisa hapus dari sortir reject v2: transaksi memiliki output reject",
+      const rejectJson = JSON.stringify(
+        rejectOutputRes.recordset.map((r) => ({ code: r.NoReject })),
       );
+
+      const printedReject = await new sql.Request(tx).input(
+        "CodesJson",
+        sql.NVarChar(sql.MAX),
+        rejectJson,
+      ).query(`
+        SELECT TOP 1 NoReject
+        FROM dbo.RejectV2
+        WHERE NoReject IN (
+          SELECT j.code FROM OPENJSON(@CodesJson)
+          WITH (code varchar(50) '$.code') AS j
+        )
+        AND HasBeenPrinted <> 0 
+      `);
+      if (printedReject.recordset.length > 0) {
+        throw conflict("Tidak bisa hapus: label output sudah pernah dicetak");
+      }
+
+      await new sql.Request(tx).input(
+        "CodesJson",
+        sql.NVarChar(sql.MAX),
+        rejectJson,
+      ).query(`
+        DELETE FROM dbo.RejectV2
+        WHERE NoReject IN (
+          SELECT j.code FROM OPENJSON(@CodesJson)
+          WITH (code varchar(50) '$.code') AS j
+        )
+      `);
+
+      await new sql.Request(tx)
+        .input("NoBJSortir", sql.VarChar(50), no)
+        .query(
+          `DELETE FROM dbo.BJSortirRejectOutputLabelReject WHERE NoBJSortir=@NoBJSortir`,
+        );
     }
 
     const outputsRes = await new sql.Request(tx)
@@ -498,7 +689,7 @@ exports.deleteSortirReject = async (noBJSortir, ctx) => {
         outputsRes.recordset.map((r) => ({ code: r.NoBJ })),
       );
 
-      const usedOutput = await new sql.Request(tx).input(
+      const printedOutput = await new sql.Request(tx).input(
         "CodesJson",
         sql.NVarChar(sql.MAX),
         outputJson,
@@ -509,12 +700,10 @@ exports.deleteSortirReject = async (noBJSortir, ctx) => {
           SELECT j.code FROM OPENJSON(@CodesJson)
           WITH (code varchar(50) '$.code') AS j
         )
-        AND DateUsage IS NOT NULL
+        AND HasBeenPrinted <> 0
       `);
-      if (usedOutput.recordset.length > 0) {
-        throw conflict(
-          "Tidak bisa hapus: label output barangJadi sudah digunakan di proses lain",
-        );
+      if (printedOutput.recordset.length > 0) {
+        throw conflict("Tidak bisa hapus: label output sudah pernah dicetak");
       }
 
       await new sql.Request(tx)
@@ -601,6 +790,7 @@ exports.deleteSortirReject = async (noBJSortir, ctx) => {
     }
 
     if (
+      rejectOutputRes.recordset.length === 0 &&
       outputsRes.recordset.length === 0 &&
       inputsBarangJadiRes.recordset.length === 0 &&
       inputsFurnitureWipRes.recordset.length === 0

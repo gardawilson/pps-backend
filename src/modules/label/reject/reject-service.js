@@ -97,7 +97,7 @@ exports.getAll = async ({ page, limit, search, includeUsed = false }) => {
           mHot.NamaMesin,
           mSpan.NamaMesin,
           CASE 
-            WHEN bjr.NoBJSortir IS NOT NULL THEN 'BJ Sortir'
+            WHEN bjr.NoBJSortir IS NOT NULL THEN 'Sortir Reject'
           END
         )
       ) AS OutputNamaMesin

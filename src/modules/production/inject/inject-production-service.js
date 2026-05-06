@@ -284,6 +284,40 @@ async function createInjectProduksi(payload, ctx) {
     });
 
     // ===============================
+    // Validasi kombinasi Cetakan / Warna / FurnitureMaterial
+    // ===============================
+    if (
+      body.idCetakan != null ||
+      body.idWarna != null ||
+      body.idFurnitureMaterial != null
+    ) {
+      const cwReq = new sql.Request(tx);
+      cwReq
+        .input("IdCetakan", sql.Int, body.idCetakan ?? null)
+        .input("IdWarna", sql.Int, body.idWarna ?? null)
+        .input(
+          "IdFurnitureMaterial",
+          sql.Int,
+          body.idFurnitureMaterial ?? null,
+        );
+
+      const cwRes = await cwReq.query(`
+        SELECT TOP 1 1 AS found
+        FROM dbo.CetakanWarna_h
+        WHERE
+          (@IdCetakan           IS NULL OR IdCetakan           = @IdCetakan)
+          AND (@IdWarna             IS NULL OR IdWarna             = @IdWarna)
+          AND (@IdFurnitureMaterial IS NULL OR IdFurnitureMaterial = @IdFurnitureMaterial)
+      `);
+
+      if (cwRes.recordset.length === 0) {
+        throw badReq(
+          "Cetakan, warna, dan material tidak valid atau belum terdaftar di master cetakan warna material.",
+        );
+      }
+    }
+
+    // ===============================
     // Generate NoProduksi unik
     // ===============================
     const gen = async () =>

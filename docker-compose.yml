@@ -2,8 +2,7 @@ services:
   app:
     build: .
     container_name: pps-backend
-    ports:
-      - "7500:7500"
+    network_mode: host
     env_file: .env
     volumes:
       - ${UPDATES_HOST_DIR}:/app/deploy/pps_update

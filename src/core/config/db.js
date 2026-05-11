@@ -9,7 +9,7 @@ const dbConfig = {
   port: parseInt(process.env.DB_PORT, 10),
   database: process.env.DB_DATABASE,
   options: {
-    encrypt: false, // true untuk Azure / SSL
+    encrypt: true, // true untuk Azure / SSL
     trustServerCertificate: true, // true untuk local/self-signed
   },
   pool: {

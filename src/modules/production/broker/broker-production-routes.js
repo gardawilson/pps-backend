@@ -17,6 +17,13 @@ router.get(
 // ✅ Create
 router.post("/broker", verifyToken, brokerProduksiController.createProduksi);
 
+// POST /broker/split-time/:idMesin/:tanggal
+router.post(
+  "/broker/split-time/:idMesin/:tanggal",
+  verifyToken,
+  brokerProduksiController.splitProduksiTime,
+);
+
 // ✅ Update by NoProduksi
 router.put(
   "/broker/:noProduksi",

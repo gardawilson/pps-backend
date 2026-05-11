@@ -1,4 +1,4 @@
-const { sql, poolPromise } = require('../../core/config/db');
+const { poolPromise } = require('../../core/config/db');
 
 async function getAllBlok() {
   const pool = await poolPromise;

@@ -17,7 +17,6 @@ router.get(
   ctrl.getAll,
 );
 
-// GET one header's details by NoBroker
 router.get(
   "/labels/broker/:nobroker",
   requirePermission("label_broker:read"),

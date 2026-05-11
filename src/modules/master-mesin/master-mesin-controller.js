@@ -46,4 +46,38 @@ async function getByIdBagian(req, res) {
   }
 }
 
-module.exports = { getByIdBagian };
+async function getBroker(req, res) {
+  const { username } = req;
+  const idBagianMesin = 2;
+  const includeDisabled = String(req.query.includeDisabled || '1') === '1';
+
+  console.log(
+    '🔍 Fetching MstMesin broker | Username:',
+    username,
+    '| IdBagianMesin:',
+    idBagianMesin,
+    '| includeDisabled:',
+    includeDisabled
+  );
+
+  try {
+    const data = await service.getByIdBagian({ idBagianMesin, includeDisabled });
+    return res.status(200).json({
+      success: true,
+      message: 'Data MstMesin broker berhasil diambil',
+      idBagianMesin,
+      includeDisabled,
+      totalData: data.length,
+      data,
+    });
+  } catch (error) {
+    console.error('Error fetching MstMesin broker:', error);
+    return res.status(500).json({
+      success: false,
+      message: 'Internal Server Error',
+      error: error.message,
+    });
+  }
+}
+
+module.exports = { getByIdBagian, getBroker };

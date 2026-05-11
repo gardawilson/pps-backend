@@ -150,9 +150,47 @@ async function getProduksiByDate(date) {
       h.HourMeter,
       h.BeratProdukHasilTimbang,
       CONVERT(VARCHAR(8), h.HourStart, 108) AS HourStart,
-      CONVERT(VARCHAR(8), h.HourEnd,   108) AS HourEnd
+      CONVERT(VARCHAR(8), h.HourEnd,   108) AS HourEnd,
+      jenisAgg.IdJenis AS IdJenis,
+      jenisAgg.NamaJenis AS NamaJenis
     FROM dbo.InjectProduksi_h h WITH (NOLOCK)
     LEFT JOIN dbo.MstMesin m WITH (NOLOCK) ON h.IdMesin = m.IdMesin
+    OUTER APPLY (
+      SELECT
+        STRING_AGG(CONVERT(VARCHAR(50), x.IdJenis), ', ') AS IdJenis,
+        STRING_AGG(x.NamaJenis, ', ') AS NamaJenis
+      FROM (
+        SELECT DISTINCT
+          dFw.IdFurnitureWIP AS IdJenis,
+          cab.Nama AS NamaJenis
+        FROM dbo.CetakanWarnaToFurnitureWIP_d dFw WITH (NOLOCK)
+        INNER JOIN dbo.MstCabinetWIP cab WITH (NOLOCK)
+          ON cab.IdCabinetWIP = dFw.IdFurnitureWIP
+        WHERE dFw.IdCetakan = h.IdCetakan
+          AND dFw.IdWarna = h.IdWarna
+          AND (
+            (dFw.IdFurnitureMaterial IS NULL
+              AND (h.IdFurnitureMaterial = 0 OR h.IdFurnitureMaterial IS NULL))
+            OR dFw.IdFurnitureMaterial = h.IdFurnitureMaterial
+          )
+
+        UNION
+
+        SELECT DISTINCT
+          dBj.IdBarangJadi AS IdJenis,
+          mbj.NamaBJ AS NamaJenis
+        FROM dbo.CetakanWarnaToProduk_d dBj WITH (NOLOCK)
+        INNER JOIN dbo.MstBarangJadi mbj WITH (NOLOCK)
+          ON mbj.IdBJ = dBj.IdBarangJadi
+        WHERE dBj.IdCetakan = h.IdCetakan
+          AND dBj.IdWarna = h.IdWarna
+          AND (
+            (dBj.IdFurnitureMaterial IS NULL
+              AND (h.IdFurnitureMaterial = 0 OR h.IdFurnitureMaterial IS NULL))
+            OR dBj.IdFurnitureMaterial = h.IdFurnitureMaterial
+          )
+      ) x
+    ) jenisAgg
     WHERE CONVERT(date, h.TglProduksi) = @date
     ORDER BY h.Jam ASC;
   `;

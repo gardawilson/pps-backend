@@ -16,6 +16,9 @@ const {
 } = require("../../../core/utils/sequence-code-helper");
 const { badReq, conflict } = require("../../../core/utils/http-error");
 const { normalizeDecimalField } = require("../../../core/utils/number-utils");
+const {
+  assertBrokerProductionOutputWeightWithinInput,
+} = require("../../../core/shared/broker-production-weight-guard");
 
 // GET all header Broker with pagination & search (mirror of Washing.getAll)
 exports.getAll = async ({ page, limit, search, includeUsed = false }) => {
@@ -439,6 +442,23 @@ exports.createBrokerCascade = async (payload) => {
         if (needBlok) header.Blok = lokasi.Blok;
         if (needLokasi) header.IdLokasi = lokasi.IdLokasi;
       }
+    }
+
+    // ===============================
+    // 0.1) Guard berat output produksi broker
+    // Rule: output existing + berat label baru <= total berat input produksi
+    // ===============================
+    if (hasProduksi) {
+      const totalBeratLabelBaruKg = normalizedDetails.reduce(
+        (sum, item) => sum + (Number(item.Berat) || 0),
+        0,
+      );
+      await assertBrokerProductionOutputWeightWithinInput({
+        runner: tx,
+        noProduksi: NoProduksi,
+        tambahanBeratKg: totalBeratLabelBaruKg,
+        contextLabel: "output",
+      });
     }
 
     // ===============================
@@ -1373,3 +1393,4 @@ exports.incrementHasBeenPrinted = async (payload) => {
     throw e;
   }
 };
+

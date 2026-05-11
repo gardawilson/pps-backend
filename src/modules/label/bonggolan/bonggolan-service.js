@@ -15,6 +15,9 @@ const {
   generateNextCode,
 } = require("../../../core/utils/sequence-code-helper");
 const { badReq, conflict } = require("../../../core/utils/http-error");
+const {
+  assertBrokerProductionOutputWeightWithinInput,
+} = require("../../../core/shared/broker-production-weight-guard");
 
 exports.getAll = async ({ page, limit, search, includeUsed = false }) => {
   const pool = await poolPromise;
@@ -255,6 +258,23 @@ exports.createBonggolanCascade = async (payload) => {
       }
     }
 
+    // Guard berat untuk output produksi broker:
+    // output existing + berat bonggolan baru tidak boleh > total input produksi broker
+    if (processedType === "BROKER") {
+      const beratBonggolanBaruKg =
+        header.Berat == null ? 0 : Number(header.Berat);
+      if (!Number.isFinite(beratBonggolanBaruKg) || beratBonggolanBaruKg < 0) {
+        throw badReq("Berat bonggolan tidak valid.");
+      }
+
+      await assertBrokerProductionOutputWeightWithinInput({
+        runner: tx,
+        noProduksi: processedCode,
+        tambahanBeratKg: beratBonggolanBaruKg,
+        contextLabel: "output",
+      });
+    }
+
     // ===============================
     // 1) Generate NoBonggolan (PAKAI generateNextCode seperti crusher)
     // ===============================
@@ -416,10 +436,7 @@ exports.updateBonggolanCascade = async (payload) => {
   if (hasProcessed) {
     if (processedCode.startsWith("E.")) processedType = "BROKER";
     else if (processedCode.startsWith("S.")) processedType = "INJECT";
-    else
-      throw badReq(
-        "ProcessedCode prefix tidak dikenali (pakai E. atau S.)",
-      );
+    else throw badReq("ProcessedCode prefix tidak dikenali (pakai E. atau S.)");
   }
 
   try {

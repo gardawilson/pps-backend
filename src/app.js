@@ -59,9 +59,11 @@ const mstPembeliRoutes = require("./modules/master/pembeli/master-pembeli-route"
 const mstWarehouseRoutes = require("./modules/master/warehouse/master-warehouse-route");
 const mstPrinterRoutes = require("./modules/master/printer/master-printer-route");
 const mstReguRoutes = require("./modules/master/regu/master-regu-route");
+const mstShiftRoutes = require("./modules/master/shift/master-shift-route");
 const auditRoutes = require("./modules/audit/audit-route");
 const updateRoutes = require("./modules/update/update-routes");
 const printLockRoutes = require("./modules/label/print-lock/print-lock-routes");
+const mappingRoutes = require("./modules/mapping/mapping-routes");
 
 const app = express();
 
@@ -92,6 +94,7 @@ app.use("/api/", bahanBakuRoutes);
 app.use("/api/", labelWashingRoutes);
 app.use("/api/plastic-type", plasticTypeRoutes);
 app.use("/api/blok", blokRoutes);
+app.use("/api/mapping", mappingRoutes);
 app.use("/api/", labelRoutes);
 app.use("/api/production", productionRoutes);
 app.use("/api/bongkar-susun", bongkarSusunRoutes);
@@ -139,6 +142,7 @@ app.use("/api/bj-jual", bjJualRoutes);
 app.use("/api/mst", mstPembeliRoutes);
 app.use("/api/mst", mstWarehouseRoutes);
 app.use("/api/mst", mstReguRoutes);
+app.use("/api/mst", mstShiftRoutes);
 app.use("/api", mstPrinterRoutes);
 app.use("/api/audit", auditRoutes);
 

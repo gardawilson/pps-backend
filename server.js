@@ -21,7 +21,7 @@ initSocket(io);
 // Start server
 server.listen(port, () => {
   const ip = getLocalIp();
-  console.log("✅ Server berjalan:");
+  console.log("✅ Server berjalan!:");
   console.log(`   Local:   http://localhost:${port}`);
   console.log(`   Network: http://${ip}:${port}`);
 });

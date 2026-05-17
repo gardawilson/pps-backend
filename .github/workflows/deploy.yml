@@ -8,15 +8,21 @@ on:
 jobs:
   deploy:
     runs-on: self-hosted
+
     env:
       APP_DIR: /opt/pps_backend
+
     steps:
       - name: Pull latest code
         shell: bash
-        run: git pull origin production
         working-directory: ${{ env.APP_DIR }}
+        run: git pull origin production
 
       - name: Deploy with Docker
         shell: bash
-        run: docker compose up -d --build
         working-directory: ${{ env.APP_DIR }}
+        run: docker compose up -d --build
+
+      - name: Cleanup Docker Images
+        shell: bash
+        run: docker image prune -f

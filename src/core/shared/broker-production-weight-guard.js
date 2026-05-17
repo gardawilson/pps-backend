@@ -1,10 +1,16 @@
 const { sql } = require("../config/db");
 const { badReq } = require("../utils/http-error");
 
-async function getBrokerProductionWeightSummary(runner, noProduksi) {
+async function getBrokerProductionWeightSummary(
+  runner,
+  noProduksi,
+  options = {},
+) {
   const code = String(noProduksi || "").trim();
   if (!code) throw badReq("noProduksi wajib diisi");
   if (!runner) throw badReq("runner transaksi tidak tersedia");
+  const useOutputLock = options.useOutputLock !== false;
+  const outputLockHint = useOutputLock ? "WITH (UPDLOCK, HOLDLOCK)" : "WITH (NOLOCK)";
 
   const req = new sql.Request(runner);
   req.input("NoProduksi", sql.VarChar(50), code);
@@ -98,14 +104,14 @@ async function getBrokerProductionWeightSummary(runner, noProduksi) {
     ),
     OutputBrokerRows AS (
       SELECT ISNULL(d.Berat, 0) AS Berat
-      FROM dbo.BrokerProduksiOutput o WITH (UPDLOCK, HOLDLOCK)
+      FROM dbo.BrokerProduksiOutput o ${outputLockHint}
       LEFT JOIN dbo.Broker_d d WITH (NOLOCK)
         ON d.NoBroker = o.NoBroker AND d.NoSak = o.NoSak
       WHERE o.NoProduksi = @NoProduksi
     ),
     OutputBonggolanRows AS (
       SELECT ISNULL(b.Berat, 0) AS Berat
-      FROM dbo.BrokerProduksiOutputBonggolan ob WITH (UPDLOCK, HOLDLOCK)
+      FROM dbo.BrokerProduksiOutputBonggolan ob ${outputLockHint}
       LEFT JOIN dbo.Bonggolan b WITH (NOLOCK)
         ON b.NoBonggolan = ob.NoBonggolan
       WHERE ob.NoProduksi = @NoProduksi

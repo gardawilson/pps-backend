@@ -58,4 +58,38 @@ async function getShiftHours(req, res) {
   }
 }
 
-module.exports = { getShiftHours };
+async function getCurrentShift(req, res) {
+  try {
+    const row = await service.getCurrentShift();
+
+    if (!row) {
+      return res.status(404).json({
+        success: false,
+        message: "Shift aktif saat ini tidak ditemukan",
+      });
+    }
+
+    return res.status(200).json({
+      success: true,
+      message: "Data shift aktif saat ini berhasil diambil",
+      data: {
+        tanggal: row.CurrentDate,
+        waktu: row.CurrentTime,
+        shift: row.NoShift,
+        idShiftHourSet: row.IdShiftHourSet,
+        validFrmDate: row.ValidFrmDate,
+        hourStart: row.HourStart,
+        hourEnd: row.HourEnd,
+      },
+    });
+  } catch (error) {
+    console.error("Error get current shift:", error);
+    return res.status(500).json({
+      success: false,
+      message: "Internal Server Error",
+      error: error.message,
+    });
+  }
+}
+
+module.exports = { getShiftHours, getCurrentShift };

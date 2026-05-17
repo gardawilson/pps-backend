@@ -7,5 +7,6 @@ const ctrl = require("./master-shift-controller");
 // GET shift hour by tanggal & shift
 // Query: ?tanggal=2026-05-09&shift=1
 router.get("/shift/hour", verifyToken, ctrl.getShiftHours);
+router.get("/shift/current", verifyToken, ctrl.getCurrentShift);
 
 module.exports = router;

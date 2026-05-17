@@ -630,6 +630,9 @@ async function createBrokerProduksi(payload, ctx) {
   if (!body?.tglProduksi) must.push("tglProduksi");
   if (body?.idMesin == null) must.push("idMesin");
   if (body?.idOperator == null) must.push("idOperator");
+  if (body?.outputJenisId == null) must.push("outputJenisId");
+  if (!body?.hourStart) must.push("hourStart");
+  if (!body?.hourEnd) must.push("hourEnd");
   if (body?.shift == null) must.push("shift");
   if (must.length) throw badReq(`Field wajib: ${must.join(", ")}`);
 
@@ -639,8 +642,7 @@ async function createBrokerProduksi(payload, ctx) {
     const calc = calcJamKerjaFromStartEnd(body?.hourStart, body?.hourEnd);
     if (calc != null) jamKerja = calc;
   }
-  if (jamKerja == null)
-    throw badReq("Field wajib: jam (atau isi hourStart-hourEnd)");
+  if (jamKerja == null) throw badReq("Field wajib: jam");
 
   const jamInt = parseJamToInt(jamKerja);
   const docDateOnly = toDateOnly(body.tglProduksi);
@@ -734,6 +736,7 @@ async function createBrokerProduksi(payload, ctx) {
       .input("TglProduksi", sql.Date, docDateOnly)
       .input("IdMesin", sql.Int, body.idMesin)
       .input("IdOperator", sql.Int, body.idOperator)
+      .input("OutputJenisId", sql.Int, body.outputJenisId)
       .input("Jam", sql.Int, jamInt)
       .input("Shift", sql.Int, body.shift)
       .input("CreateBy", sql.VarChar(100), body.createBy) // controller overwrite
@@ -754,6 +757,7 @@ async function createBrokerProduksi(payload, ctx) {
         TglProduksi  date,
         IdMesin      int,
         IdOperator   int,
+        OutputJenisId int,
         Jam          int,
         Shift        int,
         CreateBy     varchar(100),
@@ -773,6 +777,7 @@ async function createBrokerProduksi(payload, ctx) {
         TglProduksi,
         IdMesin,
         IdOperator,
+        OutputJenisId,
         Jam,
         Shift,
         CreateBy,
@@ -791,6 +796,7 @@ async function createBrokerProduksi(payload, ctx) {
         INSERTED.TglProduksi,
         INSERTED.IdMesin,
         INSERTED.IdOperator,
+        INSERTED.OutputJenisId,
         INSERTED.Jam,
         INSERTED.Shift,
         INSERTED.CreateBy,
@@ -809,6 +815,7 @@ async function createBrokerProduksi(payload, ctx) {
         @TglProduksi,
         @IdMesin,
         @IdOperator,
+        @OutputJenisId,
         @Jam,
         @Shift,
         @CreateBy,
@@ -934,6 +941,11 @@ async function updateBrokerProduksi(noProduksi, payload, ctx) {
       rqUpd.input("Shift", sql.Int, payload.shift);
     }
 
+    if (payload.outputJenisId !== undefined) {
+      sets.push("OutputJenisId = @OutputJenisId");
+      rqUpd.input("OutputJenisId", sql.Int, payload.outputJenisId ?? null);
+    }
+
     if (payload.checkBy1 !== undefined) {
       sets.push("CheckBy1 = @CheckBy1");
       rqUpd.input("CheckBy1", sql.VarChar(100), payload.checkBy1 ?? null);
@@ -1007,6 +1019,7 @@ async function updateBrokerProduksi(noProduksi, payload, ctx) {
         TglProduksi  date,
         IdMesin      int,
         IdOperator   int,
+        OutputJenisId int,
         Jam          int,
         Shift        int,
         CreateBy     varchar(100),
@@ -1028,6 +1041,7 @@ async function updateBrokerProduksi(noProduksi, payload, ctx) {
         INSERTED.TglProduksi,
         INSERTED.IdMesin,
         INSERTED.IdOperator,
+        INSERTED.OutputJenisId,
         INSERTED.Jam,
         INSERTED.Shift,
         INSERTED.CreateBy,
@@ -2331,8 +2345,11 @@ async function splitProduksiTime(selector, payload, ctx) {
   }
 
   const hourStart = String(payload?.hourStart || "").trim();
-  const hourEnd = String(payload?.hourEnd || "").trim();
-  if (!hourStart || !hourEnd) throw badReq("hourStart dan hourEnd wajib diisi");
+  const outputJenisId = Number(payload?.outputJenisId);
+  if (!hourStart) throw badReq("hourStart wajib diisi");
+  if (!Number.isInteger(outputJenisId) || outputJenisId <= 0) {
+    throw badReq("outputJenisId wajib integer positif");
+  }
   const toSeconds = (hhmmss) => {
     const m = /^(\d{2}):(\d{2})(?::(\d{2}))?$/.exec(
       String(hhmmss || "").trim(),
@@ -2358,13 +2375,14 @@ async function splitProduksiTime(selector, payload, ctx) {
     return m ? `${m[1]}:${m[2]}:${m[3]}` : null;
   };
   const reqStartSec = toSeconds(hourStart);
-  const reqEndSec = toSeconds(hourEnd);
-  if (reqStartSec == null || reqEndSec == null) {
-    throw badReq("Format hourStart/hourEnd harus HH:mm atau HH:mm:ss");
+  if (reqStartSec == null) {
+    throw badReq("Format hourStart harus HH:mm atau HH:mm:ss");
   }
-  if (reqEndSec <= reqStartSec) {
-    throw badReq("hourEnd harus lebih besar dari hourStart");
-  }
+  const normalizeIntoShiftWindow = (sec, shiftStartSec, shiftEndSec) => {
+    const isOvernight = shiftStartSec > shiftEndSec;
+    if (!isOvernight) return sec;
+    return sec < shiftStartSec ? sec + 86400 : sec;
+  };
 
   const actorIdNum = Number(ctx?.actorId);
   if (!Number.isFinite(actorIdNum) || actorIdNum <= 0) {
@@ -2391,7 +2409,7 @@ async function splitProduksiTime(selector, payload, ctx) {
         FROM dbo.BrokerProduksi_h WITH (UPDLOCK, HOLDLOCK)
         WHERE IdMesin = @IdMesin
           AND CONVERT(date, TglProduksi) = @Tanggal
-        ORDER BY Jam DESC, HourEnd DESC, NoProduksi DESC
+        ORDER BY HourStart DESC, NoProduksi DESC
       `);
 
     const src = srcRes.recordset?.[0];
@@ -2402,6 +2420,76 @@ async function splitProduksiTime(selector, payload, ctx) {
     }
     const sourceNo = String(src.NoProduksi || "").trim();
     if (!sourceNo) throw conflict("Data produksi terakhir tidak valid");
+    const srcShift = Number(src.Shift);
+    if (!Number.isInteger(srcShift) || srcShift <= 0) {
+      throw conflict(`Data shift produksi sumber tidak valid pada ${sourceNo}.`);
+    }
+
+    const shiftRefRes = await new sql.Request(tx)
+      .input("Tanggal", sql.Date, tanggal)
+      .input("NoShift", sql.Int, srcShift).query(`
+        ;WITH LatestShiftSet AS (
+          SELECT TOP 1
+            h.IdShiftHourSet,
+            h.ValidFrmDate
+          FROM dbo.MstShiftHourSet h WITH (NOLOCK)
+          WHERE CONVERT(date, h.ValidFrmDate) <= @Tanggal
+          ORDER BY CONVERT(date, h.ValidFrmDate) DESC, h.IdShiftHourSet DESC
+        )
+        SELECT TOP 1
+          ls.IdShiftHourSet,
+          ls.ValidFrmDate,
+          d.NoShift,
+          CONVERT(varchar(8), d.HourStart, 108) AS HourStart,
+          CONVERT(varchar(8), d.HourEnd, 108) AS HourEnd
+        FROM LatestShiftSet ls
+        INNER JOIN dbo.MstShiftHourSet_d d WITH (NOLOCK)
+          ON d.IdShiftHourSet = ls.IdShiftHourSet
+        WHERE d.NoShift = @NoShift;
+      `);
+
+    const shiftRef = shiftRefRes.recordset?.[0];
+    if (!shiftRef) {
+      throw notFound(
+        `Master shift tidak ditemukan untuk tanggal ${tanggal} dan shift ${srcShift}.`,
+      );
+    }
+
+    const shiftStartSec = toSeconds(shiftRef.HourStart);
+    const hourEnd = String(shiftRef.HourEnd || "").trim();
+    const shiftEndSec = toSeconds(hourEnd);
+    if (shiftStartSec == null || shiftEndSec == null) {
+      throw conflict("Master shift memiliki HourStart/HourEnd tidak valid.");
+    }
+
+    const reqStartInWindow = normalizeIntoShiftWindow(
+      reqStartSec,
+      shiftStartSec,
+      shiftEndSec,
+    );
+    const reqEndInWindow = normalizeIntoShiftWindow(
+      shiftEndSec,
+      shiftStartSec,
+      shiftEndSec,
+    );
+    const shiftEndBound =
+      shiftStartSec > shiftEndSec ? shiftEndSec + 86400 : shiftEndSec;
+
+    if (
+      reqStartInWindow < shiftStartSec ||
+      reqStartInWindow > shiftEndBound ||
+      reqEndInWindow < shiftStartSec ||
+      reqEndInWindow > shiftEndBound
+    ) {
+      throw badReq(
+        `Range jam harus berada dalam batas shift ${srcShift} (${shiftRef.HourStart}-${shiftRef.HourEnd}) untuk tanggal ${tanggal}.`,
+      );
+    }
+    if (reqEndInWindow <= reqStartInWindow) {
+      throw badReq(
+        "hourEnd harus lebih besar dari hourStart dalam rentang shift yang sama",
+      );
+    }
     const srcHourStartStr = normalizeTimeValue(src.HourStart);
     const srcHourEndStr = normalizeTimeValue(src.HourEnd);
     const srcStartSec = toSeconds(srcHourStartStr);
@@ -2411,8 +2499,15 @@ async function splitProduksiTime(selector, payload, ctx) {
         `Data jam produksi sumber tidak valid pada ${sourceNo} (HourStart/HourEnd).`,
       );
     }
-    if (reqStartSec <= srcStartSec || reqStartSec > srcEndSec) {
-      throw badReq(`Jam Mulai harus lebih besar dari ${srcHourStartStr}.`);
+    const reqStartInSource = normalizeIntoShiftWindow(
+      reqStartSec,
+      srcStartSec,
+      srcEndSec,
+    );
+    if (reqStartInSource <= srcStartSec) {
+      throw badReq(
+        `Jam Mulai harus lebih besar dari ${srcHourStartStr}.`,
+      );
     }
     // Jika split di tengah rentang lama, hourEnd baru tidak boleh melewati HourEnd lama
     // Jika hourStart tepat di HourEnd lama, ini mode "lanjutan", hourEnd boleh lebih besar.
@@ -2490,7 +2585,8 @@ async function splitProduksiTime(selector, payload, ctx) {
       .input("NewNoProduksi", sql.VarChar(50), newNoProduksi)
       .input("SourceNoProduksi", sql.VarChar(50), sourceNo)
       .input("NewHourStart", sql.VarChar(20), hourStart)
-      .input("NewHourEnd", sql.VarChar(20), hourEnd);
+      .input("NewHourEnd", sql.VarChar(20), hourEnd)
+      .input("OutputJenisId", sql.Int, outputJenisId);
 
     const insertRes = await insReq.query(`
       DECLARE @out TABLE (
@@ -2498,6 +2594,7 @@ async function splitProduksiTime(selector, payload, ctx) {
         TglProduksi date,
         IdMesin int,
         IdOperator int,
+        OutputJenisId int,
         Jam int,
         Shift int,
         CreateBy varchar(100),
@@ -2513,12 +2610,13 @@ async function splitProduksiTime(selector, payload, ctx) {
       );
 
       INSERT INTO dbo.BrokerProduksi_h (
-        NoProduksi, TglProduksi, IdMesin, IdOperator, Jam, Shift, CreateBy,
+        NoProduksi, TglProduksi, IdMesin, IdOperator, OutputJenisId, Jam, Shift, CreateBy,
         CheckBy1, CheckBy2, ApproveBy, JmlhAnggota, Hadir, HourMeter,
         HourStart, HourEnd, IdRegu
       )
       OUTPUT
         INSERTED.NoProduksi, INSERTED.TglProduksi, INSERTED.IdMesin, INSERTED.IdOperator,
+        INSERTED.OutputJenisId,
         INSERTED.Jam, INSERTED.Shift, INSERTED.CreateBy, INSERTED.CheckBy1, INSERTED.CheckBy2,
         INSERTED.ApproveBy, INSERTED.JmlhAnggota, INSERTED.Hadir, INSERTED.HourMeter,
         INSERTED.HourStart, INSERTED.HourEnd, INSERTED.IdRegu
@@ -2528,6 +2626,7 @@ async function splitProduksiTime(selector, payload, ctx) {
         h.TglProduksi,
         h.IdMesin,
         h.IdOperator,
+        @OutputJenisId,
         h.Jam,
         h.Shift,
         h.CreateBy,

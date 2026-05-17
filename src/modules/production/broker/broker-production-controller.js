@@ -1,5 +1,9 @@
 // controllers/broker-production-controller.js
 const brokerProduksiService = require("./broker-production-service");
+const { poolPromise } = require("../../../core/config/db");
+const {
+  getBrokerProductionWeightSummary,
+} = require("../../../core/shared/broker-production-weight-guard");
 const {
   getActorId,
   getActorUsername,
@@ -66,11 +70,34 @@ async function getAllProduksi(req, res) {
       shift,
     );
 
+    const pool = await poolPromise;
+    const dataWithWeightSummary = [];
+    for (const row of data || []) {
+      const noProduksi = String(row?.NoProduksi || "").trim();
+      if (!noProduksi) {
+        dataWithWeightSummary.push({
+          ...row,
+          totalBeratInputKg: 0,
+          totalBeratOutputExistingKg: 0,
+        });
+        continue;
+      }
+
+      const summary = await getBrokerProductionWeightSummary(pool, noProduksi, {
+        useOutputLock: false,
+      });
+      dataWithWeightSummary.push({
+        ...row,
+        totalBeratInputKg: summary.totalBeratInputKg,
+        totalBeratOutputExistingKg: summary.totalBeratOutputExistingKg,
+      });
+    }
+
     return res.status(200).json({
       success: true,
       message: "BrokerProduksi_h retrieved successfully",
       totalData: total,
-      data,
+      data: dataWithWeightSummary,
       meta: {
         page,
         pageSize,
@@ -247,6 +274,7 @@ async function createProduksi(req, res) {
     tglProduksi: b.tglProduksi, // 'YYYY-MM-DD'
     idMesin: toInt(b.idMesin), // number
     idOperator: toInt(b.idOperator), // number
+    outputJenisId: toInt(b.outputJenisId), // number (MstBroker.IdBroker)
     jam: b.jam, // number or 'HH:mm-HH:mm'
     shift: toInt(b.shift), // number
     createBy: actorUsername, // controller overwrite dari token
@@ -269,7 +297,9 @@ async function createProduksi(req, res) {
   if (!payload.tglProduksi) must.push("tglProduksi");
   if (payload.idMesin == null) must.push("idMesin");
   if (payload.idOperator == null) must.push("idOperator");
-  if (payload.jam == null) must.push("jam");
+  if (payload.outputJenisId == null) must.push("outputJenisId");
+  if (!payload.hourStart) must.push("hourStart");
+  if (!payload.hourEnd) must.push("hourEnd");
   if (payload.shift == null) must.push("shift");
   if (must.length) {
     return res.status(400).json({
@@ -377,6 +407,8 @@ async function updateProduksi(req, res) {
 
     idMesin: b.idMesin !== undefined ? toInt(b.idMesin) : undefined,
     idOperator: b.idOperator !== undefined ? toInt(b.idOperator) : undefined,
+    outputJenisId:
+      b.outputJenisId !== undefined ? toInt(b.outputJenisId) : undefined,
 
     // jam boleh string 'HH:mm-HH:mm' / number / null (kalau mau set null)
     jam: b.jam !== undefined ? b.jam : undefined,
@@ -934,19 +966,25 @@ async function splitProduksiTime(req, res) {
 
   const body = req.body && typeof req.body === "object" ? req.body : {};
   const hourStart = String(body.hourStart || "").trim();
-  const hourEnd = String(body.hourEnd || "").trim();
+  const outputJenisId = Number(body.outputJenisId);
 
-  if (!hourStart || !hourEnd) {
+  if (!hourStart) {
     return res.status(400).json({
       success: false,
-      message: "hourStart dan hourEnd wajib diisi",
+      message: "hourStart wajib diisi",
     });
   }
   const timeRegex = /^\d{2}:\d{2}(:\d{2})?$/;
-  if (!timeRegex.test(hourStart) || !timeRegex.test(hourEnd)) {
+  if (!timeRegex.test(hourStart)) {
     return res.status(400).json({
       success: false,
-      message: "Format hourStart/hourEnd harus HH:mm atau HH:mm:ss",
+      message: "Format hourStart harus HH:mm atau HH:mm:ss",
+    });
+  }
+  if (!Number.isInteger(outputJenisId) || outputJenisId <= 0) {
+    return res.status(400).json({
+      success: false,
+      message: "outputJenisId wajib integer positif",
     });
   }
 
@@ -966,7 +1004,7 @@ async function splitProduksiTime(req, res) {
     const ctx = { actorId, actorUsername, requestId };
     const result = await brokerProduksiService.splitProduksiTime(
       { idMesin, tanggal },
-      { hourStart, hourEnd },
+      { hourStart, outputJenisId },
       ctx,
     );
 

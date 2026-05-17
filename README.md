@@ -1,6 +1,6 @@
 # PPS Backend
 
-Backend API untuk **Plastic Production System (PPS)** yang dibangun dengan Node.js, Express.js, dan SQL Server.
+Backend API untuk **Plastic Production System (PPS)** yang dibangun dengan stack utama Node.js, Express.js, dan SQL Server.
 
 ---
 

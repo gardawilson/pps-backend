@@ -61,12 +61,47 @@ async function getBroker(req, res) {
   );
 
   try {
-    const data = await service.getByIdBagian({ idBagianMesin, includeDisabled });
+    const rows = await service.getBrokerByNoProduksi({ idBagianMesin, includeDisabled });
+    const activeShiftMeta = rows[0]
+      ? {
+          currentDate: rows[0].CurrentDate ?? null,
+          currentTime: rows[0].CurrentTime ?? null,
+          shift: rows[0].ActiveShift ?? null,
+          hourStart: rows[0].ActiveShiftHourStart ?? null,
+          hourEnd: rows[0].ActiveShiftHourEnd ?? null,
+          validFrmDate: rows[0].ActiveShiftValidFrmDate ?? null,
+        }
+      : {
+          currentDate: null,
+          currentTime: null,
+          shift: null,
+          hourStart: null,
+          hourEnd: null,
+          validFrmDate: null,
+        };
+    const data = rows.map((row) => ({
+      IdMesin: row.IdMesin,
+      NamaMesin: row.NamaMesin,
+      Bagian: row.Bagian,
+      Target: row.Target,
+      NoProduksi: row.NoProduksi ?? null,
+      TglProduksi: row.TglProduksi ?? null,
+      OutputJenisId: row.OutputJenisId ?? null,
+      OutputJenisNama: row.OutputJenisNama ?? null,
+      OutputJenisItemCode: row.OutputJenisItemCode ?? null,
+      IdOperator: row.IdOperator ?? null,
+      Operator: row.Operator ?? null,
+      Shift: row.Shift ?? null,
+      HourStart: row.HourStart ?? null,
+      HourEnd: row.HourEnd ?? null,
+    }));
+
     return res.status(200).json({
       success: true,
-      message: 'Data MstMesin broker berhasil diambil',
+      message: 'Data broker per NoProduksi hari ini berhasil diambil',
       idBagianMesin,
       includeDisabled,
+      activeShift: activeShiftMeta,
       totalData: data.length,
       data,
     });

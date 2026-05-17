@@ -1,4 +1,4 @@
-name: Deploy to Server
+name: Deploy PPS Backend
 
 on:
   push:
@@ -7,22 +7,34 @@ on:
 
 jobs:
   deploy:
-    runs-on: self-hosted
+    runs-on: [self-hosted, Linux, X64]
 
     env:
       APP_DIR: /opt/pps_backend
 
     steps:
-      - name: Pull latest code
-        shell: bash
-        working-directory: ${{ env.APP_DIR }}
-        run: git pull origin production
+      - name: Validate App Directory
+        run: |
+          if [ ! -d "$APP_DIR" ]; then
+            echo "Directory $APP_DIR not found!"
+            exit 1
+          fi
 
-      - name: Deploy with Docker
-        shell: bash
+      - name: Pull Latest Code
         working-directory: ${{ env.APP_DIR }}
-        run: docker compose up -d --build
+        run: |
+          git fetch origin
+          git reset --hard origin/production
+
+      - name: Deploy Docker
+        working-directory: ${{ env.APP_DIR }}
+        run: |
+          docker compose up -d --build --remove-orphans
+
+      - name: Verify Container Running
+        run: |
+          docker ps | grep pps-backend
 
       - name: Cleanup Docker Images
-        shell: bash
-        run: docker image prune -f
+        run: |
+          docker image prune -af

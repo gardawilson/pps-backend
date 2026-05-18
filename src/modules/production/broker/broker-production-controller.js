@@ -274,7 +274,7 @@ async function createProduksi(req, res) {
     tglProduksi: b.tglProduksi, // 'YYYY-MM-DD'
     idMesin: toInt(b.idMesin), // number
     idOperator: toInt(b.idOperator), // number
-    outputJenisId: toInt(b.outputJenisId), // number (MstBroker.IdBroker)
+    outputJenisId: toInt(b.outputJenisId), // optional, number (MstBroker.IdBroker)
     jam: b.jam, // number or 'HH:mm-HH:mm'
     shift: toInt(b.shift), // number
     createBy: actorUsername, // controller overwrite dari token
@@ -297,7 +297,7 @@ async function createProduksi(req, res) {
   if (!payload.tglProduksi) must.push("tglProduksi");
   if (payload.idMesin == null) must.push("idMesin");
   if (payload.idOperator == null) must.push("idOperator");
-  if (payload.outputJenisId == null) must.push("outputJenisId");
+  // if (payload.outputJenisId == null) must.push("outputJenisId");
   if (!payload.hourStart) must.push("hourStart");
   if (!payload.hourEnd) must.push("hourEnd");
   if (payload.shift == null) must.push("shift");
@@ -839,7 +839,9 @@ async function deleteInputsAndPartials(req, res) {
 async function moveOutputs(req, res) {
   const fromNoProduksi = String(req.params.noProduksi || "").trim();
   if (!fromNoProduksi) {
-    return res.status(400).json({ success: false, message: "noProduksi is required" });
+    return res
+      .status(400)
+      .json({ success: false, message: "noProduksi is required" });
   }
 
   const body = req.body && typeof req.body === "object" ? req.body : {};
@@ -847,18 +849,26 @@ async function moveOutputs(req, res) {
   const items = body.items;
 
   if (!targetNoProduksi) {
-    return res.status(400).json({ success: false, message: "targetNoProduksi is required" });
+    return res
+      .status(400)
+      .json({ success: false, message: "targetNoProduksi is required" });
   }
   if (!Array.isArray(items) || items.length === 0) {
-    return res.status(400).json({ success: false, message: "items harus array dan tidak boleh kosong" });
+    return res.status(400).json({
+      success: false,
+      message: "items harus array dan tidak boleh kosong",
+    });
   }
 
   const actorId = getActorId(req);
   if (!actorId) {
-    return res.status(401).json({ success: false, message: "Unauthorized (idUsername missing)" });
+    return res
+      .status(401)
+      .json({ success: false, message: "Unauthorized (idUsername missing)" });
   }
 
-  const actorUsername = getActorUsername(req) || req.username || req.user?.username || "system";
+  const actorUsername =
+    getActorUsername(req) || req.username || req.user?.username || "system";
   const requestId = String(makeRequestId(req) || "").trim();
   if (requestId) res.setHeader("x-request-id", requestId);
 
@@ -882,7 +892,8 @@ async function moveOutputs(req, res) {
     const status = err.statusCode || err.status || 500;
     return res.status(status).json({
       success: false,
-      message: status === 500 ? "Internal Server Error" : err.message || "Error",
+      message:
+        status === 500 ? "Internal Server Error" : err.message || "Error",
       error: {
         message: err.message,
         details: process.env.NODE_ENV === "development" ? err.stack : undefined,
@@ -894,7 +905,9 @@ async function moveOutputs(req, res) {
 async function moveOutputsBonggolan(req, res) {
   const fromNoProduksi = String(req.params.noProduksi || "").trim();
   if (!fromNoProduksi) {
-    return res.status(400).json({ success: false, message: "noProduksi is required" });
+    return res
+      .status(400)
+      .json({ success: false, message: "noProduksi is required" });
   }
 
   const body = req.body && typeof req.body === "object" ? req.body : {};
@@ -902,18 +915,26 @@ async function moveOutputsBonggolan(req, res) {
   const noBonggolanList = body.noBonggolanList;
 
   if (!targetNoProduksi) {
-    return res.status(400).json({ success: false, message: "targetNoProduksi is required" });
+    return res
+      .status(400)
+      .json({ success: false, message: "targetNoProduksi is required" });
   }
   if (!Array.isArray(noBonggolanList) || noBonggolanList.length === 0) {
-    return res.status(400).json({ success: false, message: "noBonggolanList harus array dan tidak boleh kosong" });
+    return res.status(400).json({
+      success: false,
+      message: "noBonggolanList harus array dan tidak boleh kosong",
+    });
   }
 
   const actorId = getActorId(req);
   if (!actorId) {
-    return res.status(401).json({ success: false, message: "Unauthorized (idUsername missing)" });
+    return res
+      .status(401)
+      .json({ success: false, message: "Unauthorized (idUsername missing)" });
   }
 
-  const actorUsername = getActorUsername(req) || req.username || req.user?.username || "system";
+  const actorUsername =
+    getActorUsername(req) || req.username || req.user?.username || "system";
   const requestId = String(makeRequestId(req) || "").trim();
   if (requestId) res.setHeader("x-request-id", requestId);
 
@@ -937,7 +958,8 @@ async function moveOutputsBonggolan(req, res) {
     const status = err.statusCode || err.status || 500;
     return res.status(status).json({
       success: false,
-      message: status === 500 ? "Internal Server Error" : err.message || "Error",
+      message:
+        status === 500 ? "Internal Server Error" : err.message || "Error",
       error: {
         message: err.message,
         details: process.env.NODE_ENV === "development" ? err.stack : undefined,
@@ -1019,7 +1041,8 @@ async function splitProduksiTime(req, res) {
     const status = err.statusCode || err.status || 500;
     return res.status(status).json({
       success: false,
-      message: status === 500 ? "Internal Server Error" : err.message || "Error",
+      message:
+        status === 500 ? "Internal Server Error" : err.message || "Error",
       error: {
         message: err.message,
         details: process.env.NODE_ENV === "development" ? err.stack : undefined,

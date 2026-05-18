@@ -630,7 +630,6 @@ async function createBrokerProduksi(payload, ctx) {
   if (!body?.tglProduksi) must.push("tglProduksi");
   if (body?.idMesin == null) must.push("idMesin");
   if (body?.idOperator == null) must.push("idOperator");
-  if (body?.outputJenisId == null) must.push("outputJenisId");
   if (!body?.hourStart) must.push("hourStart");
   if (!body?.hourEnd) must.push("hourEnd");
   if (body?.shift == null) must.push("shift");
@@ -736,7 +735,7 @@ async function createBrokerProduksi(payload, ctx) {
       .input("TglProduksi", sql.Date, docDateOnly)
       .input("IdMesin", sql.Int, body.idMesin)
       .input("IdOperator", sql.Int, body.idOperator)
-      .input("OutputJenisId", sql.Int, body.outputJenisId)
+      .input("OutputJenisId", sql.Int, body.outputJenisId ?? null)
       .input("Jam", sql.Int, jamInt)
       .input("Shift", sql.Int, body.shift)
       .input("CreateBy", sql.VarChar(100), body.createBy) // controller overwrite
@@ -2422,7 +2421,9 @@ async function splitProduksiTime(selector, payload, ctx) {
     if (!sourceNo) throw conflict("Data produksi terakhir tidak valid");
     const srcShift = Number(src.Shift);
     if (!Number.isInteger(srcShift) || srcShift <= 0) {
-      throw conflict(`Data shift produksi sumber tidak valid pada ${sourceNo}.`);
+      throw conflict(
+        `Data shift produksi sumber tidak valid pada ${sourceNo}.`,
+      );
     }
 
     const shiftRefRes = await new sql.Request(tx)
@@ -2505,9 +2506,7 @@ async function splitProduksiTime(selector, payload, ctx) {
       srcEndSec,
     );
     if (reqStartInSource <= srcStartSec) {
-      throw badReq(
-        `Jam Mulai harus lebih besar dari ${srcHourStartStr}.`,
-      );
+      throw badReq(`Jam Mulai harus lebih besar dari ${srcHourStartStr}.`);
     }
     // Jika split di tengah rentang lama, hourEnd baru tidak boleh melewati HourEnd lama
     // Jika hourStart tepat di HourEnd lama, ini mode "lanjutan", hourEnd boleh lebih besar.

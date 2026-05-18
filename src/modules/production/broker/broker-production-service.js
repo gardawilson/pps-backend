@@ -735,7 +735,6 @@ async function createBrokerProduksi(payload, ctx) {
       .input("TglProduksi", sql.Date, docDateOnly)
       .input("IdMesin", sql.Int, body.idMesin)
       .input("IdOperator", sql.Int, body.idOperator)
-      .input("OutputJenisId", sql.Int, body.outputJenisId ?? null)
       .input("Jam", sql.Int, jamInt)
       .input("Shift", sql.Int, body.shift)
       .input("CreateBy", sql.VarChar(100), body.createBy) // controller overwrite
@@ -756,7 +755,6 @@ async function createBrokerProduksi(payload, ctx) {
         TglProduksi  date,
         IdMesin      int,
         IdOperator   int,
-        OutputJenisId int,
         Jam          int,
         Shift        int,
         CreateBy     varchar(100),
@@ -776,7 +774,6 @@ async function createBrokerProduksi(payload, ctx) {
         TglProduksi,
         IdMesin,
         IdOperator,
-        OutputJenisId,
         Jam,
         Shift,
         CreateBy,
@@ -795,7 +792,6 @@ async function createBrokerProduksi(payload, ctx) {
         INSERTED.TglProduksi,
         INSERTED.IdMesin,
         INSERTED.IdOperator,
-        INSERTED.OutputJenisId,
         INSERTED.Jam,
         INSERTED.Shift,
         INSERTED.CreateBy,
@@ -814,7 +810,6 @@ async function createBrokerProduksi(payload, ctx) {
         @TglProduksi,
         @IdMesin,
         @IdOperator,
-        @OutputJenisId,
         @Jam,
         @Shift,
         @CreateBy,
@@ -940,11 +935,6 @@ async function updateBrokerProduksi(noProduksi, payload, ctx) {
       rqUpd.input("Shift", sql.Int, payload.shift);
     }
 
-    if (payload.outputJenisId !== undefined) {
-      sets.push("OutputJenisId = @OutputJenisId");
-      rqUpd.input("OutputJenisId", sql.Int, payload.outputJenisId ?? null);
-    }
-
     if (payload.checkBy1 !== undefined) {
       sets.push("CheckBy1 = @CheckBy1");
       rqUpd.input("CheckBy1", sql.VarChar(100), payload.checkBy1 ?? null);
@@ -1018,7 +1008,6 @@ async function updateBrokerProduksi(noProduksi, payload, ctx) {
         TglProduksi  date,
         IdMesin      int,
         IdOperator   int,
-        OutputJenisId int,
         Jam          int,
         Shift        int,
         CreateBy     varchar(100),
@@ -1040,7 +1029,6 @@ async function updateBrokerProduksi(noProduksi, payload, ctx) {
         INSERTED.TglProduksi,
         INSERTED.IdMesin,
         INSERTED.IdOperator,
-        INSERTED.OutputJenisId,
         INSERTED.Jam,
         INSERTED.Shift,
         INSERTED.CreateBy,
@@ -2344,11 +2332,7 @@ async function splitProduksiTime(selector, payload, ctx) {
   }
 
   const hourStart = String(payload?.hourStart || "").trim();
-  const outputJenisId = Number(payload?.outputJenisId);
   if (!hourStart) throw badReq("hourStart wajib diisi");
-  if (!Number.isInteger(outputJenisId) || outputJenisId <= 0) {
-    throw badReq("outputJenisId wajib integer positif");
-  }
   const toSeconds = (hhmmss) => {
     const m = /^(\d{2}):(\d{2})(?::(\d{2}))?$/.exec(
       String(hhmmss || "").trim(),
@@ -2584,8 +2568,7 @@ async function splitProduksiTime(selector, payload, ctx) {
       .input("NewNoProduksi", sql.VarChar(50), newNoProduksi)
       .input("SourceNoProduksi", sql.VarChar(50), sourceNo)
       .input("NewHourStart", sql.VarChar(20), hourStart)
-      .input("NewHourEnd", sql.VarChar(20), hourEnd)
-      .input("OutputJenisId", sql.Int, outputJenisId);
+      .input("NewHourEnd", sql.VarChar(20), hourEnd);
 
     const insertRes = await insReq.query(`
       DECLARE @out TABLE (
@@ -2593,7 +2576,6 @@ async function splitProduksiTime(selector, payload, ctx) {
         TglProduksi date,
         IdMesin int,
         IdOperator int,
-        OutputJenisId int,
         Jam int,
         Shift int,
         CreateBy varchar(100),
@@ -2609,13 +2591,12 @@ async function splitProduksiTime(selector, payload, ctx) {
       );
 
       INSERT INTO dbo.BrokerProduksi_h (
-        NoProduksi, TglProduksi, IdMesin, IdOperator, OutputJenisId, Jam, Shift, CreateBy,
+        NoProduksi, TglProduksi, IdMesin, IdOperator, Jam, Shift, CreateBy,
         CheckBy1, CheckBy2, ApproveBy, JmlhAnggota, Hadir, HourMeter,
         HourStart, HourEnd, IdRegu
       )
       OUTPUT
         INSERTED.NoProduksi, INSERTED.TglProduksi, INSERTED.IdMesin, INSERTED.IdOperator,
-        INSERTED.OutputJenisId,
         INSERTED.Jam, INSERTED.Shift, INSERTED.CreateBy, INSERTED.CheckBy1, INSERTED.CheckBy2,
         INSERTED.ApproveBy, INSERTED.JmlhAnggota, INSERTED.Hadir, INSERTED.HourMeter,
         INSERTED.HourStart, INSERTED.HourEnd, INSERTED.IdRegu
@@ -2625,7 +2606,6 @@ async function splitProduksiTime(selector, payload, ctx) {
         h.TglProduksi,
         h.IdMesin,
         h.IdOperator,
-        @OutputJenisId,
         h.Jam,
         h.Shift,
         h.CreateBy,

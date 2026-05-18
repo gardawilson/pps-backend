@@ -274,7 +274,6 @@ async function createProduksi(req, res) {
     tglProduksi: b.tglProduksi, // 'YYYY-MM-DD'
     idMesin: toInt(b.idMesin), // number
     idOperator: toInt(b.idOperator), // number
-    outputJenisId: toInt(b.outputJenisId), // optional, number (MstBroker.IdBroker)
     jam: b.jam, // number or 'HH:mm-HH:mm'
     shift: toInt(b.shift), // number
     createBy: actorUsername, // controller overwrite dari token
@@ -297,7 +296,6 @@ async function createProduksi(req, res) {
   if (!payload.tglProduksi) must.push("tglProduksi");
   if (payload.idMesin == null) must.push("idMesin");
   if (payload.idOperator == null) must.push("idOperator");
-  // if (payload.outputJenisId == null) must.push("outputJenisId");
   if (!payload.hourStart) must.push("hourStart");
   if (!payload.hourEnd) must.push("hourEnd");
   if (payload.shift == null) must.push("shift");
@@ -407,8 +405,6 @@ async function updateProduksi(req, res) {
 
     idMesin: b.idMesin !== undefined ? toInt(b.idMesin) : undefined,
     idOperator: b.idOperator !== undefined ? toInt(b.idOperator) : undefined,
-    outputJenisId:
-      b.outputJenisId !== undefined ? toInt(b.outputJenisId) : undefined,
 
     // jam boleh string 'HH:mm-HH:mm' / number / null (kalau mau set null)
     jam: b.jam !== undefined ? b.jam : undefined,
@@ -988,7 +984,6 @@ async function splitProduksiTime(req, res) {
 
   const body = req.body && typeof req.body === "object" ? req.body : {};
   const hourStart = String(body.hourStart || "").trim();
-  const outputJenisId = Number(body.outputJenisId);
 
   if (!hourStart) {
     return res.status(400).json({
@@ -1001,12 +996,6 @@ async function splitProduksiTime(req, res) {
     return res.status(400).json({
       success: false,
       message: "Format hourStart harus HH:mm atau HH:mm:ss",
-    });
-  }
-  if (!Number.isInteger(outputJenisId) || outputJenisId <= 0) {
-    return res.status(400).json({
-      success: false,
-      message: "outputJenisId wajib integer positif",
     });
   }
 
@@ -1026,7 +1015,7 @@ async function splitProduksiTime(req, res) {
     const ctx = { actorId, actorUsername, requestId };
     const result = await brokerProduksiService.splitProduksiTime(
       { idMesin, tanggal },
-      { hourStart, outputJenisId },
+      { hourStart },
       ctx,
     );
 

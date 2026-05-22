@@ -43,4 +43,25 @@ async function listAll({
   return result.recordset || [];
 }
 
-module.exports = { listAll };
+async function listByIdRegu(idregu) {
+  const pool = await poolPromise;
+  const request = pool.request();
+  request.input('idregu', idregu);
+
+  const sql = `
+    SELECT
+      rd.IdRegu,
+      rd.IdOperator,
+      mo.NamaOperator,
+      mo.Enable
+    FROM [dbo].[MstRegu_d] rd
+    LEFT JOIN [dbo].[MstOperator] mo ON mo.IdOperator = rd.IdOperator
+    WHERE rd.IdRegu = @idregu
+    ORDER BY mo.NamaOperator ASC;
+  `;
+
+  const result = await request.query(sql);
+  return result.recordset || [];
+}
+
+module.exports = { listAll, listByIdRegu };

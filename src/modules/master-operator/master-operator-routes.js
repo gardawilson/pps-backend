@@ -1,11 +1,13 @@
-const express = require('express');
+const express = require("express");
 const router = express.Router();
 
-const verifyToken = require('../../core/middleware/verify-token');
-const ctrl = require('./master-operator-controller');
+const verifyToken = require("../../core/middleware/verify-token");
+const ctrl = require("./master-operator-controller");
 
 // List operators (active only by default)
 // Query: ?includeDisabled=1&q=ana&orderBy=NamaOperator&orderDir=ASC
-router.get('/', verifyToken, ctrl.list);
+router.get("/", verifyToken, ctrl.list);
+// List operator by regu
+router.get("/regu/:idregu", verifyToken, ctrl.listByIdRegu);
 
 module.exports = router;

@@ -7,6 +7,13 @@ const brokerProduksiController = require("./broker-production-controller");
 // GET /broker?page=1&pageSize=20
 router.get("/broker", verifyToken, brokerProduksiController.getAllProduksi);
 
+// GET list NoProduksi by tanggal + shift
+router.get(
+  "/broker/no-produksi/:tanggal/:shift",
+  verifyToken,
+  brokerProduksiController.getNoProduksiByTanggalShift,
+);
+
 // GET BrokerProduksi_h by date (YYYY-MM-DD)
 router.get(
   "/broker/:date(\\d{4}-\\d{2}-\\d{2})",

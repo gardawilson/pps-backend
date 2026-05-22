@@ -1,264 +1,171 @@
-// controllers/mixer-service.js (atau di folder yang sama dengan broker-service)
 const { sql, poolPromise } = require("../../../core/config/db");
 const {
   getBlokLokasiFromKodeProduksi,
 } = require("../../../core/shared/mesin-location-helper");
-
 const {
   resolveEffectiveDateForCreate,
   toDateOnly,
   assertNotLocked,
   formatYMD,
 } = require("../../../core/shared/tutup-transaksi-guard");
-
 const {
   generateNextCode,
 } = require("../../../core/utils/sequence-code-helper");
 const { badReq, conflict } = require("../../../core/utils/http-error");
+const headerRepo = require("./repositories/mixer-header-read.repository");
+const detailRepo = require("./repositories/mixer-detail-read.repository");
+const writeRepo = require("./repositories/mixer-write.repository");
 
-// GET all header Mixer dengan pagination & search (mirror of Broker.getAll)
-exports.getAll = async ({ page, limit, search, includeUsed = false }) => {
-  const pool = await poolPromise;
-  const offset = (page - 1) * limit;
-  const dateUsageFilter = includeUsed
-    ? ""
-    : `AND EXISTS (
-        SELECT 1
-        FROM dbo.Mixer_d d2
-        WHERE d2.NoMixer = h.NoMixer
-          AND d2.DateUsage IS NULL
-      )`;
-
-  // ==== optional search clause ====
-  // Cari di:
-  // - NoMixer
-  // - NamaMixer (mx.Jenis)
-  // - Blok / IdLokasi
-  // - Output MixerProduksi (NoProduksi / NamaMesin)
-  // - Output BongkarSusun (NoBongkarSusun)
-  // - Output InjectProduksiMixer (NoProduksi / NamaMesin)
-  const searchClause = search
-    ? `
-      AND (
-        h.NoMixer LIKE @search
-        OR mx.Jenis LIKE @search
-        OR h.Blok LIKE @search
-        OR CAST(h.IdLokasi AS VARCHAR(20)) LIKE @search
-
-        -- MixerProduksiOutput
-        OR EXISTS (
-          SELECT 1
-          FROM dbo.MixerProduksiOutput mpo
-          INNER JOIN dbo.MixerProduksi_h mph
-            ON mph.NoProduksi = mpo.NoProduksi
-          LEFT JOIN dbo.MstMesin m
-            ON m.IdMesin = mph.IdMesin
-          WHERE mpo.NoMixer = h.NoMixer
-            AND (
-              mpo.NoProduksi LIKE @search
-              OR m.NamaMesin LIKE @search
-            )
-        )
-
-        -- BongkarSusunOutputMixer
-        OR EXISTS (
-          SELECT 1
-          FROM dbo.BongkarSusunOutputMixer bsom
-          WHERE bsom.NoMixer = h.NoMixer
-            AND bsom.NoBongkarSusun LIKE @search
-        )
-
-        -- InjectProduksiOutputMixer
-        OR EXISTS (
-          SELECT 1
-          FROM dbo.InjectProduksiOutputMixer ipom
-          INNER JOIN dbo.InjectProduksi_h iph
-            ON iph.NoProduksi = ipom.NoProduksi
-          LEFT JOIN dbo.MstMesin mi
-            ON mi.IdMesin = iph.IdMesin
-          WHERE ipom.NoMixer = h.NoMixer
-            AND (
-              ipom.NoProduksi LIKE @search
-              OR mi.NamaMesin LIKE @search
-            )
-        )
-      )
-    `
-    : "";
-
-  const baseQuery = `
-    SELECT
-      h.NoMixer,
-      h.DateCreate,
-      h.IdMixer,
-      mx.Jenis AS NamaMixer,
-      h.IdStatus,
-      CASE 
-        WHEN h.IdStatus = 1 THEN 'PASS'
-        WHEN h.IdStatus = 0 THEN 'HOLD'
-        ELSE '' 
-      END AS StatusText,
-
-      h.Moisture,
-      h.MaxMeltTemp,
-      h.MinMeltTemp,
-      h.MFI,
-      h.Moisture2,
-      h.Moisture3,
-      CASE
-        WHEN EXISTS (
-          SELECT 1
-          FROM dbo.Mixer_d d3
-          WHERE d3.NoMixer = h.NoMixer
-            AND d3.DateUsage IS NULL
-        ) THEN CAST(0 AS bit)
-        ELSE CAST(1 AS bit)
-      END AS Used,
-      ISNULL(CAST(h.HasBeenPrinted AS int), 0) AS HasBeenPrinted,
-      h.Blok,
-      h.IdLokasi,
-
-      -- 🔹 Output generik (MixerProduksi / BongkarSusun / Inject)
-      outInfo.OutputType,
-      outInfo.OutputCode,
-      outInfo.OutputNamaMesin
-    FROM dbo.Mixer_h h
-    INNER JOIN dbo.MstMixer mx
-      ON mx.IdMixer = h.IdMixer
-
-    -- 🔹 Ambil 1 output per NoMixer (prioritas: MixerProduksi, Inject, Bongkar Susun)
-    OUTER APPLY (
-      SELECT TOP (1)
-        src.OutputType,
-        src.OutputCode,
-        src.OutputNamaMesin
-      FROM (
-        -- 1) Output: MixerProduksi
-        SELECT 
-          'MIXER_PRODUKSI' AS OutputType,
-          mpo.NoProduksi   AS OutputCode,
-          m.NamaMesin      AS OutputNamaMesin,
-          1                AS Priority
-        FROM dbo.MixerProduksiOutput mpo
-        INNER JOIN dbo.MixerProduksi_h mph
-          ON mph.NoProduksi = mpo.NoProduksi
-        LEFT JOIN dbo.MstMesin m
-          ON m.IdMesin = mph.IdMesin
-        WHERE mpo.NoMixer = h.NoMixer
-
-        UNION ALL
-
-        -- 2) Output: InjectProduksiOutputMixer
-        SELECT
-          'INJECT_PRODUKSI'        AS OutputType,
-          ipom.NoProduksi          AS OutputCode,
-          mi.NamaMesin             AS OutputNamaMesin,
-          2                        AS Priority
-        FROM dbo.InjectProduksiOutputMixer ipom
-        INNER JOIN dbo.InjectProduksi_h iph
-          ON iph.NoProduksi = ipom.NoProduksi
-        LEFT JOIN dbo.MstMesin mi
-          ON mi.IdMesin = iph.IdMesin
-        WHERE ipom.NoMixer = h.NoMixer
-
-        UNION ALL
-
-        -- 3) Output: Bongkar Susun Mixer
-        SELECT
-          'BONGKAR_SUSUN'          AS OutputType,
-          bsom.NoBongkarSusun      AS OutputCode,
-          'Bongkar Susun'          AS OutputNamaMesin,
-          3                        AS Priority
-        FROM dbo.BongkarSusunOutputMixer bsom
-        WHERE bsom.NoMixer = h.NoMixer
-      ) AS src
-      WHERE src.OutputCode IS NOT NULL
-      ORDER BY src.Priority, src.OutputCode
-    ) AS outInfo
-
-    WHERE 1 = 1
-      ${searchClause}
-      ${dateUsageFilter}
-
-    ORDER BY h.NoMixer DESC
-    OFFSET @offset ROWS FETCH NEXT @limit ROWS ONLY;
-  `;
-
-  const countQuery = `
-    SELECT COUNT(DISTINCT h.NoMixer) AS total
-    FROM dbo.Mixer_h h
-    INNER JOIN dbo.MstMixer mx
-      ON mx.IdMixer = h.IdMixer
-    WHERE 1 = 1
-      ${searchClause}
-      ${dateUsageFilter};
-  `;
-
-  // ==== eksekusi query data ====
-  const reqData = pool.request();
-  reqData.input("offset", sql.Int, offset);
-  reqData.input("limit", sql.Int, limit);
-  if (search) {
-    reqData.input("search", sql.VarChar, `%${search}%`);
-  }
-  const dataResult = await reqData.query(baseQuery);
-
-  // ==== eksekusi query count ====
-  const reqCount = pool.request();
-  if (search) {
-    reqCount.input("search", sql.VarChar, `%${search}%`);
-  }
-  const countResult = await reqCount.query(countQuery);
-
-  const data = dataResult.recordset?.map((item) => ({ ...item })) ?? [];
-  const total = countResult.recordset[0]?.total ?? 0;
-
-  return { data, total };
+exports.getAll = async (params) => {
+  return headerRepo.getAllMixerHeaders(params);
 };
 
-// GET details by NoMixer (tanpa IdLokasi)
-exports.getMixerDetailByNoMixer = async (nomixer) => {
-  const pool = await poolPromise;
+exports.getMixerDetailByNoMixer = async (noMixer) => {
+  return detailRepo.getMixerDetailsByNoMixer(noMixer);
+};
 
-  const result = await pool.request().input("NoMixer", sql.VarChar, nomixer)
-    .query(`
-        SELECT
-          d.NoMixer,
-          d.NoSak,
-          -- Jika IsPartial = 1, maka Berat dikurangi total dari MixerPartial
-          CASE 
-            WHEN d.IsPartial = 1 THEN 
-              d.Berat - ISNULL((
-                SELECT SUM(p.Berat)
-                FROM dbo.MixerPartial p
-                WHERE p.NoMixer = d.NoMixer
-                  AND p.NoSak   = d.NoSak
-              ), 0)
-            ELSE d.Berat
-          END AS Berat,
-          d.DateUsage,
-          d.IsPartial
-          -- ⬆️ IdLokasi dihapus dari SELECT
-        FROM dbo.Mixer_d d
-        WHERE d.NoMixer = @NoMixer
-        ORDER BY d.NoSak;
-      `);
+exports.getByNoMixer = async (noMixer) => {
+  const rs = await headerRepo.getMixerHeaderByNoMixer(noMixer);
+  const first = rs.recordset?.[0];
+  if (!first) {
+    const e = new Error(`NoMixer ${noMixer} tidak ditemukan`);
+    e.statusCode = 404;
+    throw e;
+  }
 
-  // Optional: format tanggal biar rapi (sama seperti broker)
-  const formatDateTime = (date) => {
-    if (!date) return null;
-    const d = new Date(date);
-    const pad = (n) => (n < 10 ? "0" + n : String(n));
-    return (
-      `${d.getFullYear()}-${pad(d.getMonth() + 1)}-${pad(d.getDate())} ` +
-      `${pad(d.getHours())}:${pad(d.getMinutes())}:${pad(d.getSeconds())}`
-    );
+  return {
+    NoMixer: first.NoMixer,
+    DateCreate: first.DateCreate,
+    IdMixer: first.IdMixer,
+    Jenis: first.Jenis,
+    NamaMixer: first.NamaMixer,
+    IsPartial: first.IsPartial,
+    JumlahSak: first.JumlahSak,
+    SisaBerat: first.SisaBerat,
+    CreateBy: first.CreateBy,
+    HasBeenPrinted: first.HasBeenPrinted,
+    Mesin: first.Mesin,
+    Shift: first.Shift,
   };
+};
 
-  return result.recordset.map((item) => ({
-    ...item,
-    ...(item.DateUsage && { DateUsage: formatDateTime(item.DateUsage) }),
+exports.getLabelInfoByNoMixer = async (noMixer) => {
+  const code = String(noMixer || "").trim();
+  if (!code) throw badReq("NoMixer wajib diisi");
+
+  const [header, details] = await Promise.all([
+    exports.getByNoMixer(code),
+    exports.getMixerDetailByNoMixer(code),
+  ]);
+
+  const activeSaks = (details || [])
+    .filter((d) => !d.DateUsage)
+    .map((d) => ({
+      noSak: d.NoSak,
+      berat: d.Berat,
+    }));
+
+  const totalBerat = activeSaks.reduce(
+    (sum, sak) => sum + Number(sak.berat || 0),
+    0,
+  );
+
+  return {
+    labelCode: header.NoMixer,
+    category: "mixer",
+    dateCreate: header.DateCreate,
+    idJenis: header.IdMixer,
+    namaJenis: header.NamaMixer ?? header.Jenis,
+    jumlahSak: activeSaks.length,
+    berat: totalBerat,
+    saks: activeSaks,
+    createBy: header.CreateBy,
+    mesin: header.Mesin,
+    shift: header.Shift,
+    hasBeenPrinted: header.HasBeenPrinted ?? 0,
+  };
+};
+
+exports.createMixerOutputFromBongkarSusunTx = async ({
+  tx,
+  noBongkarSusun,
+  output,
+  reference,
+  actorUsername,
+  nowDate = new Date(),
+}) => {
+  if (!tx) throw badReq("tx wajib diisi");
+  if (!noBongkarSusun) throw badReq("noBongkarSusun wajib diisi");
+  if (!output || !Array.isArray(output.saks) || output.saks.length === 0) {
+    throw badReq("output.saks wajib berisi minimal 1 sak");
+  }
+
+  const outputIdJenis = Math.trunc(Number(output.idJenis ?? output.idMixer));
+  if (!Number.isFinite(outputIdJenis) || outputIdJenis <= 0) {
+    throw badReq("output.idJenis wajib diisi");
+  }
+
+  const genMixer = () =>
+    generateNextCode(tx, {
+      tableName: "Mixer_h",
+      columnName: "NoMixer",
+      prefix: "H.",
+      width: 10,
+    });
+
+  let newNoMixer = await genMixer();
+  const exist = await new sql.Request(tx)
+    .input("No", sql.VarChar(50), newNoMixer)
+    .query(
+      `SELECT 1 FROM dbo.Mixer_h WITH (UPDLOCK,HOLDLOCK) WHERE NoMixer=@No`,
+    );
+  if (exist.recordset.length > 0) {
+    newNoMixer = await genMixer();
+    const exist2 = await new sql.Request(tx)
+      .input("No", sql.VarChar(50), newNoMixer)
+      .query(
+        `SELECT 1 FROM dbo.Mixer_h WITH (UPDLOCK,HOLDLOCK) WHERE NoMixer=@No`,
+      );
+    if (exist2.recordset.length > 0) {
+      throw conflict("Gagal generate NoMixer unik, coba lagi");
+    }
+  }
+
+  const normalizedSaks = output.saks.map((s) => ({
+    NoSak: Math.trunc(Number(s.noSak)),
+    Berat: Number(s.berat),
   }));
+  const saksJson = JSON.stringify(normalizedSaks);
+
+  await writeRepo.insertMixerHeaderFromBongkarSusunTx({
+    tx,
+    noMixer: newNoMixer,
+    nowDate,
+    outputIdJenis,
+    actorUsername,
+    reference,
+  });
+
+  await writeRepo.insertMixerDetailsFromBongkarSusunTx({
+    tx,
+    noMixer: newNoMixer,
+    saksJson,
+  });
+
+  await writeRepo.insertBongkarSusunOutputMixerTx({
+    tx,
+    noBongkarSusun,
+    noMixer: newNoMixer,
+    saksJson,
+  });
+
+  return {
+    noMixer: newNoMixer,
+    idJenis: outputIdJenis,
+    jumlahSak: normalizedSaks.length,
+    totalBerat: normalizedSaks.reduce((s, x) => s + x.Berat, 0),
+    saks: normalizedSaks,
+  };
 };
 
 exports.createMixerCascade = async (payload) => {
@@ -369,12 +276,7 @@ exports.createMixerCascade = async (payload) => {
     // =====================================================
     // [AUDIT CTX] Set actor_id + request_id untuk trigger audit
     // =====================================================
-    await new sql.Request(tx)
-      .input("actorId", sql.Int, actorId)
-      .input("rid", sql.NVarChar(64), requestId).query(`
-        EXEC sys.sp_set_session_context @key=N'actor_id', @value=@actorId;
-        EXEC sys.sp_set_session_context @key=N'request_id', @value=@rid;
-      `);
+    await writeRepo.setAuditContext(tx, { actorId, requestId });
 
     // ===============================
     // [A] TUTUP TRANSAKSI CHECK (CREATE)
@@ -736,12 +638,7 @@ exports.updateMixerCascade = async (payload) => {
     // =====================================================
     // [AUDIT CTX] Set actor_id + request_id untuk trigger audit
     // =====================================================
-    await new sql.Request(tx)
-      .input("actorId", sql.Int, actorId)
-      .input("rid", sql.NVarChar(64), requestId).query(`
-        EXEC sys.sp_set_session_context @key=N'actor_id', @value=@actorId;
-        EXEC sys.sp_set_session_context @key=N'request_id', @value=@rid;
-      `);
+    await writeRepo.setAuditContext(tx, { actorId, requestId });
 
     // ===============================
     // 0) Pastikan header ada + lock + ambil DateCreate
@@ -1076,12 +973,7 @@ exports.deleteMixerCascade = async (payload) => {
     // =====================================================
     // [AUDIT CTX] Set actor_id + request_id untuk trigger audit
     // =====================================================
-    await new sql.Request(tx)
-      .input("actorId", sql.Int, actorId)
-      .input("rid", sql.NVarChar(64), requestId).query(`
-        EXEC sys.sp_set_session_context @key=N'actor_id', @value=@actorId;
-        EXEC sys.sp_set_session_context @key=N'request_id', @value=@rid;
-      `);
+    await writeRepo.setAuditContext(tx, { actorId, requestId });
 
     // ===============================
     // 0) Ensure header exists + lock it + ambil DateCreate
@@ -1393,103 +1285,6 @@ exports.getPartialInfoByMixerAndSak = async (nomixer, nosak) => {
   return { totalPartialWeight, rows };
 };
 
-exports.getByNoMixer = async (NoMixer) => {
-  const pool = await poolPromise;
-
-  const result = await pool.request().input("NoMixer", sql.VarChar(50), NoMixer)
-    .query(`
-SELECT
-  h.NoMixer,
-  h.DateCreate,
-  h.IdMixer,
-  mx.Jenis,
-  mx.Jenis AS NamaMixer,
-  MAX(CAST(ISNULL(d.IsPartial, 0) AS int)) AS IsPartial,
-  COUNT(d.NoSak)                           AS JumlahSak,
-  SUM(d.Berat) - ISNULL(SUM(mp.Berat), 0) AS SisaBerat,
-  h.CreateBy,
-  ISNULL(CAST(h.HasBeenPrinted AS int), 0) AS HasBeenPrinted,
-  COALESCE(outInfo.OutputNamaMesin, '-')   AS Mesin,
-  COALESCE(CAST(outInfo.Shift AS VARCHAR(10)), '-') AS Shift
-FROM dbo.Mixer_h h
-JOIN dbo.MstMixer mx
-  ON mx.IdMixer = h.IdMixer
-JOIN dbo.Mixer_d d
-  ON d.NoMixer = h.NoMixer AND d.DateUsage IS NULL
-LEFT JOIN dbo.MixerPartial mp
-  ON mp.NoMixer = h.NoMixer AND mp.NoSak = d.NoSak
-OUTER APPLY (
-  SELECT TOP (1) 
-    src.OutputNamaMesin,
-    src.Shift
-  FROM (
-    SELECT
-      m.NamaMesin  AS OutputNamaMesin,
-      mph.Shift    AS Shift,
-      1            AS Priority
-    FROM dbo.MixerProduksiOutput mpo
-    JOIN dbo.MixerProduksi_h mph ON mph.NoProduksi = mpo.NoProduksi
-    LEFT JOIN dbo.MstMesin m     ON m.IdMesin = mph.IdMesin
-    WHERE mpo.NoMixer = h.NoMixer
-
-    UNION ALL
-
-    SELECT
-      mi.NamaMesin AS OutputNamaMesin,
-      iph.Shift    AS Shift,
-      2            AS Priority
-    FROM dbo.InjectProduksiOutputMixer ipom
-    JOIN dbo.InjectProduksi_h iph ON iph.NoProduksi = ipom.NoProduksi
-    LEFT JOIN dbo.MstMesin mi     ON mi.IdMesin = iph.IdMesin
-    WHERE ipom.NoMixer = h.NoMixer
-
-    UNION ALL
-
-    SELECT
-      bsom.NoBongkarSusun AS OutputNamaMesin,
-      NULL                AS Shift,
-      3                   AS Priority
-    FROM dbo.BongkarSusunOutputMixer bsom
-    WHERE bsom.NoMixer = h.NoMixer
-  ) AS src
-  WHERE src.OutputNamaMesin IS NOT NULL
-  ORDER BY src.Priority
-) AS outInfo
-WHERE h.NoMixer = @NoMixer
-GROUP BY 
-  h.NoMixer, 
-  h.DateCreate, 
-  h.IdMixer,
-  mx.Jenis, 
-  h.CreateBy, 
-  h.HasBeenPrinted,
-  outInfo.OutputNamaMesin,
-  outInfo.Shift
-    `);
-
-  const first = result.recordset?.[0];
-  if (!first) {
-    const e = new Error(`NoMixer ${NoMixer} tidak ditemukan`);
-    e.statusCode = 404;
-    throw e;
-  }
-
-  return {
-    NoMixer: first.NoMixer,
-    DateCreate: first.DateCreate,
-    IdMixer: first.IdMixer,
-    Jenis: first.Jenis,
-    NamaMixer: first.NamaMixer,
-    IsPartial: first.IsPartial,
-    JumlahSak: first.JumlahSak,
-    SisaBerat: first.SisaBerat,
-    CreateBy: first.CreateBy,
-    HasBeenPrinted: first.HasBeenPrinted,
-    Mesin: first.Mesin,
-    Shift: first.Shift, // ✅ ini yang kurang
-  };
-};
-
 exports.incrementHasBeenPrinted = async (payload) => {
   const NoMixer = String(payload?.NoMixer || "").trim();
   if (!NoMixer) throw badReq("NoMixer wajib diisi");
@@ -1514,12 +1309,7 @@ exports.incrementHasBeenPrinted = async (payload) => {
   try {
     await tx.begin(sql.ISOLATION_LEVEL.SERIALIZABLE);
 
-    await new sql.Request(tx)
-      .input("actorId", sql.Int, actorId)
-      .input("rid", sql.NVarChar(64), requestId).query(`
-        EXEC sys.sp_set_session_context @key=N'actor_id', @value=@actorId;
-        EXEC sys.sp_set_session_context @key=N'request_id', @value=@rid;
-      `);
+    await writeRepo.setAuditContext(tx, { actorId, requestId });
 
     const rs = await new sql.Request(tx).input(
       "NoMixer",

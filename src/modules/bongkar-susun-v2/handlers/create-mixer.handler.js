@@ -5,6 +5,7 @@ const {
 const { badReq, conflict } = require("../../../core/utils/http-error");
 const { formatYMD } = require("../../../core/shared/tutup-transaksi-guard");
 const { detectCategory } = require("../bongkar-susun-v2-category-registry");
+const mixerService = require("../../label/mixer/mixer-service");
 
 exports.createBongkarSusunMixer = async (payload, ctx) => {
   const { note, inputs, outputs } = payload;
@@ -71,9 +72,11 @@ exports.createBongkarSusunMixer = async (payload, ctx) => {
 
     const inputCodesJson = JSON.stringify(inputs.map((c) => ({ code: c })));
 
-    const inputDataRes = await new sql.Request(tx)
-      .input("CodesJson", sql.NVarChar(sql.MAX), inputCodesJson)
-      .query(`
+    const inputDataRes = await new sql.Request(tx).input(
+      "CodesJson",
+      sql.NVarChar(sql.MAX),
+      inputCodesJson,
+    ).query(`
         SELECT
           h.NoMixer,
           h.IdMixer,
@@ -120,7 +123,9 @@ exports.createBongkarSusunMixer = async (payload, ctx) => {
       `);
 
     if (inputDataRes.recordset.length !== inputs.length) {
-      throw badReq("Satu atau lebih label input tidak ditemukan atau sudah terpakai");
+      throw badReq(
+        "Satu atau lebih label input tidak ditemukan atau sudah terpakai",
+      );
     }
 
     const inputJenisSet = new Set(
@@ -239,90 +244,15 @@ exports.createBongkarSusunMixer = async (payload, ctx) => {
     const createdOutputs = [];
 
     for (const out of outputs) {
-      const genMixer = () =>
-        generateNextCode(tx, {
-          tableName: "Mixer_h",
-          columnName: "NoMixer",
-          prefix: "H.",
-          width: 10,
-        });
-
-      let newNoMixer = await genMixer();
-      const exist = await new sql.Request(tx)
-        .input("No", sql.VarChar(50), newNoMixer)
-        .query(
-          `SELECT 1 FROM dbo.Mixer_h WITH (UPDLOCK,HOLDLOCK) WHERE NoMixer=@No`,
-        );
-      if (exist.recordset.length > 0) {
-        newNoMixer = await genMixer();
-        const exist2 = await new sql.Request(tx)
-          .input("No", sql.VarChar(50), newNoMixer)
-          .query(
-            `SELECT 1 FROM dbo.Mixer_h WITH (UPDLOCK,HOLDLOCK) WHERE NoMixer=@No`,
-          );
-        if (exist2.recordset.length > 0) {
-          throw conflict("Gagal generate NoMixer unik, coba lagi");
-        }
-      }
-
-      const normalizedSaks = out.saks.map((s) => ({
-        NoSak: Math.trunc(Number(s.noSak)),
-        Berat: Number(s.berat),
-      }));
-      const saksJson = JSON.stringify(normalizedSaks);
-      const outputIdJenis = Math.trunc(Number(out.idJenis ?? out.idMixer));
-
-      await new sql.Request(tx)
-        .input("NoMixer", sql.VarChar(50), newNoMixer)
-        .input("DateCreate", sql.Date, nowDate)
-        .input("IdMixer", sql.Int, outputIdJenis)
-        .input("IdStatus", sql.Int, refRow.IdStatus ?? 1)
-        .input("CreateBy", sql.VarChar(50), actorUsername)
-        .input("DateTimeCreate", sql.DateTime, nowDate)
-        .input("Moisture", sql.Decimal(10, 3), refRow.Moisture ?? null)
-        .input("MaxMeltTemp", sql.Decimal(10, 3), refRow.MaxMeltTemp ?? null)
-        .input("MinMeltTemp", sql.Decimal(10, 3), refRow.MinMeltTemp ?? null)
-        .input("MFI", sql.Decimal(10, 3), refRow.MFI ?? null)
-        .input("Moisture2", sql.Decimal(10, 3), refRow.Moisture2 ?? null)
-        .input("Moisture3", sql.Decimal(10, 3), refRow.Moisture3 ?? null)
-        .input("Blok", sql.VarChar(50), refRow.Blok ?? null)
-        .input("IdLokasi", sql.Int, refRow.IdLokasi ?? null).query(`
-          INSERT INTO dbo.Mixer_h (
-            NoMixer, IdMixer, DateCreate, IdStatus, CreateBy, DateTimeCreate,
-            Moisture, MaxMeltTemp, MinMeltTemp, MFI, Moisture2, Moisture3, Blok, IdLokasi
-          )
-          VALUES (
-            @NoMixer, @IdMixer, @DateCreate, @IdStatus, @CreateBy, @DateTimeCreate,
-            @Moisture, @MaxMeltTemp, @MinMeltTemp, @MFI, @Moisture2, @Moisture3, @Blok, @IdLokasi
-          )
-        `);
-
-      await new sql.Request(tx)
-        .input("NoMixer", sql.VarChar(50), newNoMixer)
-        .input("SaksJson", sql.NVarChar(sql.MAX), saksJson).query(`
-          INSERT INTO dbo.Mixer_d (NoMixer, NoSak, Berat, DateUsage, IsPartial)
-          SELECT @NoMixer, j.NoSak, j.Berat, NULL, 0
-          FROM OPENJSON(@SaksJson)
-          WITH (NoSak int '$.NoSak', Berat decimal(18,3) '$.Berat') AS j
-        `);
-
-      await new sql.Request(tx)
-        .input("NoBongkarSusun", sql.VarChar(50), noBongkarSusun)
-        .input("NoMixer", sql.VarChar(50), newNoMixer)
-        .input("SaksJson", sql.NVarChar(sql.MAX), saksJson).query(`
-          INSERT INTO dbo.BongkarSusunOutputMixer (NoBongkarSusun, NoMixer, NoSak)
-          SELECT @NoBongkarSusun, @NoMixer, j.NoSak
-          FROM OPENJSON(@SaksJson)
-          WITH (NoSak int '$.NoSak') AS j
-        `);
-
-      createdOutputs.push({
-        noMixer: newNoMixer,
-        idJenis: outputIdJenis,
-        jumlahSak: normalizedSaks.length,
-        totalBerat: normalizedSaks.reduce((s, x) => s + x.Berat, 0),
-        saks: normalizedSaks,
+      const created = await mixerService.createMixerOutputFromBongkarSusunTx({
+        tx,
+        noBongkarSusun,
+        output: out,
+        reference: refRow,
+        actorUsername,
+        nowDate,
       });
+      createdOutputs.push(created);
     }
 
     await tx.commit();

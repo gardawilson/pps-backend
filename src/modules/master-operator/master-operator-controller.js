@@ -27,4 +27,33 @@ async function list(req, res) {
   }
 }
 
-module.exports = { list };
+async function listByIdRegu(req, res) {
+  const idregu = (req.params.idregu || '').toString().trim();
+
+  if (!idregu) {
+    return res.status(400).json({
+      success: false,
+      message: 'Parameter idregu wajib diisi',
+    });
+  }
+
+  try {
+    const rows = await service.listByIdRegu(idregu);
+    return res.status(200).json({
+      success: true,
+      message: 'Data operator berdasarkan idregu berhasil diambil',
+      idregu,
+      totalData: rows.length,
+      data: rows,
+    });
+  } catch (error) {
+    console.error('Error listing MstOperator by idregu:', error);
+    return res.status(500).json({
+      success: false,
+      message: 'Internal Server Error',
+      error: error.message,
+    });
+  }
+}
+
+module.exports = { list, listByIdRegu };

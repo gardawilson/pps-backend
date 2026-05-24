@@ -283,12 +283,26 @@ async function createProduksi(req, res) {
     const n = Number(v);
     return Number.isNaN(n) ? null : n;
   };
+  const toIntArray = (v) => {
+    if (v === undefined || v === null || v === "") return [];
+    const raw = Array.isArray(v) ? v : String(v).split(",");
+    return [...new Set(
+      raw
+        .map((x) => Number(String(x).trim()))
+        .filter((n) => Number.isFinite(n))
+        .map((n) => Math.trunc(n))
+        .filter((n) => n > 0),
+    )];
+  };
+  const operatorIds = toIntArray(
+    b.idOperators !== undefined ? b.idOperators : b.idOperator,
+  );
 
   // ✅ payload business (tanpa audit fields)
   const payload = {
     tglProduksi: b.tglProduksi, // 'YYYY-MM-DD'
     idMesin: toInt(b.idMesin), // number
-    idOperator: toInt(b.idOperator), // number
+    idOperators: operatorIds, // multi operator for detail table
     outputJenisId: toInt(b.outputJenisId), // number (BrokerProduksi_h.OutputJenisId)
     jam: b.jam, // number or 'HH:mm-HH:mm'
     shift: toInt(b.shift), // number
@@ -311,7 +325,9 @@ async function createProduksi(req, res) {
   const must = [];
   if (!payload.tglProduksi) must.push("tglProduksi");
   if (payload.idMesin == null) must.push("idMesin");
-  if (payload.idOperator == null) must.push("idOperator");
+  if (!Array.isArray(payload.idOperators) || payload.idOperators.length === 0) {
+    must.push("idOperator");
+  }
   if (payload.outputJenisId == null) must.push("outputJenisId");
   if (!payload.hourStart) must.push("hourStart");
   if (!payload.hourEnd) must.push("hourEnd");
@@ -418,7 +434,12 @@ async function updateProduksi(req, res) {
     tglProduksi: b.tglProduksi, // 'YYYY-MM-DD'
 
     idMesin: b.idMesin !== undefined ? toInt(b.idMesin) : undefined,
-    idOperator: b.idOperator !== undefined ? toInt(b.idOperator) : undefined,
+    idOperators:
+      b.idOperators !== undefined || b.idOperator !== undefined
+        ? toIntArray(
+          b.idOperators !== undefined ? b.idOperators : b.idOperator,
+        )
+        : undefined,
     outputJenisId:
       b.outputJenisId !== undefined ? toInt(b.outputJenisId) : undefined,
 

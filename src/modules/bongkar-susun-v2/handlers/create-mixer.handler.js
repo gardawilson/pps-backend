@@ -18,11 +18,32 @@ exports.createBongkarSusunMixer = async (payload, ctx) => {
     throw badReq("outputs wajib berisi minimal 1 output label");
   }
 
-  for (const code of inputs) {
-    if (detectCategory(code) !== "mixer") {
-      throw badReq(`Label input ${code} bukan kategori mixer`);
+  const normalizedInputs = inputs.map((raw, i) => {
+    if (typeof raw === "string") {
+      return { code: raw.trim(), saks: null };
+    }
+
+    if (raw && typeof raw === "object") {
+      const code = String(
+        raw.code ?? raw.labelCode ?? raw.noMixer ?? "",
+      ).trim();
+      if (!code) {
+        throw badReq(`inputs[${i}] tidak memiliki code/labelCode/noMixer`);
+      }
+      const saks = Array.isArray(raw.saks) ? raw.saks : null;
+      return { code, saks };
+    }
+
+    throw badReq(`inputs[${i}] tidak valid`);
+  });
+
+  for (const input of normalizedInputs) {
+    if (detectCategory(input.code) !== "mixer") {
+      throw badReq(`Label input ${input.code} bukan kategori mixer`);
     }
   }
+
+  const inputCodes = normalizedInputs.map((x) => x.code);
 
   for (let i = 0; i < outputs.length; i++) {
     const out = outputs[i];
@@ -70,7 +91,7 @@ exports.createBongkarSusunMixer = async (payload, ctx) => {
         EXEC sys.sp_set_session_context @key=N'request_id', @value=@rid;
       `);
 
-    const inputCodesJson = JSON.stringify(inputs.map((c) => ({ code: c })));
+    const inputCodesJson = JSON.stringify(inputCodes.map((c) => ({ code: c })));
 
     const inputDataRes = await new sql.Request(tx).input(
       "CodesJson",
@@ -122,7 +143,35 @@ exports.createBongkarSusunMixer = async (payload, ctx) => {
           h.IdLokasi
       `);
 
-    if (inputDataRes.recordset.length !== inputs.length) {
+    const inputSaksRes = await new sql.Request(tx).input(
+      "CodesJson",
+      sql.NVarChar(sql.MAX),
+      inputCodesJson,
+    ).query(`
+        SELECT
+          d.NoMixer,
+          d.NoSak,
+          d.IsPartial,
+          CAST(ISNULL(d.Berat, 0) - ISNULL(mp.TotalPartial, 0) AS decimal(18,3)) AS AvailableBerat
+        FROM dbo.Mixer_d d WITH (UPDLOCK, HOLDLOCK)
+        LEFT JOIN (
+          SELECT
+            NoMixer,
+            NoSak,
+            SUM(ISNULL(Berat, 0)) AS TotalPartial
+          FROM dbo.MixerPartial
+          GROUP BY NoMixer, NoSak
+        ) mp
+          ON mp.NoMixer = d.NoMixer
+         AND mp.NoSak = d.NoSak
+        WHERE d.NoMixer IN (
+          SELECT j.code FROM OPENJSON(@CodesJson)
+          WITH (code varchar(50) '$.code') AS j
+        )
+        AND d.DateUsage IS NULL
+      `);
+
+    if (inputDataRes.recordset.length !== inputCodes.length) {
       throw badReq(
         "Satu atau lebih label input tidak ditemukan atau sudah terpakai",
       );
@@ -220,25 +269,127 @@ exports.createBongkarSusunMixer = async (payload, ctx) => {
       .input("NoBongkarSusun", sql.VarChar(50), noBongkarSusun)
       .input("CodesJson", sql.NVarChar(sql.MAX), inputCodesJson).query(`
         INSERT INTO dbo.BongkarSusunInputMixer (NoBongkarSusun, NoMixer, NoSak)
-        SELECT @NoBongkarSusun, d.NoMixer, d.NoSak
+        SELECT @NoBongkarSusun, src.NoMixer, src.NoSak
+        FROM (
+          SELECT
+            d.NoMixer,
+            d.NoSak,
+            ISNULL(d.Berat, 0) - ISNULL(mp.TotalPartial, 0) AS AvailableBerat
+          FROM dbo.Mixer_d d
+          LEFT JOIN (
+            SELECT
+              NoMixer,
+              NoSak,
+              SUM(ISNULL(Berat, 0)) AS TotalPartial
+            FROM dbo.MixerPartial
+            GROUP BY NoMixer, NoSak
+          ) mp
+            ON mp.NoMixer = d.NoMixer
+           AND mp.NoSak = d.NoSak
+          WHERE d.NoMixer IN (
+            SELECT j.code FROM OPENJSON(@CodesJson)
+            WITH (code varchar(50) '$.code') AS j
+          )
+          AND d.DateUsage IS NULL
+        ) src
+        WHERE src.AvailableBerat > 0
+      `);
+
+    const partialHintByKey = new Map();
+    for (const input of normalizedInputs) {
+      if (!Array.isArray(input.saks)) continue;
+      for (const sak of input.saks) {
+        const noSak = Number(sak?.noSak);
+        if (!Number.isFinite(noSak) || noSak <= 0) continue;
+        const isPartialRaw = sak?.isPartial ?? sak?.IsPartial;
+        const isPartial =
+          isPartialRaw === true ||
+          isPartialRaw === 1 ||
+          String(isPartialRaw).trim() === "1";
+        partialHintByKey.set(
+          `${input.code}::${Math.trunc(noSak)}`,
+          isPartial ? 1 : 0,
+        );
+      }
+    }
+
+    const inputPartialSaks = inputSaksRes.recordset.filter((row) => {
+      const key = `${row.NoMixer}::${Number(row.NoSak)}`;
+      const hintedIsPartial = partialHintByKey.get(key);
+      const rowIsPartial = row.IsPartial === true || row.IsPartial === 1;
+      const isPartial = hintedIsPartial === 1 ? true : rowIsPartial;
+      return isPartial && Number(row.AvailableBerat || 0) > 0;
+    });
+
+    const genMixerPartial = () =>
+      generateNextCode(tx, {
+        tableName: "MixerPartial",
+        columnName: "NoMixerPartial",
+        prefix: "T.",
+        width: 10,
+      });
+
+    for (const row of inputPartialSaks) {
+      let noMixerPartial = await genMixerPartial();
+      const partialExist = await new sql.Request(tx)
+        .input("No", sql.VarChar(50), noMixerPartial)
+        .query(
+          `SELECT 1 FROM dbo.MixerPartial WITH (UPDLOCK,HOLDLOCK) WHERE NoMixerPartial=@No`,
+        );
+      if (partialExist.recordset.length > 0) {
+        noMixerPartial = await genMixerPartial();
+        const partialExist2 = await new sql.Request(tx)
+          .input("No", sql.VarChar(50), noMixerPartial)
+          .query(
+            `SELECT 1 FROM dbo.MixerPartial WITH (UPDLOCK,HOLDLOCK) WHERE NoMixerPartial=@No`,
+          );
+        if (partialExist2.recordset.length > 0) {
+          throw conflict("Gagal generate NoMixerPartial unik, coba lagi");
+        }
+      }
+
+      await new sql.Request(tx)
+        .input("NoMixerPartial", sql.VarChar(50), noMixerPartial)
+        .input("NoMixer", sql.VarChar(50), row.NoMixer)
+        .input("NoSak", sql.Int, Number(row.NoSak))
+        .input("Berat", sql.Decimal(18, 3), Number(row.AvailableBerat)).query(`
+          INSERT INTO dbo.MixerPartial (NoMixerPartial, NoMixer, NoSak, Berat)
+          VALUES (@NoMixerPartial, @NoMixer, @NoSak, @Berat)
+        `);
+
+      await new sql.Request(tx)
+        .input("NoBongkarSusun", sql.VarChar(50), noBongkarSusun)
+        .input("NoMixerPartial", sql.VarChar(50), noMixerPartial).query(`
+          INSERT INTO dbo.BongkarSusunInputMixerPartial (NoBongkarSusun, NoMixerPartial)
+          VALUES (@NoBongkarSusun, @NoMixerPartial)
+        `);
+    }
+
+    await new sql.Request(tx)
+      .input("Tanggal", sql.Date, nowDate)
+      .input("CodesJson", sql.NVarChar(sql.MAX), inputCodesJson).query(`
+        UPDATE d
+        SET d.DateUsage = @Tanggal
         FROM dbo.Mixer_d d
+        LEFT JOIN (
+          SELECT
+            NoMixer,
+            NoSak,
+            SUM(ISNULL(Berat, 0)) AS TotalPartial
+          FROM dbo.MixerPartial
+          GROUP BY NoMixer, NoSak
+        ) mp
+          ON mp.NoMixer = d.NoMixer
+         AND mp.NoSak = d.NoSak
         WHERE d.NoMixer IN (
           SELECT j.code FROM OPENJSON(@CodesJson)
           WITH (code varchar(50) '$.code') AS j
         )
         AND d.DateUsage IS NULL
-      `);
-
-    await new sql.Request(tx)
-      .input("Tanggal", sql.Date, nowDate)
-      .input("CodesJson", sql.NVarChar(sql.MAX), inputCodesJson).query(`
-        UPDATE dbo.Mixer_d
-        SET DateUsage = @Tanggal
-        WHERE NoMixer IN (
-          SELECT j.code FROM OPENJSON(@CodesJson)
-          WITH (code varchar(50) '$.code') AS j
+        AND (
+          ISNULL(d.IsPartial, 0) = 0
+          OR (ISNULL(d.Berat, 0) - ISNULL(mp.TotalPartial, 0)) <= 0
         )
-        AND DateUsage IS NULL
       `);
 
     const createdOutputs = [];

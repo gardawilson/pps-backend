@@ -68,6 +68,24 @@ async function getBroker(req, res) {
       idBagianMesin,
       includeDisabled,
     });
+    const normalizeIdOperators = (raw) => {
+      let arr = [];
+      if (Array.isArray(raw)) {
+        arr = raw;
+      } else if (typeof raw === "string" && raw.trim()) {
+        try {
+          arr = JSON.parse(raw);
+        } catch (_) {
+          arr = [];
+        }
+      }
+      return [...new Set(
+        arr
+          .map((v) => Number(v?.value ?? v))
+          .filter((n) => Number.isFinite(n))
+          .map((n) => Math.trunc(n)),
+      )];
+    };
     const activeShiftMeta = rows[0]
       ? {
           currentDate: rows[0].CurrentDate ?? null,
@@ -95,8 +113,8 @@ async function getBroker(req, res) {
       OutputJenisId: row.OutputJenisId ?? null,
       OutputJenisNama: row.OutputJenisNama ?? null,
       OutputJenisItemCode: row.OutputJenisItemCode ?? null,
-      IdOperator: row.IdOperator ?? null,
-      Operator: row.Operator ?? null,
+      IdOperators: normalizeIdOperators(row.IdOperators),
+      Operators: row.Operators ?? "",
       Shift: row.Shift ?? null,
       HourStart: row.HourStart ?? null,
       HourEnd: row.HourEnd ?? null,

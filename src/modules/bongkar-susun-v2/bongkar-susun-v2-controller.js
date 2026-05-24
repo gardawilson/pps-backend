@@ -75,7 +75,7 @@ async function create(req, res) {
       .json({ success: false, message: "actorId tidak ditemukan dari token" });
   }
 
-  // Deteksi kategori dari input pertama
+  // Deteksi kategori dari input pertama (support string/object)
   const firstInput = Array.isArray(inputs) && inputs[0];
   if (!firstInput) {
     return res
@@ -83,7 +83,20 @@ async function create(req, res) {
       .json({ success: false, message: "inputs wajib diisi" });
   }
 
-  const code = String(firstInput).trim();
+  const code =
+    typeof firstInput === "string"
+      ? String(firstInput).trim()
+      : String(
+          firstInput?.code ?? firstInput?.labelCode ?? firstInput?.noMixer ?? "",
+        ).trim();
+
+  if (!code) {
+    return res.status(400).json({
+      success: false,
+      message: "inputs[0] wajib berisi code/labelCode/noMixer yang valid",
+    });
+  }
+
   const category = detectCategory(code);
 
   if (!category) {

@@ -563,7 +563,11 @@ exports.getAll = async (page = 1, pageSize = 20, search = "") => {
               WHEN ABS(
                 ISNULL((
                   SELECT SUM(
-                    ISNULL(d.Berat, 0) - ISNULL(mp.TotalPartial, 0)
+                    CASE
+                      WHEN bsmp.UsedPartialBerat IS NOT NULL THEN bsmp.UsedPartialBerat
+                      WHEN ISNULL(d.Berat, 0) - ISNULL(mp.TotalPartial, 0) < 0 THEN 0
+                      ELSE ISNULL(d.Berat, 0) - ISNULL(mp.TotalPartial, 0)
+                    END
                   )
                   FROM dbo.BongkarSusunInputMixer im
                   INNER JOIN dbo.Mixer_d d
@@ -576,6 +580,20 @@ exports.getAll = async (page = 1, pageSize = 20, search = "") => {
                   ) mp
                     ON mp.NoMixer = d.NoMixer
                    AND mp.NoSak = d.NoSak
+                  LEFT JOIN (
+                    SELECT
+                      bip.NoBongkarSusun,
+                      mp.NoMixer,
+                      mp.NoSak,
+                      SUM(ISNULL(mp.Berat, 0)) AS UsedPartialBerat
+                    FROM dbo.BongkarSusunInputMixerPartial bip
+                    INNER JOIN dbo.MixerPartial mp
+                      ON mp.NoMixerPartial = bip.NoMixerPartial
+                    GROUP BY bip.NoBongkarSusun, mp.NoMixer, mp.NoSak
+                  ) bsmp
+                    ON bsmp.NoBongkarSusun = im.NoBongkarSusun
+                   AND bsmp.NoMixer = im.NoMixer
+                   AND bsmp.NoSak = im.NoSak
                   WHERE im.NoBongkarSusun = h.NoBongkarSusun
                 ), 0) -
                 ISNULL((
@@ -612,6 +630,9 @@ exports.getAll = async (page = 1, pageSize = 20, search = "") => {
                     CASE
                       WHEN f.IsPartial = 1 THEN
                         CASE
+                          -- Untuk input partial furnitureWIP, sumber nilai input transaksi
+                          -- harus dari partial yang tertaut ke NoBongkarSusun ini.
+                          WHEN bsfp.UsedPartialPcs IS NOT NULL THEN bsfp.UsedPartialPcs
                           WHEN ISNULL(f.Pcs, 0) - ISNULL(fp.TotalPartialPcs, 0) < 0 THEN 0
                           ELSE ISNULL(f.Pcs, 0) - ISNULL(fp.TotalPartialPcs, 0)
                         END
@@ -625,6 +646,18 @@ exports.getAll = async (page = 1, pageSize = 20, search = "") => {
                     FROM dbo.FurnitureWIPPartial
                     GROUP BY NoFurnitureWIP
                   ) fp ON fp.NoFurnitureWIP = f.NoFurnitureWIP
+                  LEFT JOIN (
+                    SELECT
+                      bip.NoBongkarSusun,
+                      fwp.NoFurnitureWIP,
+                      SUM(ISNULL(fwp.Pcs, 0)) AS UsedPartialPcs
+                    FROM dbo.BongkarSusunInputFurnitureWIPPartial bip
+                    INNER JOIN dbo.FurnitureWIPPartial fwp
+                      ON fwp.NoFurnitureWIPPartial = bip.NoFurnitureWIPPartial
+                    GROUP BY bip.NoBongkarSusun, fwp.NoFurnitureWIP
+                  ) bsfp
+                    ON bsfp.NoBongkarSusun = ifw.NoBongkarSusun
+                   AND bsfp.NoFurnitureWIP = ifw.NoFurnitureWIP
                   WHERE ifw.NoBongkarSusun = h.NoBongkarSusun
                 ), 0) -
                 ISNULL((
@@ -888,6 +921,8 @@ exports.getDetail = async (noBongkarSusun) => {
         mx.Jenis              AS namaJenis,
         im.NoSak              AS noSak,
         CASE
+          WHEN bsmp.UsedPartialBerat IS NOT NULL
+            THEN bsmp.UsedPartialBerat
           WHEN d.IsPartial = 1 THEN
             CASE
               WHEN ISNULL(d.Berat, 0) - ISNULL(mp.TotalPartial, 0) < 0
@@ -907,6 +942,20 @@ exports.getDetail = async (noBongkarSusun) => {
         FROM dbo.MixerPartial
         GROUP BY NoMixer, NoSak
       ) mp ON mp.NoMixer = d.NoMixer AND mp.NoSak = d.NoSak
+      LEFT JOIN (
+        SELECT
+          bip.NoBongkarSusun,
+          mp.NoMixer,
+          mp.NoSak,
+          SUM(ISNULL(mp.Berat, 0)) AS UsedPartialBerat
+        FROM dbo.BongkarSusunInputMixerPartial bip
+        INNER JOIN dbo.MixerPartial mp
+          ON mp.NoMixerPartial = bip.NoMixerPartial
+        GROUP BY bip.NoBongkarSusun, mp.NoMixer, mp.NoSak
+      ) bsmp
+        ON bsmp.NoBongkarSusun = im.NoBongkarSusun
+       AND bsmp.NoMixer = im.NoMixer
+       AND bsmp.NoSak = im.NoSak
       WHERE im.NoBongkarSusun = @NoBongkarSusun
       ORDER BY im.NoMixer, im.NoSak
     `);
@@ -968,6 +1017,8 @@ exports.getDetail = async (noBongkarSusun) => {
         CASE
           WHEN f.IsPartial = 1 THEN
             CASE
+              WHEN bsfp.UsedPartialPcs IS NOT NULL
+                THEN bsfp.UsedPartialPcs
               WHEN ISNULL(f.Pcs, 0) - ISNULL(fp.TotalPartialPcs, 0) < 0
                 THEN 0
               ELSE ISNULL(f.Pcs, 0) - ISNULL(fp.TotalPartialPcs, 0)
@@ -982,6 +1033,18 @@ exports.getDetail = async (noBongkarSusun) => {
         FROM dbo.FurnitureWIPPartial
         GROUP BY NoFurnitureWIP
       ) fp ON fp.NoFurnitureWIP = f.NoFurnitureWIP
+      LEFT JOIN (
+        SELECT
+          bip.NoBongkarSusun,
+          fwp.NoFurnitureWIP,
+          SUM(ISNULL(fwp.Pcs, 0)) AS UsedPartialPcs
+        FROM dbo.BongkarSusunInputFurnitureWIPPartial bip
+        INNER JOIN dbo.FurnitureWIPPartial fwp
+          ON fwp.NoFurnitureWIPPartial = bip.NoFurnitureWIPPartial
+        GROUP BY bip.NoBongkarSusun, fwp.NoFurnitureWIP
+      ) bsfp
+        ON bsfp.NoBongkarSusun = ifw.NoBongkarSusun
+       AND bsfp.NoFurnitureWIP = ifw.NoFurnitureWIP
       WHERE ifw.NoBongkarSusun = @NoBongkarSusun
     `);
 

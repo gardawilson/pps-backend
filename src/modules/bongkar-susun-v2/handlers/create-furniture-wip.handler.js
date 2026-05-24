@@ -61,12 +61,27 @@ exports.createBongkarSusunFurnitureWip = async (payload, ctx) => {
         SELECT
           f.NoFurnitureWIP,
           f.IdFurnitureWIP,
+          f.IsPartial,
           f.IdWarehouse,
           f.IdWarna,
           f.Blok,
           f.IdLokasi,
-          ISNULL(f.Pcs, 0) AS AvailablePcs
+          CASE
+            WHEN ISNULL(f.IsPartial, 0) = 1 THEN
+              CASE
+                WHEN ISNULL(f.Pcs, 0) - ISNULL(fp.TotalPartialPcs, 0) < 0
+                  THEN 0
+                ELSE ISNULL(f.Pcs, 0) - ISNULL(fp.TotalPartialPcs, 0)
+              END
+            ELSE ISNULL(f.Pcs, 0)
+          END AS AvailablePcs
         FROM dbo.FurnitureWIP f WITH (UPDLOCK, HOLDLOCK)
+        LEFT JOIN (
+          SELECT NoFurnitureWIP, SUM(ISNULL(Pcs, 0)) AS TotalPartialPcs
+          FROM dbo.FurnitureWIPPartial
+          GROUP BY NoFurnitureWIP
+        ) fp
+          ON fp.NoFurnitureWIP = f.NoFurnitureWIP
         WHERE f.NoFurnitureWIP IN (
           SELECT j.code FROM OPENJSON(@CodesJson)
           WITH (code varchar(50) '$.code') AS j
@@ -174,6 +189,56 @@ exports.createBongkarSusunFurnitureWip = async (payload, ctx) => {
         FROM OPENJSON(@CodesJson)
         WITH (code varchar(50) '$.code') AS j
       `);
+
+    const inputPartialRows = inputDataRes.recordset.filter(
+      (row) =>
+        (row.IsPartial === true || row.IsPartial === 1) &&
+        Number(row.AvailablePcs || 0) > 0,
+    );
+
+    const genFurnitureWipPartial = () =>
+      generateNextCode(tx, {
+        tableName: "FurnitureWIPPartial",
+        columnName: "NoFurnitureWIPPartial",
+        prefix: "BC.",
+        width: 10,
+      });
+
+    for (const row of inputPartialRows) {
+      let noFurnitureWIPPartial = await genFurnitureWipPartial();
+      const partialExist = await new sql.Request(tx)
+        .input("No", sql.VarChar(50), noFurnitureWIPPartial)
+        .query(
+          `SELECT 1 FROM dbo.FurnitureWIPPartial WITH (UPDLOCK,HOLDLOCK) WHERE NoFurnitureWIPPartial=@No`,
+        );
+      if (partialExist.recordset.length > 0) {
+        noFurnitureWIPPartial = await genFurnitureWipPartial();
+        const partialExist2 = await new sql.Request(tx)
+          .input("No", sql.VarChar(50), noFurnitureWIPPartial)
+          .query(
+            `SELECT 1 FROM dbo.FurnitureWIPPartial WITH (UPDLOCK,HOLDLOCK) WHERE NoFurnitureWIPPartial=@No`,
+          );
+        if (partialExist2.recordset.length > 0) {
+          throw conflict("Gagal generate NoFurnitureWIPPartial unik, coba lagi");
+        }
+      }
+
+      await new sql.Request(tx)
+        .input("NoFurnitureWIPPartial", sql.VarChar(50), noFurnitureWIPPartial)
+        .input("NoFurnitureWIP", sql.VarChar(50), row.NoFurnitureWIP)
+        .input("Pcs", sql.Decimal(18, 3), Number(row.AvailablePcs)).query(`
+          INSERT INTO dbo.FurnitureWIPPartial (NoFurnitureWIPPartial, NoFurnitureWIP, Pcs)
+          VALUES (@NoFurnitureWIPPartial, @NoFurnitureWIP, @Pcs)
+        `);
+
+      await new sql.Request(tx)
+        .input("NoBongkarSusun", sql.VarChar(50), noBongkarSusun)
+        .input("NoFurnitureWIPPartial", sql.VarChar(50), noFurnitureWIPPartial)
+        .query(`
+          INSERT INTO dbo.BongkarSusunInputFurnitureWIPPartial (NoBongkarSusun, NoFurnitureWIPPartial)
+          VALUES (@NoBongkarSusun, @NoFurnitureWIPPartial)
+        `);
+    }
 
     await new sql.Request(tx)
       .input("Tanggal", sql.Date, nowDate)

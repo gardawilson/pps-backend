@@ -6,10 +6,6 @@ const { conflict } = require("../../../core/utils/http-error");
 exports.getLabelInfoFurnitureWip = async (labelCode) => {
   const row = await getByNoFurnitureWip(labelCode);
 
-  if (row.IsPartial === true || row.IsPartial === 1) {
-    throw conflict("Tidak dapat bongkar susun label yang sudah di partial");
-  }
-
   return {
     labelCode: row.NoFurnitureWIP,
     category: "furnitureWip",

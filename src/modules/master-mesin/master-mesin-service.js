@@ -97,8 +97,28 @@ async function getBrokerByNoProduksi({
       h.OutputJenisId,
       br.Nama AS OutputJenisNama,
       br.ItemCode AS OutputJenisItemCode,
-      h.IdOperator,
-      op.NamaOperator AS Operator,
+      JSON_QUERY(
+        COALESCE(
+          (
+            SELECT od.IdOperator AS [value]
+            FROM dbo.BrokerProduksiOperator_d od WITH (NOLOCK)
+            WHERE od.NoProduksi = h.NoProduksi
+            ORDER BY od.IdOperator
+            FOR JSON PATH
+          ),
+          '[]'
+        )
+      ) AS IdOperators,
+      COALESCE(
+        (
+          SELECT STRING_AGG(op.NamaOperator, ', ')
+          FROM dbo.BrokerProduksiOperator_d od WITH (NOLOCK)
+          INNER JOIN dbo.MstOperator op WITH (NOLOCK)
+            ON op.IdOperator = od.IdOperator
+          WHERE od.NoProduksi = h.NoProduksi
+        ),
+        ''
+      ) AS Operators,
       h.Shift,
       CONVERT(varchar(8), h.HourStart, 108) AS HourStart,
       CONVERT(varchar(8), h.HourEnd, 108) AS HourEnd,
@@ -115,7 +135,6 @@ async function getBrokerByNoProduksi({
         bh.NoProduksi,
         bh.TglProduksi,
         bh.OutputJenisId,
-        bh.IdOperator,
         bh.Shift,
         bh.HourStart,
         bh.HourEnd
@@ -143,8 +162,6 @@ async function getBrokerByNoProduksi({
     ) h
     LEFT JOIN dbo.MstBroker br WITH (NOLOCK)
       ON br.IdBroker = h.OutputJenisId
-    LEFT JOIN dbo.MstOperator op WITH (NOLOCK)
-      ON op.IdOperator = h.IdOperator
     OUTER APPLY (SELECT TOP 1 * FROM ActiveShift) s
     CROSS JOIN CurrentCtx c
     WHERE ${whereEnable}

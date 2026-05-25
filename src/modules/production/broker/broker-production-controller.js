@@ -1,5 +1,9 @@
 // controllers/broker-production-controller.js
 const brokerProduksiService = require("./broker-production-service");
+const { poolPromise } = require("../../../core/config/db");
+const {
+  getBrokerProductionWeightSummary,
+} = require("../../../core/shared/broker-production-weight-guard");
 const {
   getActorId,
   getActorUsername,
@@ -66,11 +70,34 @@ async function getAllProduksi(req, res) {
       shift,
     );
 
+    const pool = await poolPromise;
+    const dataWithWeightSummary = [];
+    for (const row of data || []) {
+      const noProduksi = String(row?.NoProduksi || "").trim();
+      if (!noProduksi) {
+        dataWithWeightSummary.push({
+          ...row,
+          totalBeratInputKg: 0,
+          totalBeratOutputExistingKg: 0,
+        });
+        continue;
+      }
+
+      const summary = await getBrokerProductionWeightSummary(pool, noProduksi, {
+        useOutputLock: false,
+      });
+      dataWithWeightSummary.push({
+        ...row,
+        totalBeratInputKg: summary.totalBeratInputKg,
+        totalBeratOutputExistingKg: summary.totalBeratOutputExistingKg,
+      });
+    }
+
     return res.status(200).json({
       success: true,
       message: "BrokerProduksi_h retrieved successfully",
       totalData: total,
-      data: data || [],
+      data: dataWithWeightSummary,
       meta: {
         page,
         pageSize,
@@ -200,48 +227,6 @@ async function getProduksiByDate(req, res) {
   }
 }
 
-async function getNoProduksiByTanggalShift(req, res) {
-  const tanggal = String(req.params.tanggal || "").trim();
-  const shiftRaw = String(req.params.shift || "").trim();
-
-  if (!/^\d{4}-\d{2}-\d{2}$/.test(tanggal)) {
-    return res.status(400).json({
-      success: false,
-      message: "Parameter tanggal harus format YYYY-MM-DD",
-    });
-  }
-
-  const shift = Number(shiftRaw);
-  if (!Number.isInteger(shift) || shift <= 0) {
-    return res.status(400).json({
-      success: false,
-      message: "Parameter shift harus integer positif",
-    });
-  }
-
-  try {
-    const rows = await brokerProduksiService.getNoProduksiByTanggalShift(
-      tanggal,
-      shift,
-    );
-
-    return res.status(200).json({
-      success: true,
-      message: "Data NoProduksi berdasarkan tanggal dan shift berhasil diambil",
-      totalData: rows.length,
-      data: rows,
-      meta: { tanggal, shift },
-    });
-  } catch (error) {
-    console.error("Error fetching NoProduksi by tanggal+shift:", error);
-    return res.status(500).json({
-      success: false,
-      message: "Internal Server Error",
-      error: error.message,
-    });
-  }
-}
-
 async function createProduksi(req, res) {
   // body bisa datang sebagai string (x-www-form-urlencoded) atau JSON
   const body = req.body && typeof req.body === "object" ? req.body : {};
@@ -283,27 +268,12 @@ async function createProduksi(req, res) {
     const n = Number(v);
     return Number.isNaN(n) ? null : n;
   };
-  const toIntArray = (v) => {
-    if (v === undefined || v === null || v === "") return [];
-    const raw = Array.isArray(v) ? v : String(v).split(",");
-    return [...new Set(
-      raw
-        .map((x) => Number(String(x).trim()))
-        .filter((n) => Number.isFinite(n))
-        .map((n) => Math.trunc(n))
-        .filter((n) => n > 0),
-    )];
-  };
-  const operatorIds = toIntArray(
-    b.idOperators !== undefined ? b.idOperators : b.idOperator,
-  );
 
   // ✅ payload business (tanpa audit fields)
   const payload = {
     tglProduksi: b.tglProduksi, // 'YYYY-MM-DD'
     idMesin: toInt(b.idMesin), // number
-    idOperators: operatorIds, // multi operator for detail table
-    outputJenisId: toInt(b.outputJenisId), // number (BrokerProduksi_h.OutputJenisId)
+    idOperator: toInt(b.idOperator), // number
     jam: b.jam, // number or 'HH:mm-HH:mm'
     shift: toInt(b.shift), // number
     createBy: actorUsername, // controller overwrite dari token
@@ -325,10 +295,7 @@ async function createProduksi(req, res) {
   const must = [];
   if (!payload.tglProduksi) must.push("tglProduksi");
   if (payload.idMesin == null) must.push("idMesin");
-  if (!Array.isArray(payload.idOperators) || payload.idOperators.length === 0) {
-    must.push("idOperator");
-  }
-  if (payload.outputJenisId == null) must.push("outputJenisId");
+  if (payload.idOperator == null) must.push("idOperator");
   if (!payload.hourStart) must.push("hourStart");
   if (!payload.hourEnd) must.push("hourEnd");
   if (payload.shift == null) must.push("shift");
@@ -372,6 +339,9 @@ async function createProduksi(req, res) {
       error: {
         message: err.message,
         details: process.env.NODE_ENV === "development" ? err.stack : undefined,
+      },
+      meta: {
+        audit: { actorId, actorUsername, requestId },
       },
     });
   }
@@ -434,14 +404,7 @@ async function updateProduksi(req, res) {
     tglProduksi: b.tglProduksi, // 'YYYY-MM-DD'
 
     idMesin: b.idMesin !== undefined ? toInt(b.idMesin) : undefined,
-    idOperators:
-      b.idOperators !== undefined || b.idOperator !== undefined
-        ? toIntArray(
-          b.idOperators !== undefined ? b.idOperators : b.idOperator,
-        )
-        : undefined,
-    outputJenisId:
-      b.outputJenisId !== undefined ? toInt(b.outputJenisId) : undefined,
+    idOperator: b.idOperator !== undefined ? toInt(b.idOperator) : undefined,
 
     // jam boleh string 'HH:mm-HH:mm' / number / null (kalau mau set null)
     jam: b.jam !== undefined ? b.jam : undefined,
@@ -1002,19 +965,6 @@ async function moveOutputsBonggolan(req, res) {
 }
 
 async function splitProduksiTime(req, res) {
-  const normalizeSqlTimeToHms = (value) => {
-    if (value == null) return value;
-    if (value instanceof Date) {
-      const hh = String(value.getUTCHours()).padStart(2, "0");
-      const mm = String(value.getUTCMinutes()).padStart(2, "0");
-      const ss = String(value.getUTCSeconds()).padStart(2, "0");
-      return `${hh}:${mm}:${ss}`;
-    }
-    const raw = String(value).trim();
-    const m = /(\d{2}):(\d{2}):(\d{2})/.exec(raw);
-    return m ? `${m[1]}:${m[2]}:${m[3]}` : raw;
-  };
-
   const idMesinRaw = String(req.params.idMesin || "").trim();
   const tanggal = String(req.params.tanggal || "").trim();
 
@@ -1034,7 +984,6 @@ async function splitProduksiTime(req, res) {
 
   const body = req.body && typeof req.body === "object" ? req.body : {};
   const hourStart = String(body.hourStart || "").trim();
-  const outputJenisId = Number(body.outputJenisId);
 
   if (!hourStart) {
     return res.status(400).json({
@@ -1047,12 +996,6 @@ async function splitProduksiTime(req, res) {
     return res.status(400).json({
       success: false,
       message: "Format hourStart harus HH:mm atau HH:mm:ss",
-    });
-  }
-  if (!Number.isInteger(outputJenisId) || outputJenisId <= 0) {
-    return res.status(400).json({
-      success: false,
-      message: "outputJenisId wajib integer positif",
     });
   }
 
@@ -1072,24 +1015,14 @@ async function splitProduksiTime(req, res) {
     const ctx = { actorId, actorUsername, requestId };
     const result = await brokerProduksiService.splitProduksiTime(
       { idMesin, tanggal },
-      { hourStart, outputJenisId },
+      { hourStart },
       ctx,
     );
-    const header = result?.header
-      ? {
-          ...result.header,
-          HourStart: normalizeSqlTimeToHms(result.header.HourStart),
-          HourEnd: normalizeSqlTimeToHms(result.header.HourEnd),
-        }
-      : result?.header;
 
     return res.status(201).json({
       success: true,
       message: "Produksi berhasil di-split",
-      data: {
-        ...result,
-        header,
-      },
+      data: result,
       meta: { audit: { actorId, actorUsername, requestId } },
     });
   } catch (err) {
@@ -1109,7 +1042,6 @@ async function splitProduksiTime(req, res) {
 
 module.exports = {
   getProduksiByDate,
-  getNoProduksiByTanggalShift,
   getInputsByNoProduksi,
   getOutputsByNoProduksi,
   getOutputsBonggolanByNoProduksi,

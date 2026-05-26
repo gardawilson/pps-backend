@@ -79,12 +79,14 @@ async function getBroker(req, res) {
           arr = [];
         }
       }
-      return [...new Set(
-        arr
-          .map((v) => Number(v?.value ?? v))
-          .filter((n) => Number.isFinite(n))
-          .map((n) => Math.trunc(n)),
-      )];
+      return [
+        ...new Set(
+          arr
+            .map((v) => Number(v?.value ?? v))
+            .filter((n) => Number.isFinite(n))
+            .map((n) => Math.trunc(n)),
+        ),
+      ];
     };
     const activeShiftMeta = rows[0]
       ? {
@@ -139,4 +141,79 @@ async function getBroker(req, res) {
   }
 }
 
-module.exports = { getByIdBagian, getBroker };
+async function getWashing(req, res) {
+  const { username } = req;
+  const idBagianMesin = 7;
+  const includeDisabled = String(req.query.includeDisabled || "1") === "1";
+
+  console.log(
+    "🔍 Fetching MstMesin washing | Username:",
+    username,
+    "| IdBagianMesin:",
+    idBagianMesin,
+    "| includeDisabled:",
+    includeDisabled,
+  );
+
+  try {
+    const rows = await service.getWashingByNoProduksi({
+      idBagianMesin,
+      includeDisabled,
+    });
+
+    const activeShiftMeta = rows[0]
+      ? {
+          currentDate: rows[0].CurrentDate ?? null,
+          currentTime: rows[0].CurrentTime ?? null,
+          shift: rows[0].ActiveShift ?? null,
+          hourStart: rows[0].ActiveShiftHourStart ?? null,
+          hourEnd: rows[0].ActiveShiftHourEnd ?? null,
+          validFrmDate: rows[0].ActiveShiftValidFrmDate ?? null,
+        }
+      : {
+          currentDate: null,
+          currentTime: null,
+          shift: null,
+          hourStart: null,
+          hourEnd: null,
+          validFrmDate: null,
+        };
+
+    const data = rows.map((row) => ({
+      IdMesin: row.IdMesin,
+      NamaMesin: row.NamaMesin,
+      Bagian: row.Bagian,
+      Target: row.Target,
+      NoProduksi: row.NoProduksi ?? null,
+      TglProduksi: row.TglProduksi ?? null,
+      OutputJenisId: row.OutputJenisId ?? null,
+      OutputJenisNama: row.OutputJenisNama ?? null,
+      OutputJenisItemCode: row.OutputJenisItemCode ?? null,
+      IdOperator: row.IdOperator ?? null,
+      NamaOperator: row.NamaOperator ?? null,
+      Shift: row.Shift ?? null,
+      HourStart: row.HourStart ?? null,
+      HourEnd: row.HourEnd ?? null,
+      IsBlower: row.IsBlower ?? null,
+    }));
+
+    return res.status(200).json({
+      success: true,
+      message: "Data washing per NoProduksi hari ini berhasil diambil",
+      idBagianMesin,
+      includeDisabled,
+      activeShift: activeShiftMeta,
+      totalData: data.length,
+      data,
+    });
+  } catch (error) {
+    console.error("Error fetching MstMesin washing:", error);
+    return res.status(500).json({
+      success: false,
+      message: "Internal Server Error",
+      error: error.message,
+    });
+  }
+}
+
+module.exports = { getByIdBagian, getBroker, getWashing };

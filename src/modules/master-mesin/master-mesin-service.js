@@ -173,4 +173,125 @@ async function getBrokerByNoProduksi({
   return result.recordset || [];
 }
 
-module.exports = { getByIdBagian, getBrokerByNoProduksi };
+async function getWashingByNoProduksi({
+  idBagianMesin = 7,
+  includeDisabled = true,
+}) {
+  const pool = await poolPromise;
+  const request = pool.request();
+  request.input("IdBagianMesin", idBagianMesin);
+
+  const whereEnable = includeDisabled ? "1=1" : "ISNULL(m.Enable, 1) = 1";
+
+  const query = `
+    ;WITH CurrentCtx AS (
+      SELECT
+        CONVERT(date, GETDATE()) AS CurrentDate,
+        CAST(GETDATE() AS time(0)) AS CurrentTime
+    ),
+    LatestShiftSet AS (
+      SELECT TOP 1
+        h.IdShiftHourSet,
+        h.ValidFrmDate
+      FROM dbo.MstShiftHourSet h WITH (NOLOCK)
+      CROSS JOIN CurrentCtx c
+      WHERE CONVERT(date, h.ValidFrmDate) <= c.CurrentDate
+      ORDER BY CONVERT(date, h.ValidFrmDate) DESC, h.IdShiftHourSet DESC
+    ),
+    ActiveShift AS (
+      SELECT TOP 1
+        d.NoShift,
+        d.HourStart,
+        d.HourEnd,
+        ls.ValidFrmDate
+      FROM LatestShiftSet ls
+      INNER JOIN dbo.MstShiftHourSet_d d WITH (NOLOCK)
+        ON d.IdShiftHourSet = ls.IdShiftHourSet
+      CROSS JOIN CurrentCtx c
+      WHERE
+        (
+          d.HourStart <= d.HourEnd
+          AND c.CurrentTime >= CAST(d.HourStart AS time(0))
+          AND c.CurrentTime < CAST(d.HourEnd AS time(0))
+        )
+        OR
+        (
+          d.HourStart > d.HourEnd
+          AND (
+            c.CurrentTime >= CAST(d.HourStart AS time(0))
+            OR c.CurrentTime < CAST(d.HourEnd AS time(0))
+          )
+        )
+      ORDER BY d.NoShift ASC
+    )
+    SELECT
+      m.IdMesin,
+      m.NamaMesin,
+      m.Bagian,
+      h.NoProduksi,
+      CONVERT(date, h.TglProduksi) AS TglProduksi,
+      h.OutputJenisId,
+      mw.Nama AS OutputJenisNama,
+      mw.ItemCode AS OutputJenisItemCode,
+      h.IdOperator,
+      op.NamaOperator,
+      h.Shift,
+      CONVERT(varchar(8), h.HourStart, 108) AS HourStart,
+      CONVERT(varchar(8), h.HourEnd, 108) AS HourEnd,
+      h.IsBlower,
+      m.Target,
+      CONVERT(varchar(10), c.CurrentDate, 23) AS CurrentDate,
+      CONVERT(varchar(8), c.CurrentTime, 108) AS CurrentTime,
+      s.NoShift AS ActiveShift,
+      CONVERT(varchar(8), s.HourStart, 108) AS ActiveShiftHourStart,
+      CONVERT(varchar(8), s.HourEnd, 108) AS ActiveShiftHourEnd,
+      s.ValidFrmDate AS ActiveShiftValidFrmDate
+    FROM dbo.MstMesin m WITH (NOLOCK)
+    OUTER APPLY (
+      SELECT TOP 1
+        wh.NoProduksi,
+        wh.TglProduksi,
+        wh.OutputJenisId,
+        wh.IdOperator,
+        wh.Shift,
+        wh.HourStart,
+        wh.HourEnd,
+        wh.IsBlower
+      FROM dbo.WashingProduksi_h wh WITH (NOLOCK)
+      CROSS JOIN CurrentCtx c
+      WHERE wh.IdMesin = m.IdMesin
+        AND CONVERT(date, wh.TglProduksi) = c.CurrentDate
+        AND wh.Shift = (SELECT TOP 1 NoShift FROM ActiveShift)
+        AND (
+          (
+            wh.HourStart <= wh.HourEnd
+            AND c.CurrentTime >= CAST(wh.HourStart AS time(0))
+            AND c.CurrentTime < CAST(wh.HourEnd AS time(0))
+          )
+          OR
+          (
+            wh.HourStart > wh.HourEnd
+            AND (
+              c.CurrentTime >= CAST(wh.HourStart AS time(0))
+              OR c.CurrentTime < CAST(wh.HourEnd AS time(0))
+            )
+          )
+        )
+      ORDER BY wh.HourStart DESC, wh.NoProduksi DESC
+    ) h
+    LEFT JOIN dbo.MstOperator op WITH (NOLOCK)
+      ON op.IdOperator = h.IdOperator
+    LEFT JOIN dbo.MstWashing mw WITH (NOLOCK)
+      ON mw.IdWashing = h.OutputJenisId
+    OUTER APPLY (SELECT TOP 1 * FROM ActiveShift) s
+    CROSS JOIN CurrentCtx c
+    WHERE ${whereEnable}
+      AND m.IdBagianMesin = @IdBagianMesin
+    ORDER BY m.NamaMesin ASC;
+  `;
+
+  const result = await request.query(query);
+  return result.recordset || [];
+}
+
+module.exports = { getByIdBagian, getBrokerByNoProduksi, getWashingByNoProduksi };

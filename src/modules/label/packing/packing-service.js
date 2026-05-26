@@ -1136,7 +1136,6 @@ exports.incrementHasBeenPrinted = async (payload) => {
     throw e;
   }
 };
-
 exports.getByNoBJ = async (NoBJ) => {
   const pool = await poolPromise;
 
@@ -1231,3 +1230,4 @@ exports.getByNoBJ = async (NoBJ) => {
     Shift: first.Shift,
   };
 };
+

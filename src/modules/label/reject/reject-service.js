@@ -1132,6 +1132,80 @@ exports.incrementHasBeenPrinted = async (payload) => {
   }
 };
 
+exports.resetHasBeenPrinted = async (payload) => {
+  const NoReject = String(payload?.NoReject || "").trim();
+  if (!NoReject) throw badReq("NoReject wajib diisi");
+
+  const actorIdNum = Number(payload?.actorId);
+  const actorId =
+    Number.isFinite(actorIdNum) && actorIdNum > 0 ? actorIdNum : null;
+  if (!actorId) {
+    throw badReq(
+      "actorId kosong. Controller harus inject payload.actorId dari token.",
+    );
+  }
+
+  const requestId = String(
+    payload?.requestId ||
+      `${Date.now()}-${Math.random().toString(16).slice(2)}`,
+  );
+
+  const pool = await poolPromise;
+  const tx = new sql.Transaction(pool);
+
+  try {
+    await tx.begin(sql.ISOLATION_LEVEL.SERIALIZABLE);
+
+    await new sql.Request(tx)
+      .input("actorId", sql.Int, actorId)
+      .input("rid", sql.NVarChar(64), requestId).query(`
+        EXEC sys.sp_set_session_context @key=N'actor_id', @value=@actorId;
+        EXEC sys.sp_set_session_context @key=N'request_id', @value=@rid;
+      `);
+
+    const rs = await new sql.Request(tx).input(
+      "NoReject",
+      sql.VarChar(50),
+      NoReject,
+    ).query(`
+        DECLARE @out TABLE (
+          NoReject varchar(50),
+          HasBeenPrinted int
+        );
+
+        UPDATE dbo.RejectV2
+        SET HasBeenPrinted = 0
+        OUTPUT
+          INSERTED.NoReject,
+          INSERTED.HasBeenPrinted
+        INTO @out
+        WHERE NoReject = @NoReject;
+
+        SELECT NoReject, HasBeenPrinted
+        FROM @out;
+      `);
+
+    const row = rs.recordset?.[0] || null;
+    if (!row) {
+      const e = new Error(`NoReject ${NoReject} tidak ditemukan`);
+      e.statusCode = 404;
+      throw e;
+    }
+
+    await tx.commit();
+
+    return {
+      NoReject: row.NoReject,
+      HasBeenPrinted: row.HasBeenPrinted,
+    };
+  } catch (e) {
+    try {
+      await tx.rollback();
+    } catch (_) {}
+    throw e;
+  }
+};
+
 exports.getByNoReject = async (NoReject) => {
   const pool = await poolPromise;
 

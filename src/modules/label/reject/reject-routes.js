@@ -36,6 +36,12 @@ router.patch(
   ctrl.incrementHasBeenPrinted,
 );
 
+router.patch(
+  "/labels/reject/:noreject/reset-print",
+  requirePermission("label_reject:delete"),
+  ctrl.resetHasBeenPrinted,
+);
+
 // DELETE
 router.delete(
   "/labels/reject/:noReject",

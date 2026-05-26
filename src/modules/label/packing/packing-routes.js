@@ -35,6 +35,11 @@ router.patch(
   requirePermission("label_barangjadi:update"),
   ctrl.incrementHasBeenPrinted,
 );
+router.patch(
+  "/labels/packing/:nobj/reset-print",
+  requirePermission("label_barangjadi:delete"),
+  ctrl.resetHasBeenPrinted,
+);
 
 // DELETE
 router.delete(

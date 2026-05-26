@@ -659,6 +659,12 @@ exports.deleteSortirReject = async (noBJSortir, ctx) => {
         throw conflict("Tidak bisa hapus: label output sudah pernah dicetak");
       }
 
+      await new sql.Request(tx)
+        .input("NoBJSortir", sql.VarChar(50), no)
+        .query(
+          `DELETE FROM dbo.BJSortirRejectOutputLabelReject WHERE NoBJSortir=@NoBJSortir`,
+        );
+
       await new sql.Request(tx).input(
         "CodesJson",
         sql.NVarChar(sql.MAX),
@@ -670,12 +676,6 @@ exports.deleteSortirReject = async (noBJSortir, ctx) => {
           WITH (code varchar(50) '$.code') AS j
         )
       `);
-
-      await new sql.Request(tx)
-        .input("NoBJSortir", sql.VarChar(50), no)
-        .query(
-          `DELETE FROM dbo.BJSortirRejectOutputLabelReject WHERE NoBJSortir=@NoBJSortir`,
-        );
     }
 
     const outputsRes = await new sql.Request(tx)

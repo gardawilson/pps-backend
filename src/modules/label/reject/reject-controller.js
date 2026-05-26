@@ -331,6 +331,52 @@ exports.incrementHasBeenPrinted = async (req, res) => {
   }
 };
 
+exports.resetHasBeenPrinted = async (req, res) => {
+  const { noreject, noReject } = req.params;
+
+  try {
+    const NoReject = String(noreject || noReject || "").trim();
+    if (!NoReject) {
+      return res
+        .status(400)
+        .json({ success: false, message: "noReject wajib diisi" });
+    }
+
+    const actorId = getActorId(req);
+    if (!actorId) {
+      return res
+        .status(401)
+        .json({ success: false, message: "Unauthorized (idUsername missing)" });
+    }
+
+    const result = await service.resetHasBeenPrinted({
+      NoReject,
+      actorId,
+      requestId: makeRequestId(req),
+    });
+
+    const io = getIo();
+    if (io)
+      io.emit("print_confirmed", {
+        noLabel: NoReject,
+        hasBeenPrinted: result.HasBeenPrinted,
+      });
+
+    return res.status(200).json({
+      success: true,
+      message: "HasBeenPrinted berhasil direset",
+      data: result,
+    });
+  } catch (err) {
+    console.error("Reset Reject HasBeenPrinted Error:", err);
+    const status = err.statusCode || 500;
+    return res.status(status).json({
+      success: false,
+      message: err.message || "Terjadi kesalahan server",
+    });
+  }
+};
+
 // GET /labels/reject/:noReject/pdf
 exports.generatePdf = async (req, res) => {
   try {

@@ -1137,6 +1137,76 @@ exports.incrementHasBeenPrinted = async (payload) => {
   }
 };
 
+exports.resetHasBeenPrinted = async (payload) => {
+  const NoBJ = String(payload?.NoBJ || "").trim();
+  if (!NoBJ) throw badReq("NoBJ wajib diisi");
+
+  const actorIdNum = Number(payload?.actorId);
+  const actorId =
+    Number.isFinite(actorIdNum) && actorIdNum > 0 ? actorIdNum : null;
+  if (!actorId) {
+    throw badReq(
+      "actorId kosong. Controller harus inject payload.actorId dari token.",
+    );
+  }
+
+  const requestId = String(
+    payload?.requestId ||
+      `${Date.now()}-${Math.random().toString(16).slice(2)}`,
+  );
+
+  const pool = await poolPromise;
+  const tx = new sql.Transaction(pool);
+
+  try {
+    await tx.begin(sql.ISOLATION_LEVEL.SERIALIZABLE);
+
+    await new sql.Request(tx)
+      .input("actorId", sql.Int, actorId)
+      .input("rid", sql.NVarChar(64), requestId).query(`
+        EXEC sys.sp_set_session_context @key=N'actor_id', @value=@actorId;
+        EXEC sys.sp_set_session_context @key=N'request_id', @value=@rid;
+      `);
+
+    const rs = await new sql.Request(tx).input("NoBJ", sql.VarChar(50), NoBJ)
+      .query(`
+        DECLARE @out TABLE (
+          NoBJ varchar(50),
+          HasBeenPrinted int
+        );
+
+        UPDATE dbo.BarangJadi
+        SET HasBeenPrinted = 0
+        OUTPUT
+          INSERTED.NoBJ,
+          INSERTED.HasBeenPrinted
+        INTO @out
+        WHERE NoBJ = @NoBJ;
+
+        SELECT NoBJ, HasBeenPrinted
+        FROM @out;
+      `);
+
+    const row = rs.recordset?.[0] || null;
+    if (!row) {
+      const e = new Error(`NoBJ ${NoBJ} tidak ditemukan`);
+      e.statusCode = 404;
+      throw e;
+    }
+
+    await tx.commit();
+
+    return {
+      NoBJ: row.NoBJ,
+      HasBeenPrinted: row.HasBeenPrinted,
+    };
+  } catch (e) {
+    try {
+      await tx.rollback();
+    } catch (_) {}
+    throw e;
+  }
+};
 exports.getByNoBJ = async (NoBJ) => {
   const pool = await poolPromise;
 
@@ -1231,3 +1301,4 @@ exports.getByNoBJ = async (NoBJ) => {
     Shift: first.Shift,
   };
 };
+

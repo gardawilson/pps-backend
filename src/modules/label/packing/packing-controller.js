@@ -357,3 +357,49 @@ exports.incrementHasBeenPrinted = async (req, res) => {
     });
   }
 };
+
+exports.resetHasBeenPrinted = async (req, res) => {
+  const { nobj, noBJ } = req.params;
+
+  try {
+    const NoBJ = String(nobj || noBJ || "").trim();
+    if (!NoBJ) {
+      return res
+        .status(400)
+        .json({ success: false, message: "noBJ wajib diisi" });
+    }
+
+    const actorId = getActorId(req);
+    if (!actorId) {
+      return res
+        .status(401)
+        .json({ success: false, message: "Unauthorized (idUsername missing)" });
+    }
+
+    const result = await service.resetHasBeenPrinted({
+      NoBJ,
+      actorId,
+      requestId: makeRequestId(req),
+    });
+
+    const io = getIo();
+    if (io)
+      io.emit("print_confirmed", {
+        noLabel: NoBJ,
+        hasBeenPrinted: result.HasBeenPrinted,
+      });
+
+    return res.status(200).json({
+      success: true,
+      message: "HasBeenPrinted berhasil direset",
+      data: result,
+    });
+  } catch (err) {
+    console.error("Reset Packing HasBeenPrinted Error:", err);
+    const status = err.statusCode || 500;
+    return res.status(status).json({
+      success: false,
+      message: err.message || "Terjadi kesalahan server",
+    });
+  }
+};

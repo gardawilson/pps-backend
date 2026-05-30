@@ -18,6 +18,13 @@ router.get("/crusher/masters", verifyToken, ctrl.getCrusherMasters);
 
 router.post("/crusher", verifyToken, ctrl.createProduksi);
 
+// POST /crusher/split-time/:idMesin/:tanggal
+router.post(
+  "/crusher/split-time/:idMesin/:tanggal",
+  verifyToken,
+  ctrl.splitProduksiTime,
+);
+
 router.put("/crusher/:noCrusherProduksi", verifyToken, ctrl.updateProduksi); // ⬅️ NEW
 
 router.delete("/crusher/:noCrusherProduksi", verifyToken, ctrl.deleteProduksi); // ⬅️ NEW

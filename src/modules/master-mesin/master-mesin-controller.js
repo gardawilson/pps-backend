@@ -112,6 +112,8 @@ async function getBroker(req, res) {
       Target: row.Target,
       NoProduksi: row.NoProduksi ?? null,
       TglProduksi: row.TglProduksi ?? null,
+      IdRegu: row.IdRegu ?? null,
+      NamaRegu: row.NamaRegu ?? null,
       OutputJenisId: row.OutputJenisId ?? null,
       OutputJenisNama: row.OutputJenisNama ?? null,
       OutputJenisItemCode: row.OutputJenisItemCode ?? null,
@@ -186,6 +188,8 @@ async function getWashing(req, res) {
       Target: row.Target,
       NoProduksi: row.NoProduksi ?? null,
       TglProduksi: row.TglProduksi ?? null,
+      IdRegu: row.IdRegu ?? null,
+      NamaRegu: row.NamaRegu ?? null,
       OutputJenisId: row.OutputJenisId ?? null,
       OutputJenisNama: row.OutputJenisNama ?? null,
       OutputJenisItemCode: row.OutputJenisItemCode ?? null,
@@ -216,4 +220,101 @@ async function getWashing(req, res) {
   }
 }
 
-module.exports = { getByIdBagian, getBroker, getWashing };
+async function getCrusher(req, res) {
+  const { username } = req;
+  const idBagianMesin = 3;
+  const includeDisabled = String(req.query.includeDisabled || "1") === "1";
+
+  console.log(
+    "🔍 Fetching MstMesin crusher | Username:",
+    username,
+    "| IdBagianMesin:",
+    idBagianMesin,
+    "| includeDisabled:",
+    includeDisabled,
+  );
+
+  try {
+    const rows = await service.getCrusherByNoProduksi({
+      idBagianMesin,
+      includeDisabled,
+    });
+
+    const normalizeIdOperators = (raw) => {
+      let arr = [];
+      if (Array.isArray(raw)) {
+        arr = raw;
+      } else if (typeof raw === "string" && raw.trim()) {
+        try {
+          arr = JSON.parse(raw);
+        } catch (_) {
+          arr = [];
+        }
+      }
+      return [
+        ...new Set(
+          arr
+            .map((v) => Number(v?.value ?? v))
+            .filter((n) => Number.isFinite(n))
+            .map((n) => Math.trunc(n)),
+        ),
+      ];
+    };
+
+    const activeShiftMeta = rows[0]
+      ? {
+          currentDate: rows[0].CurrentDate ?? null,
+          currentTime: rows[0].CurrentTime ?? null,
+          shift: rows[0].ActiveShift ?? null,
+          hourStart: rows[0].ActiveShiftHourStart ?? null,
+          hourEnd: rows[0].ActiveShiftHourEnd ?? null,
+          validFrmDate: rows[0].ActiveShiftValidFrmDate ?? null,
+        }
+      : {
+          currentDate: null,
+          currentTime: null,
+          shift: null,
+          hourStart: null,
+          hourEnd: null,
+          validFrmDate: null,
+        };
+
+    const data = rows.map((row) => ({
+      IdMesin: row.IdMesin,
+      NamaMesin: row.NamaMesin,
+      Bagian: row.Bagian,
+      Target: row.Target,
+      NoProduksi: row.NoProduksi ?? null,
+      TglProduksi: row.TglProduksi ?? null,
+      IdRegu: row.IdRegu ?? null,
+      NamaRegu: row.NamaRegu ?? null,
+      OutputJenisId: row.OutputJenisId ?? null,
+      OutputJenisNama: row.OutputJenisNama ?? null,
+      OutputJenisItemCode: row.OutputJenisItemCode ?? null,
+      IdOperators: normalizeIdOperators(row.IdOperators),
+      Operators: row.Operators ?? "",
+      Shift: row.Shift ?? null,
+      HourStart: row.HourStart ?? null,
+      HourEnd: row.HourEnd ?? null,
+    }));
+
+    return res.status(200).json({
+      success: true,
+      message: "Data crusher per NoProduksi hari ini berhasil diambil",
+      idBagianMesin,
+      includeDisabled,
+      activeShift: activeShiftMeta,
+      totalData: data.length,
+      data,
+    });
+  } catch (error) {
+    console.error("Error fetching MstMesin crusher:", error);
+    return res.status(500).json({
+      success: false,
+      message: "Internal Server Error",
+      error: error.message,
+    });
+  }
+}
+
+module.exports = { getByIdBagian, getBroker, getWashing, getCrusher };

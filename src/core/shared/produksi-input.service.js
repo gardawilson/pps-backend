@@ -66,6 +66,20 @@ function _withPartialNewAliases(payload) {
     }
   }
 
+  // backward compatibility kebalikannya:
+  // kalau client kirim legacy "*PartialNew", bikin alias standar "*Partial"
+  for (const key of Object.keys(p)) {
+    if (!key.endsWith("PartialNew")) continue;
+
+    const arr = norm(p[key]);
+    if (arr.length === 0) continue;
+
+    const stdKey = key.replace(/PartialNew$/, "Partial");
+    if (!Array.isArray(p[stdKey]) || p[stdKey].length === 0) {
+      p[stdKey] = arr;
+    }
+  }
+
   return p;
 }
 

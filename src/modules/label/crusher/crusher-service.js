@@ -167,7 +167,6 @@ exports.createCrusherCascade = async (payload) => {
 
   // ---- validation dasar
   if (!header.IdCrusher) throw badReq("IdCrusher wajib diisi");
-  if (!header.IdWarehouse) throw badReq("IdWarehouse wajib diisi");
   if (!header.CreateBy) throw badReq("CreateBy wajib diisi"); // controller overwrite dari token
 
   // Identify target from ProcessedCode (optional)
